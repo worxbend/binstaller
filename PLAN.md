@@ -1980,3 +1980,21 @@ command output logging, interrupt state writes, resume instructions, and
 quit-confirmation text. Checks passed: `./mill tui.test`, `./mill cli.test`,
 `./mill __.compile`, `./mill __.test`, `git diff --check`, and
 `jq empty .agent-loop/tasks.json`.
+
+Validation checkpoint VALIDATION-39, 2026-06-28: the completed TUI execution
+chunk was revalidated without starting new feature work. Mill discovery still
+resolves recursive compile targets for `app`, `cli`, `config`, `core`, `host`,
+and `tui`, plus test compile targets; recursive test targets are `cli.test`,
+`config.test`, `core.test`, `host.test`, and `tui.test`. The configured checks
+passed: `./mill __.compile` (log
+`/tmp/initkit-validation-39-compile-1782671581.log`) and `./mill __.test` (log
+`/tmp/initkit-validation-39-test-1782671585.log`). Additional non-interactive
+smokes passed: `./mill app.run tui --help`,
+`./mill app.run --help`, and
+`./mill app.run apply --config config.example.yaml --dry-run --state
+/tmp/initkit-validation-39-dry-run-state.json`; the dry-run state file was not
+created. `git diff --check` and `jq empty .agent-loop/tasks.json` also pass.
+No source fix was needed. Formatter validation remains unavailable because
+`.scalafmt.conf` exists but no local `scalafmt` executable or Mill formatting
+target is configured, and full-screen interactive TUI behavior remains covered
+by terminal-free tests rather than an end-to-end terminal session.
