@@ -2423,3 +2423,15 @@ create the throwaway state file. `jq empty .agent-loop/tasks.json`,
 `jq empty .agent-loop/config.json`, and `git diff --check` passed. Remaining
 risk is limited to future behavior-preserving refactor work, which should keep
 using broad validation after core or user-facing orchestration changes.
+
+Progress note T002, 2026-06-29: audited the current high-risk Scala paths for
+execution, source setup, installer dispatch, state handling, CLI/TUI
+orchestration, and reporting before refactoring. The selected behavior-
+preserving targets are recorded in `.agent-loop/memory.md`: centralize
+execution selection/summaries, separate engine state/event decisions from state
+persistence, keep installer dispatch/composition stable while reducing
+duplication, preserve source setup resource boundaries, share CLI/TUI launch
+context construction, reduce duplicated redacted reporting/log formatting, and
+clarify TamboUI render-thread state ownership. No production behavior changed;
+the next implementation tasks should keep module layout, manifest shape,
+`PlanOperation` public contracts, state JSON, and installer semantics stable.
