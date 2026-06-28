@@ -1859,3 +1859,17 @@ Residual risks: formatter validation remains unavailable because `scalafmt` is
 not installed or exposed as a Mill target, and the archive tar reader still
 intentionally supports regular-file selection from standard `tar.gz` archives
 rather than every tar extension.
+
+Progress note, 2026-06-28: T027 added Nerd Fonts installer support in the
+`core` module. `NerdFontsExecutor` renders `spec.config.content` from the typed
+raw YAML tree, creates the config parent directory, and writes the generated
+config when `spec.config.create` is true. Command generation now produces the
+preview command first when `preview.enabled` is true, appending preview args
+only to that command, followed by the normal apply command. `PackageManagerInstallers`
+delegates `nerd-fonts` operations to this executor; these user-home font
+commands run without inheriting global sudo. Dry-run reports the config file
+write plus both preview and apply commands without mutating files or invoking
+the command executor. Focused tests cover YAML rendering with selected families
+and destination, dry-run output, parent-directory creation, YAML writing, and
+preview-before-apply execution. Checks passed: `./mill core.test`,
+`./mill __.compile`, and `./mill __.test`.

@@ -13,7 +13,8 @@ final class PackageManagerInstallers(
     binaryDownloadFiles: BinaryDownloadFiles = BinaryDownloadFiles.Jvm,
     binaryDownloadHttpConfig: BinaryDownloadHttpConfig = BinaryDownloadHttpConfig.default,
     shellScriptDownloader: ShellScriptDownloader = ShellScriptDownloader.Jdk,
-    shellScriptFiles: ShellScriptFiles = ShellScriptFiles.Jvm
+    shellScriptFiles: ShellScriptFiles = ShellScriptFiles.Jvm,
+    nerdFontsFiles: NerdFontsFiles = NerdFontsFiles.Jvm
 ) extends PlanOperationInstaller:
   override def installApt(
       operation: PackagePlanOperation[PackageSpec.Apt],
@@ -92,7 +93,7 @@ final class PackageManagerInstallers(
       operation: InstallerPlanOperation[InstallerSpec.NerdFonts],
       policy: ExecutionPolicy
   ): PlanOperationOutcome =
-    unsupported(operation.summary)
+    new NerdFontsExecutor(commandExecutor, nerdFontsFiles).install(operation, policy)
 
   override def installDotfilesApply(
       operation: InstallerPlanOperation[InstallerSpec.DotfilesApply],
