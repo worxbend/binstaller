@@ -2028,3 +2028,19 @@ did not create a state file. `git diff --check` and `jq empty
 .agent-loop/tasks.json` passed. No runtime source fix was needed. Formatter
 validation remains unavailable because `.scalafmt.conf` exists but no local
 `scalafmt` executable or Mill formatter target is configured.
+
+Validation checkpoint VALIDATION-43, 2026-06-28: the completed checkpoint was
+revalidated without starting new feature work. Mill discovery passed for
+`./mill --no-daemon resolve _`, `./mill --no-daemon resolve __.compile`, and
+`./mill --no-daemon resolve __.test`; recursive compile targets include `app`,
+`cli`, `config`, `core`, `host`, and `tui`, and recursive test targets include
+`cli.test`, `config.test`, `core.test`, `host.test`, and `tui.test`. Required
+checks passed: `./mill __.compile` and `./mill __.test`. Non-interactive
+smokes passed for `./mill app.run --help`, `./mill app.run apply --help`,
+`./mill app.run tui --help`, and `./mill app.run apply --config
+config.example.yaml --dry-run --state
+/tmp/initkit-validation-43-dry-run-state.json`; the dry-run state file was not
+created. `git diff --check` and `jq empty .agent-loop/tasks.json` also passed.
+No source fix was needed. Formatter validation remains unavailable because
+`.scalafmt.conf` exists but no local `scalafmt` executable or Mill formatting
+target is configured.
