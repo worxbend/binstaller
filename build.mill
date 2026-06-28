@@ -51,6 +51,7 @@ object core extends InitkitScalaModule:
   def moduleDeps = Seq(config, host)
 
   def mvnDeps = Seq(
+    mvn"com.softwaremill.ox::core:1.0.5",
     mvn"com.lihaoyi::upickle:4.4.3"
   )
 

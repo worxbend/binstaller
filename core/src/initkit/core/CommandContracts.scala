@@ -207,6 +207,7 @@ final case class CommandResult(
 enum CommandTermination:
   case Exited(code: Int)
   case TimedOut(after: FiniteDuration)
+  case Cancelled(message: String)
   case FailedToStart(message: String)
 
 final case class CommandResultData(

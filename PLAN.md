@@ -1654,3 +1654,16 @@ and password/token/api-key style assignments. Command result and termination
 types, a sudo strategy interface, and deterministic fake command/sudo backends
 were added for executor tests; no test invokes real sudo. Checks passed:
 `./mill core.test`, `./mill __.compile`, and `./mill __.test`.
+
+Progress note, 2026-06-28: T018 added the JVM process runner in the `core`
+module. `ProcessCommandRunner` executes direct argv specs with
+`ProcessBuilder` by default, only uses shell prefixes for explicit shell specs,
+applies cwd/env overrides, captures exit codes, supports dry-run bypass, and
+pumps stdout/stderr concurrently through Ox forks into bounded stream tails so
+large output cannot deadlock the child. Timeout and Ox cancellation paths
+terminate the process tree where the JVM exposes it. Sudo preflight is modeled
+through `PreflightSudoStrategy`, with interactive and noninteractive askpass
+paths covered by fakes; tests still avoid real sudo. Checks passed:
+`./mill core.test.testOnly initkit.core.ProcessCommandRunnerTests`,
+`./mill __.compile`, `./mill __.test`, `git diff --check`, and
+`jq empty .agent-loop/tasks.json`.
