@@ -1,0 +1,29 @@
+package build
+import mill.*, scalalib.*
+
+object app extends SbtModule {
+  def scalaVersion = "3.8.2"
+
+  def repositories = Seq(
+    "https://repo1.maven.org/maven2",
+    "https://central.sonatype.com/repository/maven-snapshots/"
+  )
+
+  def mvnDeps = Seq(
+    mvn"info.picocli:picocli:4.7.7",
+    mvn"com.lihaoyi::os-lib:0.11.8",
+    mvn"com.lihaoyi::upickle:4.4.3",
+    mvn"org.snakeyaml:snakeyaml-engine:3.0.1",
+    mvn"com.softwaremill.ox::core:1.0.5",
+    mvn"com.softwaremill.sttp.client4::core:4.0.25",
+    mvn"dev.tamboui:tamboui-toolkit:0.5.0-SNAPSHOT",
+    mvn"dev.tamboui:tamboui-jline3-backend:0.5.0-SNAPSHOT"
+  )
+
+  def mainClass = Some("initkit.Main")
+
+  object test extends SbtTests {
+    def mvnDeps = Seq(mvn"com.lihaoyi::utest:0.9.5")
+    def testFramework = "utest.runner.Framework"
+  }
+}

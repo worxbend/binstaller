@@ -1,0 +1,13 @@
+.bsp/
+.idea/
+.metals/
+.vscode/
+out/
+target/
+.bloop/
+.scala-build/
+*.class
+*.log
+
+# Agent Loop runtime
+.agent-loop/

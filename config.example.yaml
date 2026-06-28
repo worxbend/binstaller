@@ -1,0 +1,467 @@
+apiVersion: initkit.io/v1alpha1
+kind: WorkstationProfile
+
+metadata:
+  name: developer-workstation
+  labels:
+    role: development
+    owner: platform
+  annotations:
+    initkit.io/description: Example package installation plan inspired by Kubernetes manifests.
+
+spec:
+  # Informational metadata about the intended target system. A runner may show
+  # this to users, but install selection should still come from `when` rules.
+  target:
+    os:
+      family: linux
+      distribution: ubuntu
+      version: "24.04"
+      codename: noble
+      architecture: amd64
+      desktop: gnome
+
+  # Global behavior for every install step unless a step overrides it.
+  policy:
+    dryRun: false
+    continueOnError: false
+    requireSudo: true
+    reboot:
+      allowed: false
+      prompt: true
+
+  # Variables can be referenced by implementations as ${name}.
+  vars:
+    user: "${USER}"
+    home: "${HOME}"
+    arch: amd64
+    binDir: "${HOME}/.local/bin"
+    stateFile: "${HOME}/.local/state/initkit/developer-workstation.state.json"
+    dotfilesDir: "${HOME}/.dotfiles"
+    dotfilesConfig: "${HOME}/.dotfiles/.files/install.conf.yaml"
+    nerdFontConfig: "${HOME}/.config/nerd-config-installer/config.yaml"
+    nerdFontDir: "${HOME}/.local/share/fonts/NerdFonts"
+
+  # Package-manager setup is separated from the ordered installation plan so
+  # repositories/remotes can be prepared before packages are installed.
+  sources:
+    apt:
+      repositories:
+        - name: docker
+          keyUrl: https://download.docker.com/linux/ubuntu/gpg
+          source: "deb [arch=amd64] https://download.docker.com/linux/ubuntu noble stable"
+      updateBeforeInstall: true
+
+    dnf:
+      repositories:
+        - name: vscode
+          description: Visual Studio Code
+          baseUrl: https://packages.microsoft.com/yumrepos/vscode
+          gpgKey: https://packages.microsoft.com/keys/microsoft.asc
+
+    zypper:
+      repositories:
+        - name: docker
+          url: https://download.docker.com/linux/sles/docker-ce.repo
+          autoRefresh: true
+
+    flatpak:
+      remotes:
+        - name: flathub
+          url: https://flathub.org/repo/flathub.flatpakrepo
+          ifMissing: true
+
+  # Steps run top-to-bottom. Each entry has exactly one `kind`, so a runner can
+  # dispatch it to the correct installer. A runner may skip a step when its
+  # `when` selector does not match the current system.
+  plan:
+    - name: apt-base-cli
+      kind: apt-packages
+      description: Core terminal tools for Debian and Ubuntu systems.
+      execution:
+        mode: sequential
+        locks:
+          - system-package-manager
+      when:
+        os:
+          family: linux
+          distribution:
+            oneOf:
+              - debian
+              - ubuntu
+      spec:
+        update: true
+        install:
+          - build-essential
+          - ca-certificates
+          - curl
+          - git
+          - gnupg
+          - jq
+          - unzip
+          - zsh
+
+    - name: pacman-base-cli
+      kind: pacman-packages
+      description: Core terminal tools for Arch Linux systems.
+      execution:
+        mode: sequential
+        locks:
+          - system-package-manager
+      when:
+        os:
+          family: linux
+          distribution: arch
+      spec:
+        sync: true
+        install:
+          - base-devel
+          - ca-certificates
+          - curl
+          - git
+          - gnupg
+          - jq
+          - unzip
+          - zsh
+
+    - name: dnf-base-cli
+      kind: dnf-packages
+      description: Core terminal tools for Fedora and RHEL-family systems.
+      execution:
+        mode: sequential
+        locks:
+          - system-package-manager
+      when:
+        os:
+          family: linux
+          distribution:
+            oneOf:
+              - fedora
+              - rhel
+              - centos
+      spec:
+        install:
+          - "@development-tools"
+          - ca-certificates
+          - curl
+          - git
+          - gnupg2
+          - jq
+          - unzip
+          - zsh
+
+    - name: zypper-base-cli
+      kind: zypper-packages
+      description: Core terminal tools for openSUSE and SUSE systems.
+      execution:
+        mode: sequential
+        locks:
+          - system-package-manager
+      when:
+        os:
+          family: linux
+          distribution:
+            oneOf:
+              - opensuse
+              - sles
+      spec:
+        refresh: true
+        install:
+          - patterns-devel-base-devel_basis
+          - ca-certificates
+          - curl
+          - git
+          - gpg2
+          - jq
+          - unzip
+          - zsh
+
+    - name: relogin-after-shell-install
+      kind: interrupt
+      description: Stop after shell packages are installed so the user can log out and continue later.
+      execution:
+        mode: sequential
+      spec:
+        reason: zsh and other login-shell tools were installed. Log out and back in before continuing.
+        state:
+          path: "${stateFile}"
+          format: json
+          resumeFrom: next
+        instructions:
+          - Close this terminal session.
+          - Log out of the desktop session, or reboot if that is simpler.
+          - Log back in and continue with the saved state file.
+          - "Run: initkit apply --config config.example.yaml --state ${stateFile}"
+        exit:
+          code: 75
+          message: Bootstrap paused. Re-run with --state to continue from the next plan entry.
+
+    - name: apt-containers
+      kind: apt-packages
+      description: Container runtime packages for Debian and Ubuntu systems.
+      execution:
+        mode: sequential
+        locks:
+          - system-package-manager
+      when:
+        os:
+          family: linux
+          distribution:
+            oneOf:
+              - debian
+              - ubuntu
+      spec:
+        install:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+
+    - name: pacman-containers
+      kind: pacman-packages
+      description: Container runtime packages for Arch Linux systems.
+      execution:
+        mode: sequential
+        locks:
+          - system-package-manager
+      when:
+        os:
+          family: linux
+          distribution: arch
+      spec:
+        install:
+          - docker
+          - docker-buildx
+          - docker-compose
+
+    - name: dnf-containers
+      kind: dnf-packages
+      description: Container runtime packages for Fedora and RHEL-family systems.
+      execution:
+        mode: sequential
+        locks:
+          - system-package-manager
+      when:
+        os:
+          family: linux
+          distribution:
+            oneOf:
+              - fedora
+              - rhel
+              - centos
+      spec:
+        install:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+
+    - name: zypper-containers
+      kind: zypper-packages
+      description: Container runtime packages for openSUSE and SUSE systems.
+      execution:
+        mode: sequential
+        locks:
+          - system-package-manager
+      when:
+        os:
+          family: linux
+          distribution:
+            oneOf:
+              - opensuse
+              - sles
+      spec:
+        install:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+
+    - name: flatpak-desktop-apps
+      kind: flatpak-packages
+      description: User-facing applications installed through Flatpak.
+      execution:
+        mode: sequential
+        locks:
+          - desktop-package-manager
+      spec:
+        remote: flathub
+        system: true
+        install:
+          - com.slack.Slack
+          - com.spotify.Client
+          - org.mozilla.firefox
+
+    - name: snap-desktop-apps
+      kind: snap-packages
+      description: User-facing applications installed through Snap.
+      execution:
+        mode: sequential
+        locks:
+          - desktop-package-manager
+      spec:
+        install:
+          - name: code
+            classic: true
+          - name: postman
+
+    - name: direct-binaries
+      kind: binary-downloads
+      description: Download standalone binaries and place them on PATH.
+      execution:
+        mode: parallel
+        maxConcurrency: 4
+        failFast: true
+      spec:
+        items:
+          - name: kubectl
+            url: https://dl.k8s.io/release/v1.30.2/bin/linux/amd64/kubectl
+            destination: "${binDir}/kubectl"
+            mode: "0755"
+            checksum:
+              algorithm: sha256
+              value: replace-with-real-kubectl-sha256
+
+          - name: helm
+            url: https://get.helm.sh/helm-v3.15.2-linux-amd64.tar.gz
+            archive:
+              type: tar.gz
+              stripComponents: 1
+              path: linux-amd64/helm
+            destination: "${binDir}/helm"
+            mode: "0755"
+            checksum:
+              algorithm: sha256
+              value: replace-with-real-helm-sha256
+
+          - name: dotbot-go
+            url: https://github.com/worxbend/dotbot-go/releases/download/v0.3.0/dotbot-linux-amd64.tar.gz
+            archive:
+              type: tar.gz
+              path: dotbot
+            destination: "${binDir}/dotbot-go"
+            mode: "0755"
+            checksum:
+              algorithm: sha256
+              value: 45d49e064d8684926fed97ad051c6ecebbf796a3c709edaa7a4a166b2978633d
+
+          - name: nerdfont-install
+            url: https://github.com/worxbend/nerd-font-installer/releases/download/v1.0.5/nerdfont-install_v1.0.5_linux_amd64.tar.gz
+            archive:
+              type: tar.gz
+              stripComponents: 1
+              path: nerdfont-install_v1.0.5_linux_amd64/nerdfont-install
+            destination: "${binDir}/nerdfont-install"
+            mode: "0755"
+            checksum:
+              algorithm: sha256
+              value: f26cf063b7c99b7c2d50a49cd4eb5790c795c2d0f96e7838969b85fd6e4d177d
+
+    - name: language-toolchains
+      kind: shell-scripts
+      description: Run official shell installers after OS dependencies exist.
+      execution:
+        mode: sequential
+        locks:
+          - user-toolchain
+      spec:
+        items:
+          - name: rustup
+            url: https://sh.rustup.rs
+            shell: sh
+            args:
+              - -s
+              - --
+              - -y
+              - --default-toolchain
+              - stable
+            creates: "${home}/.cargo/bin/rustc"
+
+          - name: miniforge
+            url: https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
+            shell: bash
+            args:
+              - -b
+              - -p
+              - "${home}/miniforge3"
+            creates: "${home}/miniforge3/bin/conda"
+
+    - name: install-nerd-fonts
+      kind: nerd-fonts
+      description: Install selected Nerd Fonts through the nerdfont-install binary.
+      execution:
+        mode: sequential
+        locks:
+          - user-fonts
+      spec:
+        tool:
+          path: "${binDir}/nerdfont-install"
+          args:
+            - -config
+            - "${nerdFontConfig}"
+        config:
+          path: "${nerdFontConfig}"
+          create: true
+          content:
+            release: latest
+            destination: "${nerdFontDir}"
+            refresh_font_cache: true
+            families:
+              - JetBrainsMono
+              - Hack
+              - FiraCode
+              - Meslo
+        preview:
+          enabled: true
+          args:
+            - -dry-run
+
+    - name: apply-dotfiles
+      kind: dotfiles-apply
+      description: Apply personal dotfiles through the dotbot-go binary.
+      execution:
+        mode: sequential
+        locks:
+          - user-home
+      spec:
+        tool:
+          path: "${binDir}/dotbot-go"
+          args:
+            - -d
+            - "${dotfilesDir}"
+            - -c
+            - "${dotfilesConfig}"
+        repository:
+          url: https://github.com/w0rxbend/system-bootstrap.git
+          ref: main
+          destination: "${dotfilesDir}"
+          update: true
+        config:
+          path: "${dotfilesConfig}"
+          sourceUrl: https://github.com/w0rxbend/system-bootstrap/blob/main/.files/install.conf.yaml
+        preview:
+          enabled: true
+          args:
+            - --dry-run
+
+    - name: post-install
+      kind: commands
+      description: Commands that must run after all packages and installers.
+      execution:
+        mode: sequential
+      spec:
+        items:
+          - name: enable-docker
+            run: systemctl enable --now docker
+            sudo: true
+            when:
+              commandExists: systemctl
+
+          - name: add-user-to-docker-group
+            run: "usermod -aG docker ${user}"
+            sudo: true
+
+          - name: ensure-local-bin
+            run: "mkdir -p ${binDir}"
+            sudo: false
