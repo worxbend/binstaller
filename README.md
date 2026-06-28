@@ -219,6 +219,7 @@ The TUI uses the same state file:
 ```bash
 ./mill __.compile
 ./mill __.test
+./mill tui.test   # includes the noninteractive TUI smoke
 ```
 
 Tamboui is currently consumed from Sonatype snapshot builds, configured in

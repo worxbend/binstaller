@@ -2057,3 +2057,14 @@ file. `jq empty .agent-loop/tasks.json`, `jq empty .agent-loop/config.json`,
 `git diff --check`, and a conflict-marker scan all passed. No regression fix
 was needed. Remaining risk is limited to future TUI smoke and formatter
 validation tasks already queued after this checkpoint.
+
+Progress note, 2026-06-28: refreshed T004 added an automated noninteractive
+TUI smoke in `tui.test`. The smoke loads `config.example.yaml`, resolves it
+with fake Ubuntu host facts, builds a `TuiLaunchModel`, creates `TuiAppState`,
+renders through `TuiRenderer` using a recording TamboUI backend, injects `q`,
+and verifies the runner exits cleanly without creating the throwaway state
+file. README development checks now mention `./mill tui.test` as the supported
+command that includes the noninteractive TUI smoke. Checks passed:
+`./mill tui.test`, `./mill cli.test`, `./mill __.compile`,
+`./mill __.test`, `./mill app.run tui --help`, `git diff --check`, and
+`jq empty .agent-loop/tasks.json`.
