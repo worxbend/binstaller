@@ -147,6 +147,17 @@ shape are validated through the same typed boundary future executors will use.
 Focused tests cover one valid and one invalid entry for every installer kind.
 `./mill __.compile`, `./mill __.test`, and `git diff --check` pass.
 
+Validation checkpoint VALIDATION-9, 2026-06-28: loop state and build metadata
+were rechecked for the completed T004-T006 manifest validation and typed
+decoder chunk. `./mill --no-daemon resolve _` confirms the current module graph
+still exposes `app`, `cli`, `config`, and `tui`. The configured recursive
+checks passed: `./mill __.compile` and `./mill __.test`. Full recursive tests
+ran the CLI suites plus `ManifestLoaderTests`, `ManifestValidatorTests`,
+`PackageSpecDecoderTests`, and `InstallerSpecDecoderTests` successfully.
+`git diff --check` also passed. `.scalafmt.conf` exists, but no local
+`scalafmt` executable or Mill formatting target is configured, so formatter
+validation remains unavailable in this workspace.
+
 Validation checkpoint, 2026-06-28: `./mill app.compile` and `./mill app.test`
 were rerun for the completed T001-T003 chunk. Daemon-mode Mill cannot start its
 localhost server in this sandbox (`java.net.SocketException: Operation not
