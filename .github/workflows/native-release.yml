@@ -1,0 +1,82 @@
+name: Native Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: native-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  linux-amd64:
+    name: Build Linux amd64 native image
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up GraalVM
+        uses: graalvm/setup-graalvm@v1
+        with:
+          distribution: graalvm
+          java-version: "21"
+          components: native-image
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Expose GraalVM home to Mill
+        run: echo "GRAALVM_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - name: Install native-image system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential zlib1g-dev
+
+      - name: Check GraalVM tools
+        run: |
+          java -version
+          native-image --version
+
+      - name: Run tests
+        run: ./mill __.test
+
+      - name: Build native image
+        run: ./mill app.nativeImage
+
+      - name: Package native image
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          native_path="$(find out/app/nativeImage.dest -maxdepth 1 -type f -name native-executable -print -quit)"
+          if [ -z "$native_path" ]; then
+            echo "Could not find native image under out/app/nativeImage.dest" >&2
+            find out/app/nativeImage.dest -maxdepth 2 -type f -print >&2 || true
+            exit 1
+          fi
+          cp "$native_path" dist/initkit-linux-amd64
+          chmod +x dist/initkit-linux-amd64
+          ./dist/initkit-linux-amd64 --help
+          tar -C dist -czf dist/initkit-linux-amd64.tar.gz initkit-linux-amd64
+          sha256sum dist/initkit-linux-amd64 dist/initkit-linux-amd64.tar.gz > dist/SHA256SUMS
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/initkit-linux-amd64
+            dist/initkit-linux-amd64.tar.gz
+            dist/SHA256SUMS

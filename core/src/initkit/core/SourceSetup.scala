@@ -1,6 +1,9 @@
 package initkit.core
 
-import java.nio.file.{Path, Paths}
+import java.io.IOException
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Path, Paths}
+import scala.jdk.CollectionConverters.*
 
 import initkit.config.*
 import initkit.host.HostFacts
@@ -53,6 +56,135 @@ final case class SkippedSourceSection(
     section: String,
     reason: String
 )
+
+final class SourceSetupExecutor(
+    commandExecutor: CommandExecutor,
+    files: SourceSetupFiles = SourceSetupFiles.Jvm
+):
+  def execute(
+      plan: SourceSetupPlan,
+      policy: ExecutionPolicy,
+      summary: PlanOperationSummary = SourceSetupExecutor.Summary
+  ): PlanOperationOutcome =
+    policy.mode match
+      case ExecutionRunMode.DryRun =>
+        PlanOperationOutcome.DryRun(plan.dryRunData(summary))
+      case ExecutionRunMode.Apply =>
+        applyOperations(plan.operations, summary)
+
+  private def applyOperations(
+      operations: Vector[SourceSetupOperation],
+      summary: PlanOperationSummary
+  ): PlanOperationOutcome =
+    val details = Vector.newBuilder[String]
+    var failure = Option.empty[SourceSetupFailure]
+    var index = 0
+
+    while index < operations.size && failure.isEmpty do
+      runOperation(operations(index)) match
+        case Right(detail) =>
+          details += detail
+        case Left(value) =>
+          failure = Some(value)
+      index = index + 1
+
+    failure match
+      case Some(value) =>
+        PlanOperationOutcome.Failed(PlanFailure(summary, value.message, value.exitCode))
+      case None =>
+        val result = details.result()
+        PlanOperationOutcome.Completed(
+          if result.isEmpty then Vector("no source setup operations generated")
+          else result
+        )
+
+  private def runOperation(operation: SourceSetupOperation): Either[SourceSetupFailure, String] =
+    operation match
+      case SourceSetupOperation.RunCommand(label, command) =>
+        val result = commandExecutor.run(command)
+        if result.succeeded then Right(s"ran source setup command '$label'")
+        else Left(SourceSetupFailure.Command(label, result))
+      case SourceSetupOperation.WriteFile(label, path, content, mode, sudo) =>
+        files.writeFile(path, content, mode, sudo) match
+          case Right(_)    => Right(writeDetail(label, path, mode, sudo))
+          case Left(error) => Left(SourceSetupFailure.File(label, path, sudo, error.message))
+
+  private def writeDetail(label: String, path: Path, mode: Option[String], sudo: Boolean): String =
+    val modeText = mode.map(value => s" mode=$value").getOrElse("")
+    val sudoText = if sudo then " (sudo requested)" else ""
+    s"wrote source setup file '$label' to $path$modeText$sudoText"
+
+private enum SourceSetupFailure:
+  case Command(label: String, result: CommandResult)
+  case File(label: String, path: Path, sudo: Boolean, detail: String)
+
+  def message: String =
+    this match
+      case Command(label, result) =>
+        s"source setup command '$label' failed: ${CommandsExecutor.describe(result.spec)} " +
+          s"(${CommandsExecutor.describeTermination(result.termination)})"
+      case File(label, path, sudo, detail) =>
+        val sudoText = if sudo then " (sudo requested)" else ""
+        s"source setup file write '$label' failed for $path$sudoText: $detail"
+
+  def exitCode: Option[Int] =
+    this match
+      case Command(_, result) => result.exitCode
+      case File(_, _, _, _)   => None
+
+trait SourceSetupFiles:
+  def writeFile(
+      path: Path,
+      content: String,
+      mode: Option[String],
+      sudo: Boolean
+  ): Either[SourceSetupFileError, Unit]
+
+final case class SourceSetupFileError(message: String)
+
+object SourceSetupFiles:
+  val Jvm: SourceSetupFiles =
+    new SourceSetupFiles:
+      override def writeFile(
+          path: Path,
+          content: String,
+          mode: Option[String],
+          sudo: Boolean
+      ): Either[SourceSetupFileError, Unit] =
+        mode match
+          case Some(value) =>
+            BinaryDownloadsExecutor.permissionsFromMode(value) match
+              case Left(error) => Left(SourceSetupFileError(error))
+              case Right(permissions) =>
+                safely:
+                  writeString(path, content)
+                  Files.setPosixFilePermissions(path.toAbsolutePath.normalize(), permissions.asJava)
+                  ()
+          case None =>
+            safely(writeString(path, content))
+
+      private def writeString(path: Path, content: String): Unit =
+        val absolutePath = path.toAbsolutePath.normalize()
+        Option(absolutePath.getParent).foreach(Files.createDirectories(_))
+        Files.writeString(absolutePath, content, StandardCharsets.UTF_8)
+        ()
+
+      private def safely[A](body: => A): Either[SourceSetupFileError, A] =
+        try Right(body)
+        catch
+          case error: IOException =>
+            Left(SourceSetupFileError(safeMessage(error)))
+          case error: SecurityException =>
+            Left(SourceSetupFileError(safeMessage(error)))
+          case error: UnsupportedOperationException =>
+            Left(SourceSetupFileError(safeMessage(error)))
+
+      private def safeMessage(error: Throwable): String =
+        Option(error.getMessage).getOrElse(error.getClass.getName)
+
+object SourceSetupExecutor:
+  val Summary: PlanOperationSummary =
+    PlanOperationSummary(index = -1, name = "source-setup", kind = "sources", description = Some("Configure package sources"))
 
 object SourceSetupGenerator:
   def generate(

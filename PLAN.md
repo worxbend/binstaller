@@ -1621,48 +1621,18 @@ engine used by plain CLI mode.
 ## Agent Loop Tasks
 
 The strict queue for subsequent implementation and validation iterations is in
-`.agent-loop/tasks.json`. All tasks are pending at the time of this analysis
-iteration. The current workspace still has a single starter `app` module, so the
-queue begins with build/source-layout and module-boundary cleanup before the
-manifest pipeline.
+`.agent-loop/tasks.json`. All refreshed tasks are pending at the time of this
+analysis iteration. The earlier T001-T037 queue completed the manifest loader,
+execution engine, installers, CLI/TUI wiring, README, and final validation. The
+new queue focuses only on remaining concrete gaps from the original goals and
+recorded risks.
 
-- T001 Migrate starter build layout (chore, complex)
-- T002 Split CLI and TUI shells (improvement, complex)
-- T003 Load raw manifests (feature, complex)
-- T004 Validate manifest semantics (feature, complex)
-- T005 Decode package and source specs (feature, complex)
-- T006 Decode installer specs (feature, complex)
-- T007 Run manifest checkpoint (validation, simple)
-- T008 Detect host facts (feature, moderate)
-- T009 Evaluate plan conditions (feature, moderate)
-- T010 Resolve manifest variables (feature, complex)
-- T011 Select runnable entries (feature, moderate)
-- T012 Run resolution checkpoint (validation, simple)
-- T013 Persist execution state (feature, complex)
-- T014 Define execution contracts (feature, moderate)
-- T015 Implement engine skeleton (feature, complex)
-- T016 Run engine checkpoint (validation, simple)
-- T017 Build command contracts (feature, moderate)
-- T018 Run JVM processes safely (feature, complex)
-- T019 Generate source setup operations (feature, moderate)
-- T020 Implement package executors (feature, complex)
-- T021 Implement commands executor (feature, moderate)
-- T022 Run command checkpoint (validation, simple)
-- T023 Install shell scripts (feature, moderate)
-- T024 Download binaries with checksums (feature, complex)
-- T025 Extract binary archives (feature, complex)
-- T026 Run download checkpoint (validation, simple)
-- T027 Install Nerd Fonts (feature, moderate)
-- T028 Apply dotfiles (feature, moderate)
-- T029 Report CLI outcomes (improvement, complex)
-- T030 Run CLI milestone (validation, simple)
-- T031 Research TamboUI APIs (chore, moderate)
-- T032 Build TUI view model (feature, complex)
-- T033 Render TUI checklist (feature, complex)
-- T034 Wire TUI execution (feature, complex)
-- T035 Run TUI checkpoint (validation, simple)
-- T036 Document initkit usage (chore, moderate)
-- T037 Run final validation (validation, simple)
+- T001 Implement source setup execution (feature, complex)
+- T002 Run source setup before installs (feature, complex)
+- T003 Run source setup checkpoint (validation, simple)
+- T004 Automate TUI smoke coverage (improvement, moderate)
+- T005 Expose formatter validation (chore, moderate)
+- T006 Run final validation (validation, simple)
 
 Progress note, 2026-06-28: T013 added JSON execution state persistence in the
 `core` module. State now records manifest identity (`metadata.name`,
@@ -2044,3 +2014,17 @@ created. `git diff --check` and `jq empty .agent-loop/tasks.json` also passed.
 No source fix was needed. Formatter validation remains unavailable because
 `.scalafmt.conf` exists but no local `scalafmt` executable or Mill formatting
 target is configured.
+
+Progress note, 2026-06-28: refreshed T001 added core source setup execution.
+`SourceSetupExecutor` now executes `SourceSetupOperation.RunCommand` entries
+through an injected `CommandExecutor` in apply mode and writes
+`SourceSetupOperation.WriteFile` entries through an injected `SourceSetupFiles`
+boundary. The JVM file boundary creates parent directories, writes UTF-8
+content, applies configured POSIX modes, and reports failures, while dry-run
+mode returns the existing source setup preview actions without commands or file
+writes. Focused tests cover command success and failure, file write success and
+failure, sudo-marked write reporting, and dry-run no-mutation behavior.
+Checks passed: `./mill core.test`, `./mill __.compile`, and
+`./mill __.test`. Remaining risk: source setup execution is still a core
+boundary only; T002 must wire it into CLI and TUI apply flows before package
+installation.

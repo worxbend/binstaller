@@ -68,7 +68,12 @@ object core extends InitkitScalaModule:
     def mvnDeps = Seq(mvn"com.lihaoyi::utest:0.9.5")
     def testFramework = "utest.runner.Framework"
 
-object app extends InitkitScalaModule:
+object app extends InitkitScalaModule, NativeImageModule:
   def moduleDeps = Seq(cli)
 
   def mainClass = Some("initkit.Main")
+
+  def nativeImageOptions = Seq(
+    "--no-fallback",
+    "-Os"
+  )
