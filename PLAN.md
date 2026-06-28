@@ -2577,3 +2577,23 @@ mode display, focus/selection behavior, and narrow-cell ellipsis. Checks passed:
 `./mill tui.test`, `./mill cli.test`, `./mill __.compile`, `./mill __.test`,
 `./mill mill.scalalib.scalafmt/checkFormatAll`, `./mill app.run tui --help`,
 `git diff --check`, and `jq empty .agent-loop/tasks.json`.
+
+Progress note T003 / iteration 64, 2026-06-29: surfaced execution risk and
+checkpoint feedback in the TUI without moving execution decisions out of core.
+`TuiRiskDetails` derives view-only risk text from existing typed manifest
+decoders and execution policy, covering sudo commands and file writes, service
+and shell-change commands, package upgrade actions, downloads, root-path and
+root-owned writes, source setup privilege markers, and interrupt checkpoints
+where the current manifest model represents them. `TuiTextLayout` details now
+show risk lines and visually distinct `[checkpoint]` / `[resume]` interrupt
+text. `TuiExecutionLog` now includes background/running status lines,
+selected-entry risk lines, source setup risk markers, distinct checkpoint
+resume lines, item-level failed/skipped/interrupted summaries, and final
+completed/skipped/failed/interrupted/remaining counts. TUI tests cover
+risk/detail rendering, dry-run risk logs, source setup running/failure logs,
+checkpoint resume logs, and quit-while-running text using fake executors and
+state writers only. Checks passed:
+`./mill tui.test`, `./mill core.test`, `./mill __.compile`, `./mill __.test`,
+`./mill mill.scalalib.scalafmt/reformatAll`, final `./mill
+mill.scalalib.scalafmt/checkFormatAll`, final `./mill tui.test`,
+`git diff --check`, and `jq empty .agent-loop/tasks.json`.

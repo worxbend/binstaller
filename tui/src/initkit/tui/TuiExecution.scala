@@ -150,7 +150,8 @@ private[tui] object TuiExecutionLog:
     s"action: ${action.label}",
     s"mode: ${action.mode.toString.toLowerCase}",
     s"selected: ${if selectedNames.isEmpty then "<none>" else selectedNames.mkString(", ")}"
-  ) ++ sourceSetupLines(context.sourceSetup) ++ commandLines ++
+  ) ++ sourceSetupLines(context.sourceSetup) ++
+    riskLines(context, selectedNames, action.mode) ++ commandLines ++
     eventLines(context, result.events) ++ summaryLines(result)
 
   def commandLine(spec: CommandSpec): String =
@@ -183,7 +184,15 @@ private[tui] object TuiExecutionLog:
       )
       .toVector
 
-    operations ++ skipped ++ aptUpdate
+    operations ++ skipped ++ aptUpdate ++ TuiRiskDetails.sourceSetupRiskLines(sourceSetup)
+
+  private def riskLines(
+      context: TuiExecutionContext,
+      selectedNames: Vector[String],
+      mode: ExecutionRunMode
+  ): Vector[String] =
+    val policy = ExecutionPolicy.fromManifest(context.manifest.spec.policy, Some(mode))
+    TuiRiskDetails.forManifest(context.manifest, selectedNames, policy)
 
   private def sourceSetupOperation(operation: SourceSetupOperation): String = operation match
     case SourceSetupOperation.RunCommand(label, command) =>
@@ -197,7 +206,8 @@ private[tui] object TuiExecutionLog:
     events.flatMap:
       case PlanEvent.Scheduled(operation, _) =>
         Vector(s"scheduled: ${operation.name} (${operation.kind})")
-      case PlanEvent.Started(operation, _)          => Vector(s"started: ${operation.name}")
+      case PlanEvent.Started(operation, _) =>
+        Vector(s"started: ${operation.name}", s"running: ${operation.name} (${operation.kind})")
       case PlanEvent.Skipped(operation, reasons, _) =>
         Vector(s"skipped: ${operation.name}: ${reasons.mkString("; ")}")
       case PlanEvent.Completed(operation, details, _) => Vector(s"completed: ${operation.name}") ++
@@ -218,11 +228,11 @@ private[tui] object TuiExecutionLog:
     val statePath = interrupt.statePath.map(Paths.get(_)).getOrElse(context.statePath)
 
     Vector(
-      s"interrupted: ${operation.name}: ${interrupt.reason}",
-      s"state written: $statePath",
-      s"resume: initkit tui --config ${context.configPath} --state $statePath"
+      s"[checkpoint] interrupted: ${operation.name}: ${interrupt.reason}",
+      s"[checkpoint] state written: $statePath",
+      s"[checkpoint] resume: initkit tui --config ${context.configPath} --state $statePath"
     ) ++ interrupt.resumeFrom.map(value => s"resume from: $value").toVector ++
-      interrupt.instructions.map(instruction => s"instruction: $instruction")
+      interrupt.instructions.map(instruction => s"[resume] instruction: $instruction")
 
   private def actionLine(action: DryRunAction): String = action match
     case DryRunAction.Command(argv, shell, sudo, workingDirectory, stdinFile) =>
@@ -244,4 +254,10 @@ private[tui] object TuiExecutionLog:
     Vector(
       s"summary: completed=${counts.completed} skipped=${counts.skipped} failed=${counts.failed} " +
         s"interrupted=${counts.interrupted} remaining=${counts.remaining} exitCode=${result.exitCode}"
-    )
+    ) ++ result.result.failed.map(failure =>
+      s"failed item: ${failure.operation.name}: ${failure.message}"
+    ) ++ result.result.skipped.map(skip =>
+      s"skipped item: ${skip.operation.name}: ${skip.reasons.mkString("; ")}"
+    ) ++ result.result.interrupted.map(interrupt =>
+      s"interrupted item: ${interrupt.operation.name}: ${interrupt.reason}"
+    ) ++ result.result.remaining.map(operation => s"remaining item: ${operation.name}")

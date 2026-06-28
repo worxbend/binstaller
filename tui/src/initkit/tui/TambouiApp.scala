@@ -86,6 +86,7 @@ private[tui] final class TuiAppState private (
       confirmQuit = false
       status = TuiWorkStatus.Running(action.label)
       appendLog(s"started: ${action.label}")
+      appendLog(s"running: ${action.label} (background)")
 
       forkDiscard:
         try
@@ -400,7 +401,8 @@ object TuiTextLayout:
         s"execution: ${row.executionMode}",
         s"selected: ${if row.selected then "yes" else "no"}",
         s"description: ${row.description.getOrElse("none")}"
-      ) ++ row.reasons.map(reason => s"reason: $reason") ++ interruptLines(row)
+      ) ++ row.reasons.map(reason => s"reason: $reason") ++
+        row.risks.map(risk => s"risk: $risk") ++ interruptLines(row)
 
   def outputLines(model: TuiViewModel): Vector[String] = Vector(
     s"mode: ${model.runMode.toString.toLowerCase}",
@@ -446,8 +448,8 @@ object TuiTextLayout:
   private def interruptLines(row: TuiPlanRow): Vector[String] = row.interrupt match
     case None         => Vector.empty
     case Some(marker) => Vector(
-        s"interrupt: ${marker.reason}",
-        s"interrupt state: ${marker.statePath}",
-        s"resume from: ${marker.resumeFrom.map(_.toString).getOrElse("default")}",
-        s"exit code: ${marker.exitCode.map(_.toString).getOrElse("default")}"
-      ) ++ marker.instructions.map(instruction => s"instruction: $instruction")
+        s"[checkpoint] interrupt: ${marker.reason}",
+        s"[checkpoint] state: ${marker.statePath}",
+        s"[resume] from: ${marker.resumeFrom.map(_.toString).getOrElse("default")}",
+        s"[checkpoint] exit code: ${marker.exitCode.map(_.toString).getOrElse("default")}"
+      ) ++ marker.instructions.map(instruction => s"[resume] instruction: $instruction")

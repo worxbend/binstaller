@@ -5,6 +5,7 @@ import java.nio.file.Path
 import initkit.config.*
 import initkit.core.{
   ConditionEvaluator,
+  ExecutionPolicy,
   ExecutionRunMode,
   ExecutionState as CoreExecutionState,
   PlanEntryState,
@@ -107,6 +108,7 @@ object TuiViewModel:
 
   private def buildRows(request: TuiViewModelRequest): Vector[TuiPlanRow] =
     val stateByIndex = request.state.entries.map(entry => entry.index -> entry).toMap
+    val policy       = ExecutionPolicy.fromManifest(request.manifest.spec.policy, None)
 
     request.manifest.spec.plan.zipWithIndex.map: (entry, index) =>
       rowFor(
@@ -114,7 +116,8 @@ object TuiViewModel:
         index = index,
         state = stateByIndex.get(index),
         hostFacts = request.hostFacts,
-        selection = request.selection
+        selection = request.selection,
+        policy = policy
       )
 
   private def rowFor(
@@ -122,7 +125,8 @@ object TuiViewModel:
       index: Int,
       state: Option[PlanEntryState],
       hostFacts: HostFacts,
-      selection: TuiSelectionInputs
+      selection: TuiSelectionInputs,
+      policy: ExecutionPolicy
   ): TuiPlanRow =
     val conditionReasons = conditionSkipReasons(entry, hostFacts)
     val status           = statusFor(state, conditionReasons)
@@ -139,7 +143,8 @@ object TuiViewModel:
       selected = selected,
       selectable = selectable,
       reasons = reasonsFor(status, state, conditionReasons),
-      interrupt = interruptMarker(index, entry)
+      interrupt = interruptMarker(index, entry),
+      risks = TuiRiskDetails.forEntry(entry, index, policy)
     )
 
   private def conditionSkipReasons(entry: PlanEntry, hostFacts: HostFacts): Vector[String] =
@@ -284,7 +289,8 @@ final case class TuiPlanRow(
     selected: Boolean,
     selectable: Boolean,
     reasons: Vector[String],
-    interrupt: Option[TuiInterruptMarker]
+    interrupt: Option[TuiInterruptMarker],
+    risks: Vector[String]
 )
 
 enum TuiPlanRowStatus:

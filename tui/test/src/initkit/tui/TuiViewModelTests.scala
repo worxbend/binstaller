@@ -164,6 +164,41 @@ object TuiViewModelTests extends TestSuite:
       assert(line.contains("very-lo..."))
       assert(line.contains("very-..."))
 
+    test("details render dangerous operation risks and checkpoint markers"):
+      val viewModel = TuiViewModel.from(
+        TuiViewModelRequest(
+          manifest = riskManifest(),
+          hostFacts = HostFacts.fake(distribution = Some("ubuntu")),
+          state = ExecutionState.initial(riskManifest(), clock),
+          stateFile = TuiStateFileInput(
+            path = Path.of("/tmp/risk.state.json"),
+            existedBeforeLoad = false,
+            resetRequested = false
+          ),
+          selection = TuiSelectionInputs(),
+          dryRun = true
+        )
+      )
+
+      val commandDetails = TuiTextLayout.detailsLines(viewModel)
+      val fileDetails    = TuiTextLayout.detailsLines(viewModel.copy(focusedIndex = Some(1)))
+      val pauseDetails   = TuiTextLayout.detailsLines(viewModel.copy(focusedIndex = Some(2)))
+
+      assert(commandDetails.exists(_.contains(
+        "risk: sudo command: enable-docker -> systemctl enable --now docker"
+      )))
+      assert(commandDetails.exists(_.contains(
+        "risk: service change command: enable-docker -> systemctl enable --now docker"
+      )))
+      assert(fileDetails.exists(_.contains(
+        "risk: sudo file write: docker-repo -> /etc/apt/sources.list.d/docker.list"
+      )))
+      assert(fileDetails.exists(_.contains(
+        "risk: root-owned write: docker-repo -> /etc/apt/sources.list.d/docker.list"
+      )))
+      assert(pauseDetails.exists(_.contains("[checkpoint] interrupt: restart the shell")))
+      assert(pauseDetails.exists(_.contains("[resume] instruction: Open a new terminal.")))
+
   private def buildViewModel(
       selection: TuiSelectionInputs = TuiSelectionInputs()
   ): TuiViewModel =
@@ -249,6 +284,28 @@ object TuiViewModelTests extends TestSuite:
     )
   )
 
+  private def riskManifest(): Manifest = Manifest(
+    apiVersion = Some("initkit.io/v1alpha1"),
+    kind = Some("WorkstationProfile"),
+    metadata = Metadata(Some("risk-profile"), VectorMap.empty, VectorMap.empty),
+    spec = ManifestSpec(
+      target = None,
+      policy = Some(Policy(
+        dryRun = Some(true),
+        continueOnError = None,
+        requireSudo = None,
+        reboot = None
+      )),
+      vars = VectorMap.empty,
+      sources = None,
+      plan = Vector(
+        riskyCommandEntry("enable-docker"),
+        fileWriteEntry("docker-repo"),
+        interruptEntry("pause")
+      )
+    )
+  )
+
   private def entry(
       name: String,
       kind: String,
@@ -265,6 +322,71 @@ object TuiViewModelTests extends TestSuite:
     )),
     when = distribution.map(condition),
     spec = Some(RawYaml.MappingValue(VectorMap.empty))
+  )
+
+  private def riskyCommandEntry(name: String): PlanEntry = PlanEntry(
+    name = Some(name),
+    kind = Some("commands"),
+    description = Some("enable a service"),
+    execution = Some(Execution(
+      Some("sequential"),
+      maxConcurrency = None,
+      failFast = None,
+      locks = Vector.empty
+    )),
+    when = None,
+    spec = Some(
+      RawYaml.MappingValue(
+        VectorMap(
+          "items" -> RawYaml.SequenceValue(
+            Vector(
+              RawYaml.MappingValue(
+                VectorMap(
+                  "name" -> RawYaml.StringValue("enable-docker"),
+                  "run"  -> RawYaml.StringValue("systemctl enable --now docker"),
+                  "sudo" -> RawYaml.BooleanValue(true)
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+
+  private def fileWriteEntry(name: String): PlanEntry = PlanEntry(
+    name = Some(name),
+    kind = Some("file-writes"),
+    description = Some("write root-owned config"),
+    execution = Some(Execution(
+      Some("sequential"),
+      maxConcurrency = None,
+      failFast = None,
+      locks = Vector.empty
+    )),
+    when = None,
+    spec = Some(
+      RawYaml.MappingValue(
+        VectorMap(
+          "items" -> RawYaml.SequenceValue(
+            Vector(
+              RawYaml.MappingValue(
+                VectorMap(
+                  "name"    -> RawYaml.StringValue("docker-repo"),
+                  "path"    -> RawYaml.StringValue("/etc/apt/sources.list.d/docker.list"),
+                  "content" ->
+                    RawYaml.StringValue("deb [arch=amd64] https://example.invalid stable"),
+                  "sudo"  -> RawYaml.BooleanValue(true),
+                  "owner" -> RawYaml.StringValue("root"),
+                  "group" -> RawYaml.StringValue("root"),
+                  "mode"  -> RawYaml.StringValue("0644")
+                )
+              )
+            )
+          )
+        )
+      )
+    )
   )
 
   private def interruptEntry(name: String): PlanEntry = PlanEntry(

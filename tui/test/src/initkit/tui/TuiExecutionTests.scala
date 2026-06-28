@@ -59,6 +59,25 @@ object TuiExecutionTests extends TestSuite:
       assert(report.logLines.exists(_.contains("stderr: warn")))
       assert(report.logLines.exists(_.contains("summary: completed=1")))
 
+    test("preview log surfaces dangerous command risks without executing commands"):
+      val fixture = riskyExecutionFixture(select = Vector("enable-docker"))
+      val runner  =
+        TuiExecutionRunner(_ => FakeCommandExecutor(Vector.empty), RecordingStateWriter())
+
+      val report =
+        requireRight(runner.run(fixture.context, fixture.model, TuiExecutionAction.PreviewSelected))
+
+      assert(report.logLines.exists(_.contains(
+        "risk: enable-docker: sudo command: enable-docker -> systemctl enable --now docker"
+      )))
+      assert(report.logLines.exists(_.contains(
+        "risk: enable-docker: service change command: enable-docker -> systemctl enable --now docker"
+      )))
+      assert(report.logLines.exists(_.contains("dry-run: enable-docker")))
+      assert(
+        report.logLines.exists(_.contains("command sudo /bin/sh -c systemctl enable --now docker"))
+      )
+
     test("apply actions run source setup before package commands"):
       val actions = Vector(
         TuiExecutionAction.RunSelected,
@@ -94,6 +113,7 @@ object TuiExecutionTests extends TestSuite:
           "source-setup",
           "apt-base-cli"
         ))
+        assert(report.logLines.exists(_.contains("running: source-setup")))
         assert(report.logLines.exists(_.contains("completed: source-setup")))
 
     test("source setup failure stops TUI package execution"):
@@ -120,7 +140,11 @@ object TuiExecutionTests extends TestSuite:
       assert(fakeExecutor.calls == Vector(sourceCommand))
       assert(writer.writes.isEmpty)
       assert(report.result.exitCode == 5)
+      assert(report.logLines.exists(_.contains("running: source-setup")))
       assert(report.logLines.exists(_.contains("failed: source-setup")))
+      assert(report.logLines.exists(
+        _.contains("failed item: source-setup: source setup command 'Add source' failed")
+      ))
       assert(report.logLines.exists(_.contains("summary: completed=0 skipped=0 failed=1")))
 
     test("interrupt entries write state and log resume instructions"):
@@ -134,12 +158,15 @@ object TuiExecutionTests extends TestSuite:
       assert(report.result.result.interrupted.map(_.operation.name) == Vector("pause"))
       assert(writer.writes.exists(_._1 == Path.of("/tmp/initkit-tui-interrupt.state.json")))
       assert(
-        report.logLines.exists(_.contains("state written: /tmp/initkit-tui-interrupt.state.json"))
+        report.logLines.exists(
+          _.contains("[checkpoint] state written: /tmp/initkit-tui-interrupt.state.json")
+        )
       )
       assert(report.logLines.exists(_.contains(
         "resume: initkit tui --config /tmp/initkit-profile.yaml --state /tmp/initkit-tui-interrupt.state.json"
       )))
-      assert(report.logLines.exists(_.contains("instruction: Open a new terminal.")))
+      assert(report.logLines.exists(_.contains("[resume] instruction: Open a new terminal.")))
+      assert(report.logLines.exists(_.contains("interrupted item: pause: restart the shell")))
 
     test("quit confirmation text is shown while work is running"):
       val fixture = executionFixture(select = Vector("post-install"))
@@ -213,6 +240,37 @@ object TuiExecutionTests extends TestSuite:
 
     ExecutionFixture(model, context)
 
+  private def riskyExecutionFixture(select: Vector[String]): ExecutionFixture =
+    val manifest  = riskyCommandManifest()
+    val state     = ExecutionState.initial(manifest, clock)
+    val stateFile = TuiStateFileInput(
+      path = Path.of("/tmp/initkit-tui.state.json"),
+      existedBeforeLoad = false,
+      resetRequested = false
+    )
+    val model = TuiViewModel.from(
+      TuiViewModelRequest(
+        manifest = manifest,
+        hostFacts = HostFacts.fake(distribution = Some("ubuntu"), commands = Set("systemctl")),
+        state = state,
+        stateFile = stateFile,
+        selection = TuiSelectionInputs.fromOptions(select, Vector.empty),
+        dryRun = true
+      )
+    )
+    val context = TuiExecutionContext(
+      manifest = manifest,
+      hostFacts = HostFacts.fake(distribution = Some("ubuntu"), commands = Set("systemctl")),
+      statePath = Path.of("/tmp/initkit-tui.state.json"),
+      stateFile = stateFile,
+      state = state,
+      sourceSetup = SourceSetupPlan(Vector.empty, Vector.empty, aptUpdateBeforeInstall = false),
+      configPath = Path.of("/tmp/initkit-profile.yaml"),
+      clock = clock
+    )
+
+    ExecutionFixture(model, context)
+
   private def workstationManifest(): Manifest = Manifest(
     apiVersion = Some("initkit.io/v1alpha1"),
     kind = Some("WorkstationProfile"),
@@ -249,6 +307,24 @@ object TuiExecutionTests extends TestSuite:
       vars = VectorMap.empty,
       sources = None,
       plan = Vector(aptEntry("apt-base-cli"))
+    )
+  )
+
+  private def riskyCommandManifest(): Manifest = Manifest(
+    apiVersion = Some("initkit.io/v1alpha1"),
+    kind = Some("WorkstationProfile"),
+    metadata = Metadata(Some("developer-workstation"), VectorMap.empty, VectorMap.empty),
+    spec = ManifestSpec(
+      target = None,
+      policy = Some(Policy(
+        dryRun = Some(true),
+        continueOnError = None,
+        requireSudo = None,
+        reboot = None
+      )),
+      vars = VectorMap.empty,
+      sources = None,
+      plan = Vector(riskyCommandEntry("enable-docker"))
     )
   )
 
@@ -293,6 +369,36 @@ object TuiExecutionTests extends TestSuite:
                   "name" -> RawYaml.StringValue("say-hello"),
                   "run"  -> RawYaml.StringValue("echo hello"),
                   "sudo" -> RawYaml.BooleanValue(false)
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+
+  private def riskyCommandEntry(name: String): PlanEntry = PlanEntry(
+    name = Some(name),
+    kind = Some("commands"),
+    description = Some("enable a service"),
+    execution = Some(Execution(
+      Some("sequential"),
+      maxConcurrency = None,
+      failFast = None,
+      locks = Vector.empty
+    )),
+    when = None,
+    spec = Some(
+      RawYaml.MappingValue(
+        VectorMap(
+          "items" -> RawYaml.SequenceValue(
+            Vector(
+              RawYaml.MappingValue(
+                VectorMap(
+                  "name" -> RawYaml.StringValue("enable-docker"),
+                  "run"  -> RawYaml.StringValue("systemctl enable --now docker"),
+                  "sudo" -> RawYaml.BooleanValue(true)
                 )
               )
             )
