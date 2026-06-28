@@ -5,8 +5,7 @@ final case class HostFacts(
     architecture: String,
     commandAvailability: CommandAvailability
 ):
-  def commandExists(command: String): Boolean =
-    commandAvailability.exists(command)
+  def commandExists(command: String): Boolean = commandAvailability.exists(command)
 
 final case class HostOs(
     family: String,
@@ -19,6 +18,7 @@ trait CommandAvailability:
   def exists(command: String): Boolean
 
 object HostFacts:
+
   def fake(
       family: String = "linux",
       distribution: Option[String] = Some("ubuntu"),
@@ -26,20 +26,18 @@ object HostFacts:
       codename: Option[String] = Some("noble"),
       architecture: String = "amd64",
       commands: Set[String] = Set.empty
-  ): HostFacts =
-    HostFacts(
-      os = HostOs(
-        family = family,
-        distribution = distribution,
-        version = version,
-        codename = codename
-      ),
-      architecture = architecture,
-      commandAvailability = CommandAvailability.fromSet(commands)
-    )
+  ): HostFacts = HostFacts(
+    os = HostOs(
+      family = family,
+      distribution = distribution,
+      version = version,
+      codename = codename
+    ),
+    architecture = architecture,
+    commandAvailability = CommandAvailability.fromSet(commands)
+  )
 
 object CommandAvailability:
-  def fromSet(commands: Set[String]): CommandAvailability =
-    new CommandAvailability:
-      override def exists(command: String): Boolean =
-        commands.contains(command)
+
+  def fromSet(commands: Set[String]): CommandAvailability = new CommandAvailability:
+    override def exists(command: String): Boolean = commands.contains(command)

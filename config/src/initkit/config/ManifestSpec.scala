@@ -11,11 +11,11 @@ final case class ManifestSpec(
 )
 
 object ManifestSpec:
-  val empty: ManifestSpec =
-    ManifestSpec(
-      target = None,
-      policy = None,
-      vars = VectorMap.empty,
-      sources = None,
-      plan = Vector.empty
-    )
+
+  val empty: ManifestSpec = ManifestSpec(
+    target = None,
+    policy = None,
+    vars = VectorMap.empty,
+    sources = None,
+    plan = Vector.empty
+  )

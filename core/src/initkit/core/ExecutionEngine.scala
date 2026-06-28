@@ -26,22 +26,21 @@ trait ExecutionStateWriter:
   def write(path: Path, state: ExecutionState): Either[ExecutionStateError, Unit]
 
 object ExecutionStateWriter:
-  val live: ExecutionStateWriter = (path: Path, state: ExecutionState) => ExecutionStateStore.write(path, state)
+
+  val live: ExecutionStateWriter =
+    (path: Path, state: ExecutionState) => ExecutionStateStore.write(path, state)
 
 enum ExecutionEngineError:
   case InvalidPlan(errors: Vector[ManifestValidationError])
   case StateWriteFailed(error: ExecutionStateError)
 
-  def message: String =
-    this match
-      case InvalidPlan(errors) =>
-        errors.map(_.message).mkString("; ")
-      case StateWriteFailed(error) =>
-        error.message
+  def message: String = this match
+    case InvalidPlan(errors)     => errors.map(_.message).mkString("; ")
+    case StateWriteFailed(error) => error.message
 
 object ExecutionEngine:
-  val SuccessExitCode: Int = 0
-  val FailureExitCode: Int = 1
+  val SuccessExitCode: Int          = 0
+  val FailureExitCode: Int          = 1
   val DefaultInterruptExitCode: Int = 75
 
   def run(
@@ -69,11 +68,11 @@ object ExecutionEngine:
       stateWriter: ExecutionStateWriter,
       clock: Clock
   ): Either[ExecutionEngineError, ExecutionEngineResult] =
-    var state = request.state
-    var events = Vector.empty[PlanEvent]
-    var stoppedAt = Option.empty[Int]
+    var state        = request.state
+    var events       = Vector.empty[PlanEvent]
+    var stoppedAt    = Option.empty[Int]
     var stopExitCode = Option.empty[Int]
-    var index = 0
+    var index        = 0
 
     while index < selected.size && stoppedAt.isEmpty do
       val outcome = selected(index) match
@@ -95,7 +94,7 @@ object ExecutionEngine:
 
     val remaining = stoppedAt.toVector.flatMap: stoppedIndex =>
       selected.filter(_.index > stoppedIndex).flatMap(summaryOption)
-    val result = PlanResult.fromEvents(events, remaining)
+    val result   = PlanResult.fromEvents(events, remaining)
     val exitCode = stopExitCode.getOrElse(exitCodeForCompletedRun(result))
 
     Right(ExecutionEngineResult(events, state, result, exitCode))
@@ -108,9 +107,9 @@ object ExecutionEngine:
       clock: Clock
   ): Either[ExecutionEngineError, EngineStep] =
     PlanOperationSummary.fromPlanEntry(skipped.index, skipped.entry) match
-      case Left(errors) => Left(ExecutionEngineError.InvalidPlan(errors))
+      case Left(errors)   => Left(ExecutionEngineError.InvalidPlan(errors))
       case Right(summary) =>
-        val at = clock.instant()
+        val at     = clock.instant()
         val events = Vector(
           PlanEvent.Scheduled(summary, at),
           PlanEvent.Skipped(summary, skipped.userFacingReasons, at)
@@ -121,7 +120,8 @@ object ExecutionEngine:
         else if request.policy.mode == ExecutionRunMode.DryRun then
           Right(EngineStep(state, events, stopExitCode = None))
         else
-          val nextState = ExecutionState.markSkipped(state, summary.name, skipped.userFacingReasons, at)
+          val nextState =
+            ExecutionState.markSkipped(state, summary.name, skipped.userFacingReasons, at)
           writeState(request.statePath, nextState, stateWriter).map(_ =>
             EngineStep(nextState, events, stopExitCode = None)
           )
@@ -133,25 +133,31 @@ object ExecutionEngine:
       installer: PlanOperationInstaller,
       stateWriter: ExecutionStateWriter,
       clock: Clock
-  ): Either[ExecutionEngineError, EngineStep] =
-    PlanOperation.decode(runnable) match
-      case Left(errors) => Left(ExecutionEngineError.InvalidPlan(errors))
-      case Right(operation) =>
-        val scheduledAt = clock.instant()
-        val startedAt = clock.instant()
-        val startedState = ExecutionState.markStarted(state, operation.summary.name, startedAt)
-        val startEvents = Vector(
-          PlanEvent.Scheduled(operation.summary, scheduledAt),
-          PlanEvent.Started(operation.summary, startedAt)
-        )
+  ): Either[ExecutionEngineError, EngineStep] = PlanOperation.decode(runnable) match
+    case Left(errors)     => Left(ExecutionEngineError.InvalidPlan(errors))
+    case Right(operation) =>
+      val scheduledAt  = clock.instant()
+      val startedAt    = clock.instant()
+      val startedState = ExecutionState.markStarted(state, operation.summary.name, startedAt)
+      val startEvents  = Vector(
+        PlanEvent.Scheduled(operation.summary, scheduledAt),
+        PlanEvent.Started(operation.summary, startedAt)
+      )
 
-        operation match
-          case PlanOperation.Interrupt(interrupt) if request.policy.mode == ExecutionRunMode.Apply =>
-            applyManifestInterrupt(interrupt, startedState, startEvents, stateWriter, clock)
-          case PlanOperation.Interrupt(interrupt) if request.policy.mode == ExecutionRunMode.DryRun =>
-            dryRunManifestInterrupt(interrupt, startedState, startEvents, clock)
-          case _ =>
-            applyInstallerOutcome(operation, installer.install(operation, request.policy), startedState, startEvents, request, stateWriter, clock)
+      operation match
+        case PlanOperation.Interrupt(interrupt) if request.policy.mode == ExecutionRunMode.Apply =>
+          applyManifestInterrupt(interrupt, startedState, startEvents, stateWriter, clock)
+        case PlanOperation.Interrupt(interrupt) if request.policy.mode == ExecutionRunMode.DryRun =>
+          dryRunManifestInterrupt(interrupt, startedState, startEvents, clock)
+        case _ => applyInstallerOutcome(
+            operation,
+            installer.install(operation, request.policy),
+            startedState,
+            startEvents,
+            request,
+            stateWriter,
+            clock
+          )
 
   private def applyInstallerOutcome(
       operation: PlanOperation,
@@ -161,49 +167,51 @@ object ExecutionEngine:
       request: ExecutionEngineRequest,
       stateWriter: ExecutionStateWriter,
       clock: Clock
-  ): Either[ExecutionEngineError, EngineStep] =
-    outcome match
-      case PlanOperationOutcome.Completed(details) =>
-        val at = clock.instant()
-        val nextState = ExecutionState.markCompleted(state, operation.summary.name, at)
-        val events = startEvents :+ PlanEvent.Completed(operation.summary, details, at)
-        writeState(request.statePath, nextState, stateWriter).map(_ =>
-          EngineStep(nextState, events, stopExitCode = None)
+  ): Either[ExecutionEngineError, EngineStep] = outcome match
+    case PlanOperationOutcome.Completed(details) =>
+      val at        = clock.instant()
+      val nextState = ExecutionState.markCompleted(state, operation.summary.name, at)
+      val events    = startEvents :+ PlanEvent.Completed(operation.summary, details, at)
+      writeState(request.statePath, nextState, stateWriter).map(_ =>
+        EngineStep(nextState, events, stopExitCode = None)
+      )
+    case PlanOperationOutcome.Failed(failure) =>
+      val at        = clock.instant()
+      val nextState = ExecutionState.markFailed(
+        state,
+        operation.summary.name,
+        failure.message,
+        at,
+        continueAfterFailure = request.policy.continueOnError
+      )
+      val events = startEvents :+ PlanEvent.Failed(operation.summary, failure, at)
+      writeState(request.statePath, nextState, stateWriter).map(_ =>
+        EngineStep(
+          nextState,
+          events,
+          stopExitCode = Option.when(
+            !request.policy.continueOnError
+          )(failure.exitCode.getOrElse(FailureExitCode))
         )
-      case PlanOperationOutcome.Failed(failure) =>
-        val at = clock.instant()
-        val nextState = ExecutionState.markFailed(
-          state,
-          operation.summary.name,
-          failure.message,
-          at,
-          continueAfterFailure = request.policy.continueOnError
-        )
-        val events = startEvents :+ PlanEvent.Failed(operation.summary, failure, at)
-        writeState(request.statePath, nextState, stateWriter).map(_ =>
-          EngineStep(
-            nextState,
-            events,
-            stopExitCode = Option.when(!request.policy.continueOnError)(failure.exitCode.getOrElse(FailureExitCode))
-          )
-        )
-      case PlanOperationOutcome.Interrupted(interrupt) =>
-        val at = clock.instant()
-        val nextState = ExecutionState.markInterrupted(
-          state,
-          operation.summary.name,
-          interrupt.reason,
-          interrupt.resumeFrom,
-          at
-        )
-        val events = startEvents :+ PlanEvent.Interrupted(operation.summary, interrupt, at)
-        writeState(statePathFor(interrupt.statePath, request.statePath), nextState, stateWriter).map(_ =>
+      )
+    case PlanOperationOutcome.Interrupted(interrupt) =>
+      val at        = clock.instant()
+      val nextState = ExecutionState.markInterrupted(
+        state,
+        operation.summary.name,
+        interrupt.reason,
+        interrupt.resumeFrom,
+        at
+      )
+      val events = startEvents :+ PlanEvent.Interrupted(operation.summary, interrupt, at)
+      writeState(statePathFor(interrupt.statePath, request.statePath), nextState, stateWriter).map(
+        _ =>
           EngineStep(nextState, events, stopExitCode = Some(interrupt.exitCode))
-        )
-      case PlanOperationOutcome.DryRun(data) =>
-        val at = clock.instant()
-        val events = startEvents :+ PlanEvent.DryRunOperation(operation.summary, data, at)
-        Right(EngineStep(state, events, stopExitCode = None))
+      )
+    case PlanOperationOutcome.DryRun(data) =>
+      val at     = clock.instant()
+      val events = startEvents :+ PlanEvent.DryRunOperation(operation.summary, data, at)
+      Right(EngineStep(state, events, stopExitCode = None))
 
   private def applyManifestInterrupt(
       interrupt: InstallerPlanOperation[InstallerSpec.Interrupt],
@@ -212,8 +220,8 @@ object ExecutionEngine:
       stateWriter: ExecutionStateWriter,
       clock: Clock
   ): Either[ExecutionEngineError, EngineStep] =
-    val spec = interrupt.spec
-    val at = clock.instant()
+    val spec          = interrupt.spec
+    val at            = clock.instant()
     val planInterrupt = PlanInterrupt(
       operation = interrupt.summary,
       reason = spec.reason,
@@ -242,7 +250,7 @@ object ExecutionEngine:
       clock: Clock
   ): Either[ExecutionEngineError, EngineStep] =
     val spec = interrupt.spec
-    val at = clock.instant()
+    val at   = clock.instant()
     val data = DryRunOperationData(
       operation = interrupt.summary,
       actions = Vector(
@@ -251,7 +259,11 @@ object ExecutionEngine:
       ) ++ spec.instructions.map(DryRunAction.Message.apply)
     )
 
-    Right(EngineStep(state, startEvents :+ PlanEvent.DryRunOperation(interrupt.summary, data, at), None))
+    Right(EngineStep(
+      state,
+      startEvents :+ PlanEvent.DryRunOperation(interrupt.summary, data, at),
+      None
+    ))
 
   private def writeState(
       path: Path,
@@ -278,10 +290,9 @@ private enum SelectedExecutionEntry:
   case Runnable(entry: RunnablePlanEntry)
   case Skipped(entry: SkippedPlanEntry)
 
-  def index: Int =
-    this match
-      case Runnable(entry) => entry.index
-      case Skipped(entry)  => entry.index
+  def index: Int = this match
+    case Runnable(entry) => entry.index
+    case Skipped(entry)  => entry.index
 
 private final case class EngineStep(
     state: ExecutionState,

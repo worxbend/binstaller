@@ -4,12 +4,12 @@ import initkit.config.{Manifest, PlanEntry}
 import initkit.host.HostFacts
 
 object PlanSelector:
+
   def select(
       manifest: Manifest,
       request: PlanSelectionRequest,
       hostFacts: HostFacts
-  ): PlanSelection =
-    select(manifest.spec.plan, request, hostFacts)
+  ): PlanSelection = select(manifest.spec.plan, request, hostFacts)
 
   def select(
       plan: Vector[PlanEntry],
@@ -30,11 +30,10 @@ object PlanSelector:
       request: PlanSelectionRequest,
       hostFacts: HostFacts
   ): PlanSelectionEntry =
-    val reasons =
-      onlyReason(entry, request) ++
-        skipReason(entry, request) ++
-        conditionReasons(entry, hostFacts) ++
-        completedReason(entry, request)
+    val reasons = onlyReason(entry, request) ++
+      skipReason(entry, request) ++
+      conditionReasons(entry, hostFacts) ++
+      completedReason(entry, request)
 
     if reasons.isEmpty then RunnablePlanEntry(index, entry)
     else SkippedPlanEntry(index, entry, reasons)
@@ -42,20 +41,18 @@ object PlanSelector:
   private def onlyReason(
       entry: PlanEntry,
       request: PlanSelectionRequest
-  ): Vector[PlanSkipReason] =
-    Option
-      .when(request.only.nonEmpty && !matchesAnySelector(entry, request.only)):
-        PlanSkipReason.NotMatchedByOnly(request.only)
-      .toVector
+  ): Vector[PlanSkipReason] = Option
+    .when(request.only.nonEmpty && !matchesAnySelector(entry, request.only)):
+      PlanSkipReason.NotMatchedByOnly(request.only)
+    .toVector
 
   private def skipReason(
       entry: PlanEntry,
       request: PlanSelectionRequest
-  ): Vector[PlanSkipReason] =
-    request.skip
-      .find(selector => matchesSelector(entry, selector))
-      .map(selector => PlanSkipReason.SkippedByFilter(selector))
-      .toVector
+  ): Vector[PlanSkipReason] = request.skip
+    .find(selector => matchesSelector(entry, selector))
+    .map(selector => PlanSkipReason.SkippedByFilter(selector))
+    .toVector
 
   private def conditionReasons(
       entry: PlanEntry,
@@ -70,11 +67,10 @@ object PlanSelector:
   private def completedReason(
       entry: PlanEntry,
       request: PlanSelectionRequest
-  ): Vector[PlanSkipReason] =
-    entry.name
-      .filter(request.completed.contains)
-      .map(name => PlanSkipReason.AlreadyCompleted(name))
-      .toVector
+  ): Vector[PlanSkipReason] = entry.name
+    .filter(request.completed.contains)
+    .map(name => PlanSkipReason.AlreadyCompleted(name))
+    .toVector
 
   private def matchesAnySelector(entry: PlanEntry, selectors: Vector[String]): Boolean =
     selectors.exists(selector => matchesSelector(entry, selector))
@@ -93,8 +89,7 @@ final case class SkippedPlanEntry(
     entry: PlanEntry,
     reasons: Vector[PlanSkipReason]
 ) extends PlanSelectionEntry:
-  def userFacingReasons: Vector[String] =
-    reasons.flatMap(_.messages)
+  def userFacingReasons: Vector[String] = reasons.flatMap(_.messages)
 
 final case class PlanSelection(
     runnable: Vector[RunnablePlanEntry],
@@ -108,16 +103,16 @@ final case class PlanSelectionRequest(
 )
 
 object PlanSelectionRequest:
+
   def fromFilters(
       only: Iterable[String],
       skip: Iterable[String],
       completed: Iterable[String]
-  ): PlanSelectionRequest =
-    PlanSelectionRequest(
-      only = normalizeSelectors(only),
-      skip = normalizeSelectors(skip),
-      completed = completed.iterator.map(_.trim).filter(_.nonEmpty).toSet
-    )
+  ): PlanSelectionRequest = PlanSelectionRequest(
+    only = normalizeSelectors(only),
+    skip = normalizeSelectors(skip),
+    completed = completed.iterator.map(_.trim).filter(_.nonEmpty).toSet
+  )
 
   private def normalizeSelectors(values: Iterable[String]): Vector[String] =
     values.iterator.map(_.trim).filter(_.nonEmpty).toVector
@@ -128,16 +123,12 @@ enum PlanSkipReason:
   case ConditionFailed(reasons: Vector[ConditionSkipReason])
   case AlreadyCompleted(entryName: String)
 
-  def messages: Vector[String] =
-    this match
-      case NotMatchedByOnly(selectors) =>
-        Vector(s"did not match --only selector ${describeSelectors(selectors)}")
-      case SkippedByFilter(selector) =>
-        Vector(s"matched --skip selector '$selector'")
-      case ConditionFailed(reasons) =>
-        reasons.map(_.message)
-      case AlreadyCompleted(_) =>
-        Vector("already completed in state")
+  def messages: Vector[String] = this match
+    case NotMatchedByOnly(selectors) =>
+      Vector(s"did not match --only selector ${describeSelectors(selectors)}")
+    case SkippedByFilter(selector) => Vector(s"matched --skip selector '$selector'")
+    case ConditionFailed(reasons)  => reasons.map(_.message)
+    case AlreadyCompleted(_)       => Vector("already completed in state")
 
   private def describeSelectors(selectors: Vector[String]): String =
     selectors.map(selector => s"'$selector'").mkString("one of ", ", ", "")

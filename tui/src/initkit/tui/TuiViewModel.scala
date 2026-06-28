@@ -3,7 +3,13 @@ package initkit.tui
 import java.nio.file.Path
 
 import initkit.config.*
-import initkit.core.{ConditionEvaluator, ExecutionRunMode, ExecutionState as CoreExecutionState, PlanEntryState, PlanEntryStatus}
+import initkit.core.{
+  ConditionEvaluator,
+  ExecutionRunMode,
+  ExecutionState as CoreExecutionState,
+  PlanEntryState,
+  PlanEntryStatus
+}
 import initkit.host.HostFacts
 
 final case class TuiViewModelRequest(
@@ -27,6 +33,7 @@ final case class TuiSelectionInputs(
 )
 
 object TuiSelectionInputs:
+
   def fromOptions(select: Iterable[String], skip: Iterable[String]): TuiSelectionInputs =
     TuiSelectionInputs(
       select = normalize(select),
@@ -45,24 +52,22 @@ final case class TuiViewModel(
     counts: TuiPlanCounts,
     runMode: ExecutionRunMode
 ):
-  def focusedRow: Option[TuiPlanRow] =
-    focusedIndex.flatMap(index => rows.find(_.index == index))
+  def focusedRow: Option[TuiPlanRow] = focusedIndex.flatMap(index => rows.find(_.index == index))
 
-  def selectedEntryNames: Vector[String] =
-    rows.collect { case row if row.selected => row.name }
+  def selectedEntryNames: Vector[String] = rows.collect { case row if row.selected => row.name }
 
-  def toggleFocused: TuiViewModel =
-    focusedPosition match
-      case Some(position) if rows(position).selectable =>
-        copy(rows = rows.updated(position, rows(position).copy(selected = !rows(position).selected))).refreshCounts
-      case _ =>
-        this
+  def toggleFocused: TuiViewModel = focusedPosition match
+    case Some(position) if rows(position).selectable =>
+      copy(rows =
+        rows.updated(position, rows(position).copy(selected = !rows(position).selected))
+      ).refreshCounts
+    case _ => this
 
   def moveFocus(delta: Int): TuiViewModel =
     if rows.isEmpty then this
     else
       val currentPosition = focusedPosition.getOrElse(0)
-      val nextPosition = (currentPosition + delta).max(0).min(rows.size - 1)
+      val nextPosition    = (currentPosition + delta).max(0).min(rows.size - 1)
       copy(focusedIndex = Some(rows(nextPosition).index))
 
   def focusFirst: TuiViewModel =
@@ -71,19 +76,20 @@ final case class TuiViewModel(
   def focusLast: TuiViewModel =
     rows.lastOption.map(row => copy(focusedIndex = Some(row.index))).getOrElse(this)
 
-  def selectAllRunnable: TuiViewModel =
-    copy(rows = rows.map(row => if row.selectable then row.copy(selected = true) else row)).refreshCounts
+  def selectAllRunnable: TuiViewModel = copy(rows =
+    rows.map(row => if row.selectable then row.copy(selected = true) else row)
+  ).refreshCounts
 
-  private def focusedPosition: Option[Int] =
-    focusedIndex.flatMap(index => rows.indexWhere(_.index == index) match
+  private def focusedPosition: Option[Int] = focusedIndex.flatMap(index =>
+    rows.indexWhere(_.index == index) match
       case -1       => None
       case position => Some(position)
-    )
+  )
 
-  private def refreshCounts: TuiViewModel =
-    copy(counts = TuiPlanCounts.fromRows(rows))
+  private def refreshCounts: TuiViewModel = copy(counts = TuiPlanCounts.fromRows(rows))
 
 object TuiViewModel:
+
   def from(request: TuiViewModelRequest): TuiViewModel =
     val rows = buildRows(request)
 
@@ -117,9 +123,9 @@ object TuiViewModel:
       selection: TuiSelectionInputs
   ): TuiPlanRow =
     val conditionReasons = conditionSkipReasons(entry, hostFacts)
-    val status = statusFor(state, conditionReasons)
-    val selectable = status == TuiPlanRowStatus.Runnable
-    val selected = selectable && initialSelection(entry, selection)
+    val status           = statusFor(state, conditionReasons)
+    val selectable       = status == TuiPlanRowStatus.Runnable
+    val selected         = selectable && initialSelection(entry, selection)
 
     TuiPlanRow(
       index = index,
@@ -141,19 +147,18 @@ object TuiViewModel:
   private def statusFor(
       state: Option[PlanEntryState],
       conditionReasons: Vector[String]
-  ): TuiPlanRowStatus =
-    state.map(_.status) match
-      case Some(PlanEntryStatus.Completed)   => TuiPlanRowStatus.Completed
-      case Some(PlanEntryStatus.Interrupted) => TuiPlanRowStatus.Interrupted
-      case Some(PlanEntryStatus.Failed)      => TuiPlanRowStatus.Failed
-      case Some(PlanEntryStatus.Running)     => TuiPlanRowStatus.Running
-      case Some(PlanEntryStatus.Skipped)     => TuiPlanRowStatus.Skipped
-      case _ if conditionReasons.nonEmpty    => TuiPlanRowStatus.Skipped
-      case _                                 => TuiPlanRowStatus.Runnable
+  ): TuiPlanRowStatus = state.map(_.status) match
+    case Some(PlanEntryStatus.Completed)   => TuiPlanRowStatus.Completed
+    case Some(PlanEntryStatus.Interrupted) => TuiPlanRowStatus.Interrupted
+    case Some(PlanEntryStatus.Failed)      => TuiPlanRowStatus.Failed
+    case Some(PlanEntryStatus.Running)     => TuiPlanRowStatus.Running
+    case Some(PlanEntryStatus.Skipped)     => TuiPlanRowStatus.Skipped
+    case _ if conditionReasons.nonEmpty    => TuiPlanRowStatus.Skipped
+    case _                                 => TuiPlanRowStatus.Runnable
 
   private def initialSelection(entry: PlanEntry, selection: TuiSelectionInputs): Boolean =
-    val selectedByInput =
-      selection.select.isEmpty || selection.select.exists(selector => matchesSelector(entry, selector))
+    val selectedByInput = selection.select.isEmpty ||
+      selection.select.exists(selector => matchesSelector(entry, selector))
     val skippedByInput = selection.skip.exists(selector => matchesSelector(entry, selector))
 
     selectedByInput && !skippedByInput
@@ -165,23 +170,17 @@ object TuiViewModel:
       status: TuiPlanRowStatus,
       state: Option[PlanEntryState],
       conditionReasons: Vector[String]
-  ): Vector[String] =
-    status match
-      case TuiPlanRowStatus.Skipped =>
-        state.flatMap(_.message).map(Vector(_)).getOrElse(conditionReasons)
-      case TuiPlanRowStatus.Completed =>
-        Vector("already completed in state")
-      case TuiPlanRowStatus.Interrupted =>
-        state.flatMap(_.message).toVector
-      case TuiPlanRowStatus.Failed =>
-        state.flatMap(_.message).toVector
-      case _ =>
-        Vector.empty
+  ): Vector[String] = status match
+    case TuiPlanRowStatus.Skipped =>
+      state.flatMap(_.message).map(Vector(_)).getOrElse(conditionReasons)
+    case TuiPlanRowStatus.Completed   => Vector("already completed in state")
+    case TuiPlanRowStatus.Interrupted => state.flatMap(_.message).toVector
+    case TuiPlanRowStatus.Failed      => state.flatMap(_.message).toVector
+    case _                            => Vector.empty
 
   private def interruptMarker(index: Int, entry: PlanEntry): Option[TuiInterruptMarker] =
     InstallerSpecDecoder.decode(entry, index).toOption.collect:
-      case InstallerSpec.Interrupt(reason, state, instructions, exit) =>
-        TuiInterruptMarker(
+      case InstallerSpec.Interrupt(reason, state, instructions, exit) => TuiInterruptMarker(
           reason = reason,
           statePath = state.path,
           resumeFrom = state.resumeFrom,
@@ -198,14 +197,14 @@ final case class TuiProfileView(
 )
 
 object TuiProfileView:
-  def fromManifest(manifest: Manifest): TuiProfileView =
-    TuiProfileView(
-      name = manifest.metadata.name.getOrElse("<unnamed>"),
-      apiVersion = manifest.apiVersion.getOrElse("<unknown>"),
-      kind = manifest.kind.getOrElse("<unknown>"),
-      target = manifest.spec.target.flatMap(_.os).map(TuiTargetView.fromTargetOs),
-      dryRunDefault = manifest.spec.policy.flatMap(_.dryRun)
-    )
+
+  def fromManifest(manifest: Manifest): TuiProfileView = TuiProfileView(
+    name = manifest.metadata.name.getOrElse("<unnamed>"),
+    apiVersion = manifest.apiVersion.getOrElse("<unknown>"),
+    kind = manifest.kind.getOrElse("<unknown>"),
+    target = manifest.spec.target.flatMap(_.os).map(TuiTargetView.fromTargetOs),
+    dryRunDefault = manifest.spec.policy.flatMap(_.dryRun)
+  )
 
 final case class TuiTargetView(
     family: Option[String],
@@ -217,15 +216,15 @@ final case class TuiTargetView(
 )
 
 object TuiTargetView:
-  def fromTargetOs(os: TargetOs): TuiTargetView =
-    TuiTargetView(
-      family = os.family,
-      distribution = os.distribution,
-      version = os.version,
-      codename = os.codename,
-      architecture = os.architecture,
-      desktop = os.desktop
-    )
+
+  def fromTargetOs(os: TargetOs): TuiTargetView = TuiTargetView(
+    family = os.family,
+    distribution = os.distribution,
+    version = os.version,
+    codename = os.codename,
+    architecture = os.architecture,
+    desktop = os.desktop
+  )
 
 final case class TuiHostView(
     family: String,
@@ -236,14 +235,14 @@ final case class TuiHostView(
 )
 
 object TuiHostView:
-  def fromHostFacts(hostFacts: HostFacts): TuiHostView =
-    TuiHostView(
-      family = hostFacts.os.family,
-      distribution = hostFacts.os.distribution,
-      version = hostFacts.os.version,
-      codename = hostFacts.os.codename,
-      architecture = hostFacts.architecture
-    )
+
+  def fromHostFacts(hostFacts: HostFacts): TuiHostView = TuiHostView(
+    family = hostFacts.os.family,
+    distribution = hostFacts.os.distribution,
+    version = hostFacts.os.version,
+    codename = hostFacts.os.codename,
+    architecture = hostFacts.architecture
+  )
 
 final case class TuiStateFileView(
     path: String,
@@ -254,6 +253,7 @@ final case class TuiStateFileView(
 )
 
 object TuiStateFileView:
+
   def fromInput(input: TuiStateFileInput, state: CoreExecutionState): TuiStateFileView =
     TuiStateFileView(
       path = input.path.toAbsolutePath.normalize().toString,
@@ -305,16 +305,16 @@ final case class TuiPlanCounts(
 )
 
 object TuiPlanCounts:
-  def fromRows(rows: Vector[TuiPlanRow]): TuiPlanCounts =
-    TuiPlanCounts(
-      runnable = count(rows, TuiPlanRowStatus.Runnable),
-      selected = rows.count(_.selected),
-      skipped = count(rows, TuiPlanRowStatus.Skipped),
-      completed = count(rows, TuiPlanRowStatus.Completed),
-      interrupted = count(rows, TuiPlanRowStatus.Interrupted),
-      failed = count(rows, TuiPlanRowStatus.Failed),
-      running = count(rows, TuiPlanRowStatus.Running)
-    )
+
+  def fromRows(rows: Vector[TuiPlanRow]): TuiPlanCounts = TuiPlanCounts(
+    runnable = count(rows, TuiPlanRowStatus.Runnable),
+    selected = rows.count(_.selected),
+    skipped = count(rows, TuiPlanRowStatus.Skipped),
+    completed = count(rows, TuiPlanRowStatus.Completed),
+    interrupted = count(rows, TuiPlanRowStatus.Interrupted),
+    failed = count(rows, TuiPlanRowStatus.Failed),
+    running = count(rows, TuiPlanRowStatus.Running)
+  )
 
   private def count(rows: Vector[TuiPlanRow], status: TuiPlanRowStatus): Int =
     rows.count(_.status == status)

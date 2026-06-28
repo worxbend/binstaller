@@ -15,10 +15,10 @@ final case class CommandSpec(
     timeout: Option[FiniteDuration],
     stdinFile: Option[Path] = None
 ):
-  def redacted: RedactedCommandSpec =
-    CommandRedactor.redact(this)
+  def redacted: RedactedCommandSpec = CommandRedactor.redact(this)
 
 object CommandSpec:
+
   def direct(
       argv: Vector[CommandArgument],
       cwd: Option[Path] = None,
@@ -26,15 +26,14 @@ object CommandSpec:
       sudo: SudoMode = SudoMode.Disabled,
       timeout: Option[FiniteDuration] = None,
       stdinFile: Option[Path] = None
-  ): CommandSpec =
-    CommandSpec(
-      invocation = CommandInvocation.Direct(argv),
-      cwd = cwd,
-      env = env,
-      sudo = sudo,
-      timeout = timeout,
-      stdinFile = stdinFile
-    )
+  ): CommandSpec = CommandSpec(
+    invocation = CommandInvocation.Direct(argv),
+    cwd = cwd,
+    env = env,
+    sudo = sudo,
+    timeout = timeout,
+    stdinFile = stdinFile
+  )
 
   def shell(
       command: CommandArgument,
@@ -44,15 +43,14 @@ object CommandSpec:
       sudo: SudoMode = SudoMode.Disabled,
       timeout: Option[FiniteDuration] = None,
       stdinFile: Option[Path] = None
-  ): CommandSpec =
-    CommandSpec(
-      invocation = CommandInvocation.Shell(command, shell),
-      cwd = cwd,
-      env = env,
-      sudo = sudo,
-      timeout = timeout,
-      stdinFile = stdinFile
-    )
+  ): CommandSpec = CommandSpec(
+    invocation = CommandInvocation.Shell(command, shell),
+    cwd = cwd,
+    env = env,
+    sudo = sudo,
+    timeout = timeout,
+    stdinFile = stdinFile
+  )
 
 enum CommandInvocation:
   case Direct(argv: Vector[CommandArgument])
@@ -73,8 +71,7 @@ enum Sensitivity:
   case Sensitive(label: Option[String])
 
 object Sensitivity:
-  val Secret: Sensitivity =
-    Sensitive(None)
+  val Secret: Sensitivity = Sensitive(None)
 
 enum SudoMode:
   case Disabled, Required
@@ -93,25 +90,21 @@ enum RedactedCommandInvocation:
   case Shell(command: String, shell: Vector[String])
 
 object CommandRedactor:
-  val Redaction: String =
-    "[redacted]"
+  val Redaction: String = "[redacted]"
 
-  def redact(spec: CommandSpec): RedactedCommandSpec =
-    RedactedCommandSpec(
-      invocation = redactInvocation(spec.invocation),
-      cwd = spec.cwd,
-      env = redactEnv(spec.env),
-      sudo = spec.sudo,
-      timeout = spec.timeout,
-      stdinFile = spec.stdinFile
-    )
+  def redact(spec: CommandSpec): RedactedCommandSpec = RedactedCommandSpec(
+    invocation = redactInvocation(spec.invocation),
+    cwd = spec.cwd,
+    env = redactEnv(spec.env),
+    sudo = spec.sudo,
+    timeout = spec.timeout,
+    stdinFile = spec.stdinFile
+  )
 
-  def redactInvocation(invocation: CommandInvocation): RedactedCommandInvocation =
-    invocation match
-      case CommandInvocation.Direct(argv) =>
-        RedactedCommandInvocation.Direct(redactArgv(argv))
-      case CommandInvocation.Shell(command, shell) =>
-        RedactedCommandInvocation.Shell(redactValue(command), shell)
+  def redactInvocation(invocation: CommandInvocation): RedactedCommandInvocation = invocation match
+    case CommandInvocation.Direct(argv) => RedactedCommandInvocation.Direct(redactArgv(argv))
+    case CommandInvocation.Shell(command, shell) =>
+      RedactedCommandInvocation.Shell(redactValue(command), shell)
 
   def redactArgv(argv: Vector[CommandArgument]): Vector[String] =
     var redactNext = false
@@ -140,44 +133,56 @@ object CommandRedactor:
     if value.sensitivity == Sensitivity.Public then redactText(value.value)
     else Redaction
 
-  def redactText(value: String): String =
-    redactPasswordLikeTokens(redactUrls(value))
+  def redactText(value: String): String = redactPasswordLikeTokens(redactUrls(value))
 
-  private val UrlPattern =
-    """https?://[^\s'"<>]+""".r
+  private val UrlPattern = """https?://[^\s'"<>]+""".r
 
   private val SensitiveAssignmentPattern =
     """(?i)\b([A-Za-z0-9_.-]*(?:password|passwd|passphrase|token|secret|api[_-]?key|access[_-]?token|credential)[A-Za-z0-9_.-]*)(=|:)([^\s&;]+)""".r
 
-  private val SensitiveKeyFragments: Vector[String] =
-    Vector("password", "passwd", "passphrase", "token", "secret", "api_key", "api-key", "access_token", "access-token", "credential")
+  private val SensitiveKeyFragments: Vector[String] = Vector(
+    "password",
+    "passwd",
+    "passphrase",
+    "token",
+    "secret",
+    "api_key",
+    "api-key",
+    "access_token",
+    "access-token",
+    "credential"
+  )
 
-  private def redactUrls(value: String): String =
-    UrlPattern.replaceAllIn(
-      value,
-      matched => java.util.regex.Matcher.quoteReplacement(redactUrl(matched.matched))
-    )
+  private def redactUrls(value: String): String = UrlPattern.replaceAllIn(
+    value,
+    matched => java.util.regex.Matcher.quoteReplacement(redactUrl(matched.matched))
+  )
 
-  private def redactUrl(value: String): String =
-    Try(URI(value)).toOption match
-      case Some(uri) if uri.getScheme != null && uri.getHost != null =>
-        val userInfo = Option(uri.getUserInfo).map(_ => Redaction).orNull
-        val query = Option(uri.getRawQuery).map(redactQuery).orNull
-        Try(URI(uri.getScheme, userInfo, uri.getHost, uri.getPort, uri.getRawPath, query, uri.getRawFragment).toString)
-          .getOrElse(value)
-      case _ => value
+  private def redactUrl(value: String): String = Try(URI(value)).toOption match
+    case Some(uri) if uri.getScheme != null && uri.getHost != null =>
+      val userInfo = Option(uri.getUserInfo).map(_ => Redaction).orNull
+      val query    = Option(uri.getRawQuery).map(redactQuery).orNull
+      Try(URI(
+        uri.getScheme,
+        userInfo,
+        uri.getHost,
+        uri.getPort,
+        uri.getRawPath,
+        query,
+        uri.getRawFragment
+      ).toString)
+        .getOrElse(value)
+    case _ => value
 
-  private def redactQuery(query: String): String =
-    query
-      .split("&", -1)
-      .toVector
-      .map(redactQueryPart)
-      .mkString("&")
+  private def redactQuery(query: String): String = query
+    .split("&", -1)
+    .toVector
+    .map(redactQueryPart)
+    .mkString("&")
 
-  private def redactQueryPart(part: String): String =
-    part.split("=", 2).toVector match
-      case Vector(key, _) if isSensitiveKey(key) => s"$key=$Redaction"
-      case _                                    => part
+  private def redactQueryPart(part: String): String = part.split("=", 2).toVector match
+    case Vector(key, _) if isSensitiveKey(key) => s"$key=$Redaction"
+    case _                                     => part
 
   private def redactPasswordLikeTokens(value: String): String =
     SensitiveAssignmentPattern.replaceAllIn(
@@ -185,9 +190,8 @@ object CommandRedactor:
       matched => s"${matched.group(1)}${matched.group(2)}$Redaction"
     )
 
-  private def isSensitiveFlag(value: String): Boolean =
-    value.startsWith("-") &&
-      isSensitiveKey(value.dropWhile(_ == '-'))
+  private def isSensitiveFlag(value: String): Boolean = value.startsWith("-") &&
+    isSensitiveKey(value.dropWhile(_ == '-'))
 
   private def isSensitiveKey(value: String): Boolean =
     val normalized = value.toLowerCase
@@ -203,13 +207,12 @@ final case class CommandResult(
     stderr: String,
     duration: FiniteDuration
 ):
-  def exitCode: Option[Int] =
-    termination match
-      case CommandTermination.Exited(code) => Some(code)
-      case _                               => None
 
-  def succeeded: Boolean =
-    exitCode.contains(0)
+  def exitCode: Option[Int] = termination match
+    case CommandTermination.Exited(code) => Some(code)
+    case _                               => None
+
+  def succeeded: Boolean = exitCode.contains(0)
 
 enum CommandTermination:
   case Exited(code: Int)
@@ -223,10 +226,12 @@ final case class CommandResultData(
     stderr: String,
     duration: FiniteDuration
 ):
+
   def toResult(spec: CommandSpec): CommandResult =
     CommandResult(spec, termination, stdout, stderr, duration)
 
 object CommandResultData:
+
   def exited(
       code: Int,
       stdout: String = "",
@@ -245,36 +250,32 @@ final class FakeCommandExecutor private (
 ) extends CommandExecutor:
   private val stateRef = AtomicReference(initialState)
 
-  def calls: Vector[CommandSpec] =
-    stateRef.get().calls
+  def calls: Vector[CommandSpec] = stateRef.get().calls
 
-  def remainingResponses: Vector[FakeCommandResponse] =
-    stateRef.get().pending
+  def remainingResponses: Vector[FakeCommandResponse] = stateRef.get().pending
 
   override def run(spec: CommandSpec): CommandResult =
-    val state = stateRef.get()
-    val (result, nextPending) =
-      state.pending.headOption match
-        case Some(response) if response.expected == spec =>
-          response.result.toResult(spec) -> state.pending.tail
-        case Some(response) =>
-          unexpectedCommand(spec, s"expected ${response.expected.redacted}") -> state.pending
-        case None =>
-          unexpectedCommand(spec, "no fake command response configured") -> Vector.empty
+    val state                 = stateRef.get()
+    val (result, nextPending) = state.pending.headOption match
+      case Some(response) if response.expected == spec =>
+        response.result.toResult(spec) -> state.pending.tail
+      case Some(response) => unexpectedCommand(spec, s"expected ${response.expected.redacted}") ->
+          state.pending
+      case None => unexpectedCommand(spec, "no fake command response configured") -> Vector.empty
 
     stateRef.set(state.copy(pending = nextPending, calls = state.calls :+ spec))
     result
 
-  private def unexpectedCommand(spec: CommandSpec, detail: String): CommandResult =
-    CommandResult(
-      spec = spec,
-      termination = CommandTermination.FailedToStart(s"unexpected command: $detail"),
-      stdout = "",
-      stderr = "",
-      duration = scala.concurrent.duration.Duration.Zero
-    )
+  private def unexpectedCommand(spec: CommandSpec, detail: String): CommandResult = CommandResult(
+    spec = spec,
+    termination = CommandTermination.FailedToStart(s"unexpected command: $detail"),
+    stdout = "",
+    stderr = "",
+    duration = scala.concurrent.duration.Duration.Zero
+  )
 
 object FakeCommandExecutor:
+
   def apply(responses: Vector[FakeCommandResponse]): FakeCommandExecutor =
     new FakeCommandExecutor(FakeCommandExecutorState(pending = responses, calls = Vector.empty))
 
@@ -289,10 +290,9 @@ trait SudoStrategy:
 final case class SudoPreparationError(message: String)
 
 object SudoStrategy:
-  val Passthrough: SudoStrategy =
-    new SudoStrategy:
-      override def prepare(spec: CommandSpec): Either[SudoPreparationError, CommandSpec] =
-        Right(spec)
+
+  val Passthrough: SudoStrategy = new SudoStrategy:
+    override def prepare(spec: CommandSpec): Either[SudoPreparationError, CommandSpec] = Right(spec)
 
 final case class FakeSudoResponse(
     expected: CommandSpec,
@@ -304,27 +304,26 @@ final class FakeSudoStrategy private (
 ) extends SudoStrategy:
   private val stateRef = AtomicReference(initialState)
 
-  def calls: Vector[CommandSpec] =
-    stateRef.get().calls
+  def calls: Vector[CommandSpec] = stateRef.get().calls
 
-  def remainingResponses: Vector[FakeSudoResponse] =
-    stateRef.get().pending
+  def remainingResponses: Vector[FakeSudoResponse] = stateRef.get().pending
 
   override def prepare(spec: CommandSpec): Either[SudoPreparationError, CommandSpec] =
-    val state = stateRef.get()
-    val (result, nextPending) =
-      state.pending.headOption match
-        case Some(response) if response.expected == spec =>
-          response.result -> state.pending.tail
-        case Some(response) =>
-          Left(SudoPreparationError(s"unexpected sudo request: expected ${response.expected.redacted}")) -> state.pending
-        case None =>
-          Left(SudoPreparationError("unexpected sudo request: no fake sudo response configured")) -> Vector.empty
+    val state                 = stateRef.get()
+    val (result, nextPending) = state.pending.headOption match
+      case Some(response) if response.expected == spec => response.result -> state.pending.tail
+      case Some(response)                              => Left(
+          SudoPreparationError(s"unexpected sudo request: expected ${response.expected.redacted}")
+        ) -> state.pending
+      case None =>
+        Left(SudoPreparationError("unexpected sudo request: no fake sudo response configured")) ->
+          Vector.empty
 
     stateRef.set(state.copy(pending = nextPending, calls = state.calls :+ spec))
     result
 
 object FakeSudoStrategy:
+
   def apply(responses: Vector[FakeSudoResponse]): FakeSudoStrategy =
     new FakeSudoStrategy(FakeSudoStrategyState(pending = responses, calls = Vector.empty))
 

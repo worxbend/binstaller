@@ -1,6 +1,6 @@
 package initkit.cli
 
-import upickle.default.{ReadWriter, macroRW}
+import upickle.default.{macroRW, ReadWriter}
 
 final case class AppSnapshot(name: String, cwd: String, files: Int)
 

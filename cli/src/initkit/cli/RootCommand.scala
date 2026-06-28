@@ -14,5 +14,4 @@ import picocli.CommandLine.{Command, Spec}
 final class RootCommand extends Runnable:
   @Spec private var spec: CommandSpec = uninitialized
 
-  override def run(): Unit =
-    spec.commandLine().usage(spec.commandLine().getOut())
+  override def run(): Unit = spec.commandLine().usage(spec.commandLine().getOut())

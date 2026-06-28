@@ -6,6 +6,7 @@ import scala.util.Try
 import picocli.CommandLine.Option as CliOption
 
 final class SharedOptions:
+
   @CliOption(
     names = Array("--config"),
     paramLabel = "PATH",
@@ -26,18 +27,16 @@ final class SharedOptions:
   )
   private var resetStateValue: Boolean = false
 
-  def configFile: Either[String, Path] =
-    normalizePath(config).flatMap { path =>
-      if Files.isRegularFile(path) then Right(path)
-      else Left(s"Config file not found: $path")
-    }
+  def configFile: Either[String, Path] = normalizePath(config).flatMap { path =>
+    if Files.isRegularFile(path) then Right(path)
+    else Left(s"Config file not found: $path")
+  }
 
   def stateFile: Either[String, Option[Path]] =
     if state.trim.isEmpty then Right(None)
     else normalizePath(state).map(Some(_))
 
-  def resetState: Boolean =
-    resetStateValue
+  def resetState: Boolean = resetStateValue
 
   private def normalizePath(value: String): Either[String, Path] =
     Try(Paths.get(value).toAbsolutePath.normalize()).toEither.left.map { error =>

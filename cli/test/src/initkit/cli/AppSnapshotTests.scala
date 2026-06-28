@@ -4,6 +4,7 @@ import utest.*
 import upickle.default.{read, write}
 
 object AppSnapshotTests extends TestSuite:
+
   val tests: Tests = Tests:
     test("collects visible files"):
       val tmp = os.temp.dir()
@@ -22,6 +23,6 @@ object AppSnapshotTests extends TestSuite:
 
     test("serializes to json"):
       val snapshot = AppSnapshot("demo", "/tmp/demo", 2)
-      val json = write(snapshot)
+      val json     = write(snapshot)
 
       assert(read[AppSnapshot](json) == snapshot)

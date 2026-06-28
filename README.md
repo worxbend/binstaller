@@ -219,8 +219,12 @@ The TUI uses the same state file:
 ```bash
 ./mill __.compile
 ./mill __.test
+./mill mill.scalalib.scalafmt/checkFormatAll
 ./mill tui.test   # includes the noninteractive TUI smoke
 ```
+
+Use `./mill mill.scalalib.scalafmt/reformatAll` to apply the checked-in
+`.scalafmt.conf` before rerunning the formatter check.
 
 Tamboui is currently consumed from Sonatype snapshot builds, configured in
 [build.mill](build.mill).

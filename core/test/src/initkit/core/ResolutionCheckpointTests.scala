@@ -7,6 +7,7 @@ import initkit.host.HostFacts
 import utest.*
 
 object ResolutionCheckpointTests extends TestSuite:
+
   val tests: Tests = Tests:
     test("loads resolves and selects config example for an Ubuntu host"):
       val hostFacts = HostFacts.fake(
@@ -21,7 +22,8 @@ object ResolutionCheckpointTests extends TestSuite:
       assert(manifest.metadata.name == Some("developer-workstation"))
       assert(manifest.spec.vars("home") == "/home/initkit-user")
       assert(
-        manifest.spec.vars("stateFile") == "/home/initkit-user/.local/state/initkit/developer-workstation.state.json"
+        manifest.spec.vars("stateFile") ==
+          "/home/initkit-user/.local/state/initkit/developer-workstation.state.json"
       )
 
       val selection = PlanSelector.select(
@@ -71,13 +73,11 @@ object ResolutionCheckpointTests extends TestSuite:
   private def skippedNames(selection: PlanSelection): Vector[String] =
     selection.skipped.flatMap(_.entry.name)
 
-  private def exampleConfigPath: Path =
-    Iterator
-      .iterate(Path.of("").toAbsolutePath.normalize())(_.getParent)
-      .takeWhile(_ != null)
-      .map(_.resolve("config.example.yaml"))
-      .find(Files.isRegularFile(_))
-      .getOrElse(throw new java.lang.AssertionError("config.example.yaml fixture not found"))
+  private def exampleConfigPath: Path = Iterator
+    .iterate(Path.of("").toAbsolutePath.normalize())(_.getParent)
+    .takeWhile(_ != null)
+    .map(_.resolve("config.example.yaml"))
+    .find(Files.isRegularFile(_))
+    .getOrElse(throw new java.lang.AssertionError("config.example.yaml fixture not found"))
 
-  private def fail(message: String): Nothing =
-    throw new java.lang.AssertionError(message)
+  private def fail(message: String): Nothing = throw new java.lang.AssertionError(message)

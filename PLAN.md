@@ -2068,3 +2068,14 @@ command that includes the noninteractive TUI smoke. Checks passed:
 `./mill tui.test`, `./mill cli.test`, `./mill __.compile`,
 `./mill __.test`, `./mill app.run tui --help`, `git diff --check`, and
 `jq empty .agent-loop/tasks.json`.
+
+Progress note, 2026-06-28: refreshed T005 exposed formatter validation through
+Mill's built-in scalafmt module. README development checks now document
+`./mill mill.scalalib.scalafmt/checkFormatAll`, with
+`./mill mill.scalalib.scalafmt/reformatAll` as the matching apply command for
+the checked-in Scala 3 `.scalafmt.conf`. The initial formatter check resolved
+and ran noninteractively but found existing unformatted Scala sources, so the
+repository was mechanically reformatted once. `.agent-loop/config.json` now
+includes the formatter check in configured validation. Checks passed:
+`./mill --no-daemon resolve _`, `./mill __.compile`, `./mill __.test`, and
+`./mill mill.scalalib.scalafmt/checkFormatAll`.

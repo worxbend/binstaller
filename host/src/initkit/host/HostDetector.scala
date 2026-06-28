@@ -19,16 +19,15 @@ object HostDetector:
       commandAvailability = pathCommandAvailability(system)
     )
 
-  def normalizeArchitecture(value: String): String =
-    value.trim.toLowerCase match
-      case "x86_64" | "amd64"                  => "amd64"
-      case "aarch64" | "arm64"                 => "arm64"
-      case "armv7" | "armv7l" | "armhf"        => "armv7"
-      case "i386" | "i486" | "i586" | "i686"   => "386"
-      case "ppc64le" | "powerpc64le"           => "ppc64le"
-      case "s390x"                             => "s390x"
-      case ""                                  => "unknown"
-      case other                               => other
+  def normalizeArchitecture(value: String): String = value.trim.toLowerCase match
+    case "x86_64" | "amd64"                => "amd64"
+    case "aarch64" | "arm64"               => "arm64"
+    case "armv7" | "armv7l" | "armhf"      => "armv7"
+    case "i386" | "i486" | "i586" | "i686" => "386"
+    case "ppc64le" | "powerpc64le"         => "ppc64le"
+    case "s390x"                           => "s390x"
+    case ""                                => "unknown"
+    case other                             => other
 
   private def readOsRelease(system: HostSystem): Option[OsRelease] =
     system.readFile(OsReleasePath).map(parseOsRelease)
@@ -52,7 +51,8 @@ object HostDetector:
     OsRelease(
       distribution = normalizedValue(values.get("ID")),
       version = nonEmpty(values.get("VERSION_ID")),
-      codename = normalizedValue(values.get("VERSION_CODENAME").orElse(values.get("UBUNTU_CODENAME")))
+      codename =
+        normalizedValue(values.get("VERSION_CODENAME").orElse(values.get("UBUNTU_CODENAME")))
     )
 
   private def parseOsReleaseLine(line: String): Option[(String, String)] =
@@ -60,9 +60,9 @@ object HostDetector:
     if trimmed.isEmpty || trimmed.startsWith("#") then None
     else
       trimmed.indexOf('=') match
-        case -1 => None
+        case -1    => None
         case index =>
-          val key = trimmed.take(index).trim
+          val key   = trimmed.take(index).trim
           val value = trimmed.drop(index + 1).trim
           Option.when(key.nonEmpty)(key -> unquote(value))
 
@@ -71,41 +71,37 @@ object HostDetector:
       unescapeQuoted(value.drop(1).dropRight(1))
     else value
 
-  private def isQuoted(value: String, quote: Char): Boolean =
-    value.length >= 2 && value.head == quote && value.last == quote
+  private def isQuoted(value: String, quote: Char): Boolean = value.length >= 2 &&
+    value.head == quote && value.last == quote
 
-  private def unescapeQuoted(value: String): String =
-    value
-      .replace("\\\"", "\"")
-      .replace("\\'", "'")
-      .replace("\\\\", "\\")
-      .replace("\\$", "$")
-      .replace("\\`", "`")
+  private def unescapeQuoted(value: String): String = value
+    .replace("\\\"", "\"")
+    .replace("\\'", "'")
+    .replace("\\\\", "\\")
+    .replace("\\$", "$")
+    .replace("\\`", "`")
 
   private def pathCommandAvailability(system: HostSystem): CommandAvailability =
     new CommandAvailability:
-      override def exists(command: String): Boolean =
-        command.trim.nonEmpty &&
-          !command.contains("/") &&
-          !command.contains("\\") &&
-          pathDirectories(system).exists(directory =>
-            system.isExecutableRegularFile(directory.resolve(command))
-          )
+      override def exists(command: String): Boolean = command.trim.nonEmpty &&
+        !command.contains("/") &&
+        !command.contains("\\") &&
+        pathDirectories(system).exists(directory =>
+          system.isExecutableRegularFile(directory.resolve(command))
+        )
 
-  private def pathDirectories(system: HostSystem): Vector[Path] =
-    system
-      .env("PATH")
-      .toVector
-      .flatMap(_.split(java.util.regex.Pattern.quote(system.pathSeparator)).toVector)
-      .map(_.trim)
-      .filter(_.nonEmpty)
-      .map(Paths.get(_))
+  private def pathDirectories(system: HostSystem): Vector[Path] = system
+    .env("PATH")
+    .toVector
+    .flatMap(_.split(java.util.regex.Pattern.quote(system.pathSeparator)).toVector)
+    .map(_.trim)
+    .filter(_.nonEmpty)
+    .map(Paths.get(_))
 
   private def normalizedValue(value: Option[String]): Option[String] =
     nonEmpty(value).map(_.toLowerCase)
 
-  private def nonEmpty(value: Option[String]): Option[String] =
-    value.map(_.trim).filter(_.nonEmpty)
+  private def nonEmpty(value: Option[String]): Option[String] = value.map(_.trim).filter(_.nonEmpty)
 
   private final case class OsRelease(
       distribution: Option[String],

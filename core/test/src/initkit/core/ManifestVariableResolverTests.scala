@@ -8,15 +8,17 @@ import initkit.host.HostFacts
 import utest.*
 
 object ManifestVariableResolverTests extends TestSuite:
+
   val tests: Tests = Tests:
     test("resolves runtime and nested spec variables in config example"):
-      val home = "/home/initkit-user"
+      val home     = "/home/initkit-user"
       val manifest = loadResolvedExample(home = home, user = "initkit-user")
 
       assert(manifest.spec.vars("user") == "initkit-user")
       assert(manifest.spec.vars("home") == home)
       assert(manifest.spec.vars("binDir") == s"$home/.local/bin")
-      assert(manifest.spec.vars("stateFile") == s"$home/.local/state/initkit/developer-workstation.state.json")
+      assert(manifest.spec.vars("stateFile") ==
+        s"$home/.local/state/initkit/developer-workstation.state.json")
 
       val nerdFonts = installerSpec(manifest, "install-nerd-fonts")
       nerdFonts match
@@ -24,7 +26,8 @@ object ManifestVariableResolverTests extends TestSuite:
           assert(tool.path == s"$home/.local/bin/nerdfont-install")
           assert(tool.args == Vector("-config", s"$home/.config/nerd-config-installer/config.yaml"))
           assert(config.path == s"$home/.config/nerd-config-installer/config.yaml")
-          assert(config.content.exists(destinationFromGeneratedConfig(_) == Some(s"$home/.local/share/fonts/NerdFonts")))
+          assert(config.content.exists(destinationFromGeneratedConfig(_) ==
+            Some(s"$home/.local/share/fonts/NerdFonts")))
         case other => fail(s"expected nerd-fonts spec, found $other")
 
     test("resolves repeated variables and host facts in nested plan values"):
@@ -49,8 +52,8 @@ object ManifestVariableResolverTests extends TestSuite:
         val commands = installerSpec(manifest, "commands")
 
         commands match
-          case InstallerSpec.Commands(items) =>
-            assert(items.head.run == "install /home/alex/workspace/.cache /home/alex/workspace/.cache for amd64")
+          case InstallerSpec.Commands(items) => assert(items.head.run ==
+              "install /home/alex/workspace/.cache /home/alex/workspace/.cache for amd64")
           case other => fail(s"expected commands spec, found $other")
 
     test("reports unresolved variables with plan entry context"):
@@ -79,7 +82,9 @@ object ManifestVariableResolverTests extends TestSuite:
           case error: ManifestLoadError.ValidationFailure =>
             assert(error.path == config.toAbsolutePath.normalize())
             assert(
-              error.errors.exists(_.message.contains("spec.plan[0].spec.items[0].run: unresolved variable '${missingValue}'"))
+              error.errors.exists(_.message.contains(
+                "spec.plan[0].spec.items[0].run: unresolved variable '${missingValue}'"
+              ))
             )
             assert(error.errors.exists(_.message.contains("plan entry 'broken-command'")))
           case other => fail(s"expected validation failure, found $other")
@@ -88,7 +93,7 @@ object ManifestVariableResolverTests extends TestSuite:
       val tmp = Files.createTempDirectory("initkit-variable-resolution")
       try
         val touched = tmp.resolve("should-not-exist")
-        val config = tmp.resolve("config.yaml")
+        val config  = tmp.resolve("config.yaml")
         Files.writeString(
           config,
           stripYaml(s"""
@@ -131,12 +136,12 @@ object ManifestVariableResolverTests extends TestSuite:
     val index = manifest.spec.plan.indexWhere(_.name.contains(name))
     assert(index >= 0)
     InstallerSpecDecoder.decode(manifest.spec.plan(index), index) match
-      case Right(spec)   => spec
-      case Left(errors)  => fail(errors.map(_.message).mkString("; "))
+      case Right(spec)  => spec
+      case Left(errors) => fail(errors.map(_.message).mkString("; "))
 
   private def destinationFromGeneratedConfig(raw: RawYaml): Option[String] =
     for
-      fields <- raw.asMapping
+      fields      <- raw.asMapping
       destination <- fields.get("destination").flatMap(_.asString)
     yield destination
 
@@ -148,25 +153,23 @@ object ManifestVariableResolverTests extends TestSuite:
       run(config)
     finally deleteRecursively(tmp)
 
-  private def exampleConfigPath: Path =
-    Iterator
-      .iterate(Path.of("").toAbsolutePath.normalize())(_.getParent)
-      .takeWhile(_ != null)
-      .map(_.resolve("config.example.yaml"))
-      .find(Files.isRegularFile(_))
-      .getOrElse(throw new java.lang.AssertionError("config.example.yaml fixture not found"))
+  private def exampleConfigPath: Path = Iterator
+    .iterate(Path.of("").toAbsolutePath.normalize())(_.getParent)
+    .takeWhile(_ != null)
+    .map(_.resolve("config.example.yaml"))
+    .find(Files.isRegularFile(_))
+    .getOrElse(throw new java.lang.AssertionError("config.example.yaml fixture not found"))
 
   private def stripYaml(source: String): String =
-    val lines = source.replace("\r\n", "\n").split("\n").toVector
+    val lines    = source.replace("\r\n", "\n").split("\n").toVector
     val nonEmpty = lines.dropWhile(_.trim.isEmpty).reverse.dropWhile(_.trim.isEmpty).reverse
-    val indent = nonEmpty.filter(_.trim.nonEmpty).map(_.takeWhile(_ == ' ').length).minOption.getOrElse(0)
+    val indent   =
+      nonEmpty.filter(_.trim.nonEmpty).map(_.takeWhile(_ == ' ').length).minOption.getOrElse(0)
     nonEmpty.map(_.drop(indent)).mkString("\n")
 
-  private def deleteRecursively(path: Path): Unit =
-    if Files.exists(path) then
-      val paths = Files.walk(path)
-      try paths.sorted(Comparator.reverseOrder()).forEach(Files.delete)
-      finally paths.close()
+  private def deleteRecursively(path: Path): Unit = if Files.exists(path) then
+    val paths = Files.walk(path)
+    try paths.sorted(Comparator.reverseOrder()).forEach(Files.delete)
+    finally paths.close()
 
-  private def fail(message: String): Nothing =
-    throw new java.lang.AssertionError(message)
+  private def fail(message: String): Nothing = throw new java.lang.AssertionError(message)

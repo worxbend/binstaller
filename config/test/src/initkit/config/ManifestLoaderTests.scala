@@ -5,6 +5,7 @@ import java.nio.file.{Files, Path}
 import utest.*
 
 object ManifestLoaderTests extends TestSuite:
+
   val tests: Tests = Tests:
     test("loads config example into typed manifest fields"):
       val manifest = loadExample()
@@ -32,12 +33,11 @@ object ManifestLoaderTests extends TestSuite:
 
     test("preserves kind specific plan spec as raw yaml"):
       val manifest = loadExample()
-      val entry = manifest.spec.plan.find(_.name.contains("direct-binaries")).get
+      val entry    = manifest.spec.plan.find(_.name.contains("direct-binaries")).get
 
       assert(entry.kind.contains("binary-downloads"))
       entry.spec match
-        case Some(RawYaml.MappingValue(fields)) =>
-          fields("items") match
+        case Some(RawYaml.MappingValue(fields)) => fields("items") match
             case RawYaml.SequenceValue(items) =>
               assert(items.size == 4)
               assert(items.head.asMapping.flatMap(_("name").asString).contains("kubectl"))
@@ -46,7 +46,7 @@ object ManifestLoaderTests extends TestSuite:
 
     test("loads common execution and condition data"):
       val manifest = loadExample()
-      val entry = manifest.spec.plan.find(_.name.contains("apt-base-cli")).get
+      val entry    = manifest.spec.plan.find(_.name.contains("apt-base-cli")).get
 
       assert(entry.execution.flatMap(_.mode).contains("sequential"))
       assert(entry.execution.exists(_.locks == Vector("system-package-manager")))
@@ -76,18 +76,15 @@ object ManifestLoaderTests extends TestSuite:
           case other => fail(s"expected parse failure, found $other")
       finally os.remove.all(tmp)
 
-  private def loadExample(): Manifest =
-    ManifestLoader.load(exampleConfigPath) match
-      case Right(manifest) => manifest
-      case Left(error)     => fail(error.message)
+  private def loadExample(): Manifest = ManifestLoader.load(exampleConfigPath) match
+    case Right(manifest) => manifest
+    case Left(error)     => fail(error.message)
 
-  def exampleConfigPath: Path =
-    Iterator
-      .iterate(os.pwd.toNIO.toAbsolutePath.normalize)(_.getParent)
-      .takeWhile(_ != null)
-      .map(_.resolve("config.example.yaml"))
-      .find(Files.isRegularFile(_))
-      .getOrElse(throw new java.lang.AssertionError("config.example.yaml fixture not found"))
+  def exampleConfigPath: Path = Iterator
+    .iterate(os.pwd.toNIO.toAbsolutePath.normalize)(_.getParent)
+    .takeWhile(_ != null)
+    .map(_.resolve("config.example.yaml"))
+    .find(Files.isRegularFile(_))
+    .getOrElse(throw new java.lang.AssertionError("config.example.yaml fixture not found"))
 
-  private def fail(message: String): Nothing =
-    throw new java.lang.AssertionError(message)
+  private def fail(message: String): Nothing = throw new java.lang.AssertionError(message)

@@ -7,15 +7,19 @@ import java.time.{Clock, Instant, ZoneOffset}
 import scala.collection.immutable.VectorMap
 
 import initkit.config.Manifest
-import initkit.core.{ExecutionState, ExecutionStateStore, ManifestVariableResolver, RuntimeVariables}
+import initkit.core.{
+  ExecutionState,
+  ExecutionStateStore,
+  ManifestVariableResolver,
+  RuntimeVariables
+}
 import initkit.host.HostFacts
 import initkit.tui.TuiPlanRowStatus
 import picocli.CommandLine
 import utest.*
 
 object InitkitCliTests extends TestSuite:
-  private val fixedClock: Clock =
-    Clock.fixed(Instant.parse("2026-06-28T12:00:00Z"), ZoneOffset.UTC)
+  private val fixedClock: Clock = Clock.fixed(Instant.parse("2026-06-28T12:00:00Z"), ZoneOffset.UTC)
 
   val tests: Tests = Tests:
     test("prints root help through picocli"):
@@ -51,7 +55,8 @@ object InitkitCliTests extends TestSuite:
       try
         val missing = tmp / "missing.yaml"
 
-        val result = runCli("tui", "--config", missing.toString, "--dry-run", "--select", "apt-packages")
+        val result =
+          runCli("tui", "--config", missing.toString, "--dry-run", "--select", "apt-packages")
 
         assert(result.exitCode == CommandLine.ExitCode.USAGE)
         assert(result.err.contains("Config file not found:"))
@@ -62,7 +67,7 @@ object InitkitCliTests extends TestSuite:
     test("apply dry-runs the example config with shared and selection options"):
       val tmp = os.temp.dir()
       try
-        val state = tmp / "state.json"
+        val state  = tmp / "state.json"
         val config = exampleConfig
 
         val result = runCli(
@@ -95,7 +100,16 @@ object InitkitCliTests extends TestSuite:
       finally os.remove.all(tmp)
 
     test("apply color never suppresses ANSI escapes"):
-      val result = runCli("apply", "--config", exampleConfig.toString, "--dry-run", "--color", "never", "--only", "post-install")
+      val result = runCli(
+        "apply",
+        "--config",
+        exampleConfig.toString,
+        "--dry-run",
+        "--color",
+        "never",
+        "--only",
+        "post-install"
+      )
 
       assert(result.exitCode == CommandLine.ExitCode.OK)
       assert(!hasAnsi(result.out))
@@ -117,7 +131,16 @@ object InitkitCliTests extends TestSuite:
       assert(!hasAnsi(result.out))
 
     test("apply color always emits fansi styled output"):
-      val result = runCli("apply", "--config", exampleConfig.toString, "--dry-run", "--color", "always", "--only", "post-install")
+      val result = runCli(
+        "apply",
+        "--config",
+        exampleConfig.toString,
+        "--dry-run",
+        "--color",
+        "always",
+        "--only",
+        "post-install"
+      )
 
       assert(result.exitCode == CommandLine.ExitCode.OK)
       assert(hasAnsi(result.out))
@@ -181,9 +204,9 @@ object InitkitCliTests extends TestSuite:
     test("tui model loader reads example manifest and completed state"):
       val tmp = os.temp.dir()
       try
-        val hostFacts = HostFacts.fake(distribution = Some("ubuntu"))
-        val manifest = loadExampleManifest(hostFacts)
-        val statePath = tmp / "state.json"
+        val hostFacts      = HostFacts.fake(distribution = Some("ubuntu"))
+        val manifest       = loadExampleManifest(hostFacts)
+        val statePath      = tmp / "state.json"
         val completedState = ExecutionState.markCompleted(
           ExecutionState.initial(manifest, fixedClock),
           "apt-base-cli",
@@ -209,14 +232,18 @@ object InitkitCliTests extends TestSuite:
 
         assert(viewModel.profile.name == "developer-workstation")
         assert(viewModel.stateFile.status.toString == "Existing")
-        assert(viewModel.rows.exists(row => row.name == "apt-base-cli" && row.status == TuiPlanRowStatus.Completed))
+        assert(viewModel.rows.exists(row =>
+          row.name == "apt-base-cli" && row.status == TuiPlanRowStatus.Completed
+        ))
         assert(viewModel.rows.exists(row => row.name == "apt-containers" && row.selected))
-        assert(viewModel.rows.exists(row => row.name == "pacman-base-cli" && row.status == TuiPlanRowStatus.Skipped))
+        assert(viewModel.rows.exists(row =>
+          row.name == "pacman-base-cli" && row.status == TuiPlanRowStatus.Skipped
+        ))
       finally os.remove.all(tmp)
 
   private def runCli(args: String*): CliResult =
-    val out = new StringWriter()
-    val err = new StringWriter()
+    val out         = new StringWriter()
+    val err         = new StringWriter()
     val commandLine = InitkitCli.commandLine()
     commandLine.setOut(new PrintWriter(out))
     commandLine.setErr(new PrintWriter(err))
@@ -225,8 +252,7 @@ object InitkitCliTests extends TestSuite:
 
     CliResult(exitCode, out.toString, err.toString)
 
-  private def hasAnsi(value: String): Boolean =
-    value.contains("\u001b[")
+  private def hasAnsi(value: String): Boolean = value.contains("\u001b[")
 
   private def exampleConfig: os.Path =
     val path = Iterator
@@ -238,20 +264,18 @@ object InitkitCliTests extends TestSuite:
 
     os.Path(path)
 
-  private def loadExampleManifest(hostFacts: HostFacts): Manifest =
-    ManifestVariableResolver
-      .loadValidatedResolved(exampleConfig.toNIO, runtimeVariables, hostFacts)
-      .fold(error => throw new java.lang.AssertionError(error.message), identity)
+  private def loadExampleManifest(hostFacts: HostFacts): Manifest = ManifestVariableResolver
+    .loadValidatedResolved(exampleConfig.toNIO, runtimeVariables, hostFacts)
+    .fold(error => throw new java.lang.AssertionError(error.message), identity)
 
-  private def runtimeVariables: RuntimeVariables =
-    RuntimeVariables(
-      VectorMap.from(
-        Vector(
-          "HOME" -> sys.env.getOrElse("HOME", System.getProperty("user.home", "")),
-          "USER" -> sys.env.getOrElse("USER", System.getProperty("user.name", ""))
-        ).filter(_._2.nonEmpty)
-      )
+  private def runtimeVariables: RuntimeVariables = RuntimeVariables(
+    VectorMap.from(
+      Vector(
+        "HOME" -> sys.env.getOrElse("HOME", System.getProperty("user.home", "")),
+        "USER" -> sys.env.getOrElse("USER", System.getProperty("user.name", ""))
+      ).filter(_._2.nonEmpty)
     )
+  )
 
   private def requireRight[A](value: Either[?, A]): A =
     value.fold(error => throw new java.lang.AssertionError(error.toString), identity)

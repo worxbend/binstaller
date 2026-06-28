@@ -3,6 +3,7 @@ package initkit.config
 import utest.*
 
 object InstallerSpecDecoderTests extends TestSuite:
+
   val tests: Tests = Tests:
     test("decodes valid binary download specs"):
       val spec = decodeValidInstallerSpec(
@@ -128,7 +129,10 @@ object InstallerSpecDecoderTests extends TestSuite:
           assert(config.path == "${nerdFontConfig}")
           assert(config.create.contains(true))
           assert(config.content.nonEmpty)
-          assert(preview.contains(PreviewInvocation(enabled = Some(true), args = Vector("-dry-run"))))
+          assert(preview.contains(PreviewInvocation(
+            enabled = Some(true),
+            args = Vector("-dry-run")
+          )))
         case other => fail(s"expected nerd fonts spec, found $other")
 
     test("rejects invalid nerd font specs"):
@@ -179,7 +183,8 @@ object InstallerSpecDecoderTests extends TestSuite:
             destination = "${dotfilesDir}",
             update = Some(true)
           ),
-          config = DotfilesConfig("${dotfilesConfig}", Some("https://example.test/install.conf.yaml")),
+          config =
+            DotfilesConfig("${dotfilesConfig}", Some("https://example.test/install.conf.yaml")),
           preview = Some(PreviewInvocation(enabled = Some(true), args = Vector("--dry-run")))
         )
       )
@@ -265,7 +270,8 @@ object InstallerSpecDecoderTests extends TestSuite:
                 Condition(
                   os = None,
                   commandExists = Some("systemctl"),
-                  raw = RawYaml.MappingValue(scala.collection.immutable.VectorMap("commandExists" -> RawYaml.StringValue("systemctl")))
+                  raw = RawYaml.MappingValue(scala.collection.immutable.VectorMap("commandExists" ->
+                    RawYaml.StringValue("systemctl")))
                 )
               )
             )
@@ -290,20 +296,19 @@ object InstallerSpecDecoderTests extends TestSuite:
       name: String,
       kind: String,
       spec: String
-  ): InstallerSpec =
-    loadValidatedInstaller(name, kind, spec) match
-      case Right(entry) =>
-        InstallerSpecDecoder.decode(entry, index = 0) match
-          case Right(spec)  => spec
-          case Left(errors) => fail(s"expected installer spec, found ${errors.map(_.message).mkString("; ")}")
-      case Left(errors) => fail(s"expected valid manifest, found ${errors.map(_.message).mkString("; ")}")
+  ): InstallerSpec = loadValidatedInstaller(name, kind, spec) match
+    case Right(entry) => InstallerSpecDecoder.decode(entry, index = 0) match
+        case Right(spec)  => spec
+        case Left(errors) =>
+          fail(s"expected installer spec, found ${errors.map(_.message).mkString("; ")}")
+    case Left(errors) =>
+      fail(s"expected valid manifest, found ${errors.map(_.message).mkString("; ")}")
 
   private def validateInstallerSpec(
       name: String,
       kind: String,
       spec: String
-  ): Vector[ManifestValidationError] =
-    loadValidatedInstaller(name, kind, spec).left.toOption.get
+  ): Vector[ManifestValidationError] = loadValidatedInstaller(name, kind, spec).left.toOption.get
 
   private def loadValidatedInstaller(
       name: String,
@@ -315,7 +320,7 @@ object InstallerSpecDecoderTests extends TestSuite:
       val config = tmp / "config.yaml"
       os.write(config, installerManifest(name, kind, spec))
       ManifestLoader.loadValidated(config.toNIO) match
-        case Right(manifest) => Right(manifest.spec.plan.head)
+        case Right(manifest)                                  => Right(manifest.spec.plan.head)
         case Left(error: ManifestLoadError.ValidationFailure) => Left(error.errors)
         case Left(error) => fail(s"expected validation result, found ${error.message}")
     finally os.remove.all(tmp)
@@ -348,11 +353,10 @@ object InstallerSpecDecoderTests extends TestSuite:
     stripYaml(source).split("\n").map(line => s"$padding$line").mkString("\n")
 
   private def stripYaml(source: String): String =
-    val lines = source.replace("\r\n", "\n").split("\n").toVector
+    val lines        = source.replace("\r\n", "\n").split("\n").toVector
     val contentLines = lines.filter(_.trim.nonEmpty)
-    val indent = contentLines.map(_.takeWhile(_ == ' ').length).minOption.getOrElse(0)
+    val indent       = contentLines.map(_.takeWhile(_ == ' ').length).minOption.getOrElse(0)
 
     lines.map(line => if line.length >= indent then line.drop(indent) else line).mkString("\n").trim
 
-  private def fail(message: String): Nothing =
-    throw new java.lang.AssertionError(message)
+  private def fail(message: String): Nothing = throw new java.lang.AssertionError(message)

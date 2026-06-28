@@ -8,7 +8,7 @@ import scala.collection.immutable.VectorMap
 import scala.util.Try
 
 import initkit.config.*
-import upickle.default.{ReadWriter, macroRW, readwriter, read as readJson, write as writeJson}
+import upickle.default.{macroRW, read as readJson, readwriter, write as writeJson, ReadWriter}
 
 final case class ExecutionState(
     schemaVersion: Int,
@@ -29,7 +29,7 @@ object ExecutionState:
   given ReadWriter[ExecutionState] = macroRW
 
   def initial(manifest: Manifest, clock: Clock): ExecutionState =
-    val now = clock.instant()
+    val now     = clock.instant()
     val entries = manifest.spec.plan.zipWithIndex.map { case (entry, index) =>
       PlanEntryState.initial(index, entry)
     }
@@ -44,10 +44,9 @@ object ExecutionState:
       entries = entries
     )
 
-  def completedNames(state: ExecutionState): Set[String] =
-    state.entries.collect {
-      case entry if entry.status == PlanEntryStatus.Completed => entry.name
-    }.flatten.toSet
+  def completedNames(state: ExecutionState): Set[String] = state.entries.collect {
+    case entry if entry.status == PlanEntryStatus.Completed => entry.name
+  }.flatten.toSet
 
   def resumePoint(state: ExecutionState): ExecutionResumePoint =
     val completed = completedNames(state)
@@ -67,7 +66,7 @@ object ExecutionState:
       completedAt: Instant
   ): ExecutionState =
     val entryIndex = state.entries.indexWhere(entry => entry.name.contains(entryName))
-    val entries = state.entries.map: entry =>
+    val entries    = state.entries.map: entry =>
       if entry.index == entryIndex then
         entry.copy(
           status = PlanEntryStatus.Completed,
@@ -107,7 +106,7 @@ object ExecutionState:
       skippedAt: Instant
   ): ExecutionState =
     val entryIndex = state.entries.indexWhere(entry => entry.name.contains(entryName))
-    val entries = state.entries.map: entry =>
+    val entries    = state.entries.map: entry =>
       if entry.index == entryIndex then
         entry.copy(
           status = PlanEntryStatus.Skipped,
@@ -130,7 +129,7 @@ object ExecutionState:
       continueAfterFailure: Boolean
   ): ExecutionState =
     val entryIndex = state.entries.indexWhere(entry => entry.name.contains(entryName))
-    val entries = state.entries.map: entry =>
+    val entries    = state.entries.map: entry =>
       if entry.index == entryIndex then
         entry.copy(
           status = PlanEntryStatus.Failed,
@@ -154,37 +153,34 @@ object ExecutionState:
       reason: String,
       resumeFrom: Option[InterruptResumeFrom],
       interruptedAt: Instant
-  ): ExecutionState =
-    resumeFrom.getOrElse(InterruptResumeFrom.Current) match
-      case InterruptResumeFrom.Next =>
-        markCompleted(state, entryName, interruptedAt).copy(updatedAt = interruptedAt)
-      case InterruptResumeFrom.Current =>
-        val entries = state.entries.map: entry =>
-          if entry.name.contains(entryName) then
-            entry.copy(
-              status = PlanEntryStatus.Interrupted,
-              startedAt = entry.startedAt.orElse(Some(interruptedAt)),
-              completedAt = Some(interruptedAt),
-              message = Some(reason)
-            )
-          else entry
+  ): ExecutionState = resumeFrom.getOrElse(InterruptResumeFrom.Current) match
+    case InterruptResumeFrom.Next =>
+      markCompleted(state, entryName, interruptedAt).copy(updatedAt = interruptedAt)
+    case InterruptResumeFrom.Current =>
+      val entries = state.entries.map: entry =>
+        if entry.name.contains(entryName) then
+          entry.copy(
+            status = PlanEntryStatus.Interrupted,
+            startedAt = entry.startedAt.orElse(Some(interruptedAt)),
+            completedAt = Some(interruptedAt),
+            message = Some(reason)
+          )
+        else entry
 
-        state.copy(updatedAt = interruptedAt, nextPlanEntry = Some(entryName), entries = entries)
+      state.copy(updatedAt = interruptedAt, nextPlanEntry = Some(entryName), entries = entries)
 
   private def nextOpenEntryAfter(
       entries: Vector[PlanEntryState],
       entryIndex: Int
-  ): Option[String] =
-    entries
-      .drop(entryIndex + 1)
-      .find(entry => !isTerminal(entry.status))
-      .flatMap(_.name)
+  ): Option[String] = entries
+    .drop(entryIndex + 1)
+    .find(entry => !isTerminal(entry.status))
+    .flatMap(_.name)
 
-  private def isTerminal(status: PlanEntryStatus): Boolean =
-    status match
-      case PlanEntryStatus.Pending => false
-      case PlanEntryStatus.Running => false
-      case _                       => true
+  private def isTerminal(status: PlanEntryStatus): Boolean = status match
+    case PlanEntryStatus.Pending => false
+    case PlanEntryStatus.Running => false
+    case _                       => true
 
 final case class StateManifestIdentity(
     name: Option[String],
@@ -196,13 +192,12 @@ final case class StateManifestIdentity(
 object StateManifestIdentity:
   given ReadWriter[StateManifestIdentity] = macroRW
 
-  def fromManifest(manifest: Manifest): StateManifestIdentity =
-    StateManifestIdentity(
-      name = manifest.metadata.name,
-      apiVersion = manifest.apiVersion,
-      kind = manifest.kind,
-      fingerprint = ManifestFingerprint.sha256(manifest)
-    )
+  def fromManifest(manifest: Manifest): StateManifestIdentity = StateManifestIdentity(
+    name = manifest.metadata.name,
+    apiVersion = manifest.apiVersion,
+    kind = manifest.kind,
+    fingerprint = ManifestFingerprint.sha256(manifest)
+  )
 
 final case class PlanEntryState(
     index: Int,
@@ -219,21 +214,21 @@ object PlanEntryState:
 
   given ReadWriter[PlanEntryState] = macroRW
 
-  def initial(index: Int, entry: PlanEntry): PlanEntryState =
-    PlanEntryState(
-      index = index,
-      name = entry.name,
-      kind = entry.kind,
-      status = PlanEntryStatus.Pending,
-      startedAt = None,
-      completedAt = None,
-      message = None
-    )
+  def initial(index: Int, entry: PlanEntry): PlanEntryState = PlanEntryState(
+    index = index,
+    name = entry.name,
+    kind = entry.kind,
+    status = PlanEntryStatus.Pending,
+    startedAt = None,
+    completedAt = None,
+    message = None
+  )
 
 enum PlanEntryStatus:
   case Pending, Running, Completed, Skipped, Failed, Interrupted
 
 object PlanEntryStatus:
+
   given readWriter: ReadWriter[PlanEntryStatus] =
     readwriter[String].bimap[PlanEntryStatus](_.toString, PlanEntryStatus.valueOf)
 
@@ -245,6 +240,7 @@ final case class ExecutionResumePoint(
 )
 
 object ExecutionStateStore:
+
   def load(path: Path): Either[ExecutionStateError, ExecutionState] =
     val normalizedPath = path.toAbsolutePath.normalize()
 
@@ -269,7 +265,11 @@ object ExecutionStateStore:
       Right(ExecutionState.initial(manifest, clock))
     else
       load(normalizedPath).flatMap: state =>
-        validateFresh(normalizedPath, state.manifest, StateManifestIdentity.fromManifest(manifest)).map(_ => state)
+        validateFresh(
+          normalizedPath,
+          state.manifest,
+          StateManifestIdentity.fromManifest(manifest)
+        ).map(_ => state)
 
   private def validateFresh(
       path: Path,
@@ -279,7 +279,11 @@ object ExecutionStateStore:
     if actual.name != expected.name then
       Left(ExecutionStateError.StaleManifestName(path, expected.name, actual.name))
     else if actual.fingerprint != expected.fingerprint then
-      Left(ExecutionStateError.StaleManifestFingerprint(path, expected.fingerprint, actual.fingerprint))
+      Left(ExecutionStateError.StaleManifestFingerprint(
+        path,
+        expected.fingerprint,
+        actual.fingerprint
+      ))
     else Right(())
 
   private def writeAtomic(path: Path, json: String): Unit =
@@ -294,7 +298,8 @@ object ExecutionStateStore:
       Files.deleteIfExists(temp)
 
   private def moveIntoPlace(temp: Path, target: Path): Unit =
-    try Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+    try
+      Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
     catch
       case _: AtomicMoveNotSupportedException =>
         Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING)
@@ -305,132 +310,115 @@ enum ExecutionStateError:
   case StaleManifestName(path: Path, expected: Option[String], actual: Option[String])
   case StaleManifestFingerprint(path: Path, expected: String, actual: String)
 
-  def message: String =
-    this match
-      case InvalidStateFile(path, detail) =>
-        s"Invalid execution state file '$path': $detail"
-      case IoFailure(path, detail) =>
-        s"Could not write execution state file '$path': $detail"
-      case StaleManifestName(path, expected, actual) =>
-        s"Execution state '$path' belongs to manifest '${describe(actual)}', expected '${describe(expected)}'. Use --reset-state to replace it."
-      case StaleManifestFingerprint(path, _, _) =>
-        s"Execution state '$path' was created for different manifest contents. Use --reset-state to replace it."
+  def message: String = this match
+    case InvalidStateFile(path, detail) => s"Invalid execution state file '$path': $detail"
+    case IoFailure(path, detail)        => s"Could not write execution state file '$path': $detail"
+    case StaleManifestName(path, expected, actual) =>
+      s"Execution state '$path' belongs to manifest '${describe(actual)}', expected '${describe(expected)}'. Use --reset-state to replace it."
+    case StaleManifestFingerprint(path, _, _) =>
+      s"Execution state '$path' was created for different manifest contents. Use --reset-state to replace it."
 
-  private def describe(value: Option[String]): String =
-    value.getOrElse("<unnamed>")
+  private def describe(value: Option[String]): String = value.getOrElse("<unnamed>")
 
 object ManifestFingerprint:
+
   def sha256(manifest: Manifest): String =
     val digest = MessageDigest.getInstance("SHA-256")
-    val bytes = canonicalManifest(manifest).getBytes(StandardCharsets.UTF_8)
+    val bytes  = canonicalManifest(manifest).getBytes(StandardCharsets.UTF_8)
     digest.digest(bytes).map(byte => f"${byte & 0xff}%02x").mkString
 
-  private def canonicalManifest(manifest: Manifest): String =
-    obj(
-      "apiVersion" -> opt(manifest.apiVersion.map(str)),
-      "kind" -> opt(manifest.kind.map(str)),
-      "metadata" -> metadata(manifest.metadata),
-      "spec" -> spec(manifest.spec)
-    )
+  private def canonicalManifest(manifest: Manifest): String = obj(
+    "apiVersion" -> opt(manifest.apiVersion.map(str)),
+    "kind"       -> opt(manifest.kind.map(str)),
+    "metadata"   -> metadata(manifest.metadata),
+    "spec"       -> spec(manifest.spec)
+  )
 
-  private def metadata(value: Metadata): String =
-    obj(
-      "name" -> opt(value.name.map(str)),
-      "labels" -> stringMap(value.labels),
-      "annotations" -> stringMap(value.annotations)
-    )
+  private def metadata(value: Metadata): String = obj(
+    "name"        -> opt(value.name.map(str)),
+    "labels"      -> stringMap(value.labels),
+    "annotations" -> stringMap(value.annotations)
+  )
 
-  private def spec(value: ManifestSpec): String =
-    obj(
-      "target" -> opt(value.target.map(target)),
-      "policy" -> opt(value.policy.map(policy)),
-      "vars" -> stringMap(value.vars),
-      "sources" -> opt(value.sources.map(sources)),
-      "plan" -> seq(value.plan.map(planEntry))
-    )
+  private def spec(value: ManifestSpec): String = obj(
+    "target"  -> opt(value.target.map(target)),
+    "policy"  -> opt(value.policy.map(policy)),
+    "vars"    -> stringMap(value.vars),
+    "sources" -> opt(value.sources.map(sources)),
+    "plan"    -> seq(value.plan.map(planEntry))
+  )
 
-  private def target(value: Target): String =
-    obj("os" -> opt(value.os.map(targetOs)))
+  private def target(value: Target): String = obj("os" -> opt(value.os.map(targetOs)))
 
-  private def targetOs(value: TargetOs): String =
-    obj(
-      "family" -> opt(value.family.map(str)),
-      "distribution" -> opt(value.distribution.map(str)),
-      "version" -> opt(value.version.map(str)),
-      "codename" -> opt(value.codename.map(str)),
-      "architecture" -> opt(value.architecture.map(str)),
-      "desktop" -> opt(value.desktop.map(str))
-    )
+  private def targetOs(value: TargetOs): String = obj(
+    "family"       -> opt(value.family.map(str)),
+    "distribution" -> opt(value.distribution.map(str)),
+    "version"      -> opt(value.version.map(str)),
+    "codename"     -> opt(value.codename.map(str)),
+    "architecture" -> opt(value.architecture.map(str)),
+    "desktop"      -> opt(value.desktop.map(str))
+  )
 
-  private def policy(value: Policy): String =
-    obj(
-      "dryRun" -> opt(value.dryRun.map(bool)),
-      "continueOnError" -> opt(value.continueOnError.map(bool)),
-      "requireSudo" -> opt(value.requireSudo.map(bool)),
-      "reboot" -> opt(value.reboot.map(rebootPolicy))
-    )
+  private def policy(value: Policy): String = obj(
+    "dryRun"          -> opt(value.dryRun.map(bool)),
+    "continueOnError" -> opt(value.continueOnError.map(bool)),
+    "requireSudo"     -> opt(value.requireSudo.map(bool)),
+    "reboot"          -> opt(value.reboot.map(rebootPolicy))
+  )
 
-  private def rebootPolicy(value: RebootPolicy): String =
-    obj(
-      "allowed" -> opt(value.allowed.map(bool)),
-      "prompt" -> opt(value.prompt.map(bool))
-    )
+  private def rebootPolicy(value: RebootPolicy): String = obj(
+    "allowed" -> opt(value.allowed.map(bool)),
+    "prompt"  -> opt(value.prompt.map(bool))
+  )
 
-  private def sources(value: Sources): String =
-    obj(
-      "raw" -> raw(value.raw)
-    )
+  private def sources(value: Sources): String = obj(
+    "raw" -> raw(value.raw)
+  )
 
-  private def planEntry(value: PlanEntry): String =
-    obj(
-      "name" -> opt(value.name.map(str)),
-      "kind" -> opt(value.kind.map(str)),
-      "description" -> opt(value.description.map(str)),
-      "execution" -> opt(value.execution.map(execution)),
-      "when" -> opt(value.when.map(condition)),
-      "spec" -> opt(value.spec.map(raw))
-    )
+  private def planEntry(value: PlanEntry): String = obj(
+    "name"        -> opt(value.name.map(str)),
+    "kind"        -> opt(value.kind.map(str)),
+    "description" -> opt(value.description.map(str)),
+    "execution"   -> opt(value.execution.map(execution)),
+    "when"        -> opt(value.when.map(condition)),
+    "spec"        -> opt(value.spec.map(raw))
+  )
 
-  private def execution(value: Execution): String =
-    obj(
-      "mode" -> opt(value.mode.map(str)),
-      "maxConcurrency" -> opt(value.maxConcurrency.map(number)),
-      "failFast" -> opt(value.failFast.map(bool)),
-      "locks" -> seq(value.locks.map(str))
-    )
+  private def execution(value: Execution): String = obj(
+    "mode"           -> opt(value.mode.map(str)),
+    "maxConcurrency" -> opt(value.maxConcurrency.map(number)),
+    "failFast"       -> opt(value.failFast.map(bool)),
+    "locks"          -> seq(value.locks.map(str))
+  )
 
-  private def condition(value: Condition): String =
-    obj(
-      "os" -> opt(value.os.map(osCondition)),
-      "commandExists" -> opt(value.commandExists.map(str)),
-      "raw" -> raw(value.raw)
-    )
+  private def condition(value: Condition): String = obj(
+    "os"            -> opt(value.os.map(osCondition)),
+    "commandExists" -> opt(value.commandExists.map(str)),
+    "raw"           -> raw(value.raw)
+  )
 
-  private def osCondition(value: OsCondition): String =
-    obj(
-      "family" -> opt(value.family.map(matchExpression)),
-      "distribution" -> opt(value.distribution.map(matchExpression)),
-      "version" -> opt(value.version.map(matchExpression)),
-      "codename" -> opt(value.codename.map(matchExpression)),
-      "architecture" -> opt(value.architecture.map(matchExpression)),
-      "desktop" -> opt(value.desktop.map(matchExpression)),
-      "raw" -> raw(value.raw)
-    )
+  private def osCondition(value: OsCondition): String = obj(
+    "family"       -> opt(value.family.map(matchExpression)),
+    "distribution" -> opt(value.distribution.map(matchExpression)),
+    "version"      -> opt(value.version.map(matchExpression)),
+    "codename"     -> opt(value.codename.map(matchExpression)),
+    "architecture" -> opt(value.architecture.map(matchExpression)),
+    "desktop"      -> opt(value.desktop.map(matchExpression)),
+    "raw"          -> raw(value.raw)
+  )
 
-  private def matchExpression(value: MatchExpression): String =
-    value match
-      case MatchExpression.Exact(exact)  => obj("exact" -> str(exact))
-      case MatchExpression.OneOf(values) => obj("oneOf" -> seq(values.map(str)))
+  private def matchExpression(value: MatchExpression): String = value match
+    case MatchExpression.Exact(exact)  => obj("exact" -> str(exact))
+    case MatchExpression.OneOf(values) => obj("oneOf" -> seq(values.map(str)))
 
-  private def raw(value: RawYaml): String =
-    value match
-      case RawYaml.NullValue            => "null"
-      case RawYaml.StringValue(value)   => str(value)
-      case RawYaml.BooleanValue(value)  => bool(value)
-      case RawYaml.IntegerValue(value)  => s"int(${value.toString})"
-      case RawYaml.DecimalValue(value)  => s"dec(${value.bigDecimal.toPlainString})"
-      case RawYaml.SequenceValue(items) => seq(items.map(raw))
-      case RawYaml.MappingValue(fields) => map(fields.view.mapValues(raw).to(VectorMap))
+  private def raw(value: RawYaml): String = value match
+    case RawYaml.NullValue            => "null"
+    case RawYaml.StringValue(value)   => str(value)
+    case RawYaml.BooleanValue(value)  => bool(value)
+    case RawYaml.IntegerValue(value)  => s"int(${value.toString})"
+    case RawYaml.DecimalValue(value)  => s"dec(${value.bigDecimal.toPlainString})"
+    case RawYaml.SequenceValue(items) => seq(items.map(raw))
+    case RawYaml.MappingValue(fields) => map(fields.view.mapValues(raw).to(VectorMap))
 
   private def stringMap(values: VectorMap[String, String]): String =
     map(values.view.mapValues(str).to(VectorMap))
@@ -439,20 +427,17 @@ object ManifestFingerprint:
     val fields = values.toVector.sortBy(_._1)
     obj(fields*)
 
-  private def obj(fields: (String, String)*): String =
-    fields.map { case (name, value) => s"${str(name)}=$value" }.mkString("{", "|", "}")
+  private def obj(fields: (String, String)*): String = fields.map { case (name, value) =>
+    s"${str(name)}=$value"
+  }.mkString("{", "|", "}")
 
-  private def seq(values: Iterable[String]): String =
-    values.mkString("[", ",", "]")
+  private def seq(values: Iterable[String]): String = values.mkString("[", ",", "]")
 
   private def opt(value: Option[String]): String =
     value.map(inner => s"some($inner)").getOrElse("none")
 
-  private def str(value: String): String =
-    s"s${value.length}:$value"
+  private def str(value: String): String = s"s${value.length}:$value"
 
-  private def bool(value: Boolean): String =
-    s"bool($value)"
+  private def bool(value: Boolean): String = s"bool($value)"
 
-  private def number(value: Int): String =
-    s"int($value)"
+  private def number(value: Int): String = s"int($value)"

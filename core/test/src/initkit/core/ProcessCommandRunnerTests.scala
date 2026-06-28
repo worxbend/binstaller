@@ -10,11 +10,12 @@ import ox.*
 import utest.*
 
 object ProcessCommandRunnerTests extends TestSuite:
+
   val tests: Tests = Tests:
     test("runs argv commands without shell interpretation by default"):
-      val dir = tempDir()
+      val dir     = tempDir()
       val touched = dir.resolve("owned")
-      val result = liveRunner.run(
+      val result  = liveRunner.run(
         CommandSpec.direct(
           Vector(CommandArgument("printf"), CommandArgument("literal > owned")),
           cwd = Some(dir)
@@ -26,9 +27,9 @@ object ProcessCommandRunnerTests extends TestSuite:
       assert(!Files.exists(touched))
 
     test("uses shell execution only for explicit shell specs"):
-      val dir = tempDir()
+      val dir     = tempDir()
       val touched = dir.resolve("owned")
-      val result = liveRunner.run(
+      val result  = liveRunner.run(
         CommandSpec.shell(
           CommandArgument("printf shell > owned"),
           cwd = Some(dir)
@@ -90,10 +91,10 @@ object ProcessCommandRunnerTests extends TestSuite:
       assert(result.stderr.contains("stderr-line-11999"))
 
     test("timeout terminates the child process"):
-      val dir = tempDir()
-      val marker = dir.resolve("started")
+      val dir     = tempDir()
+      val marker  = dir.resolve("started")
       val pidFile = dir.resolve("pid")
-      val script = tempScript(
+      val script  = tempScript(
         "timeout",
         s"""#!/bin/sh
            |printf "%s" "$$$$" > '${pidFile.toString}'
@@ -112,7 +113,7 @@ object ProcessCommandRunnerTests extends TestSuite:
 
     test("cancellation terminates the child process"):
       val pidFile = tempDir().resolve("pid")
-      val script = tempScript(
+      val script  = tempScript(
         "cancel",
         s"""#!/bin/sh
            |printf "%s" "$$$$" > '${pidFile.toString}'
@@ -130,9 +131,15 @@ object ProcessCommandRunnerTests extends TestSuite:
       assert(!processAlive(Files.readString(pidFile).trim.toLong))
 
     test("runner calls fake sudo strategy before execution"):
-      val original = CommandSpec.direct(Vector(CommandArgument("printf"), CommandArgument("ok")), sudo = SudoMode.Required)
-      val prepared = CommandSpec.direct(Vector(CommandArgument("printf"), CommandArgument("ok")), sudo = SudoMode.Disabled)
-      val sudo = FakeSudoStrategy(Vector(FakeSudoResponse(original, Right(prepared))))
+      val original = CommandSpec.direct(
+        Vector(CommandArgument("printf"), CommandArgument("ok")),
+        sudo = SudoMode.Required
+      )
+      val prepared = CommandSpec.direct(
+        Vector(CommandArgument("printf"), CommandArgument("ok")),
+        sudo = SudoMode.Disabled
+      )
+      val sudo   = FakeSudoStrategy(Vector(FakeSudoResponse(original, Right(prepared))))
       val runner = new ProcessCommandRunner(sudo)
 
       val result = runner.run(original)
@@ -143,10 +150,16 @@ object ProcessCommandRunnerTests extends TestSuite:
 
     test("interactive sudo preflight is covered through a fake"):
       val preflight = FakeSudoPreflight(
-        Vector(FakeSudoPreflightResponse(SudoPreflightRequest(SudoPreflightMode.Interactive), Right(())))
+        Vector(FakeSudoPreflightResponse(
+          SudoPreflightRequest(SudoPreflightMode.Interactive),
+          Right(())
+        ))
       )
       val strategy = new PreflightSudoStrategy(preflight, SudoPreflightMode.Interactive)
-      val spec = CommandSpec.direct(Vector(CommandArgument("apt-get"), CommandArgument("update")), sudo = SudoMode.Required)
+      val spec     = CommandSpec.direct(
+        Vector(CommandArgument("apt-get"), CommandArgument("update")),
+        sudo = SudoMode.Required
+      )
 
       val prepared = strategy.prepare(spec)
 
@@ -162,15 +175,19 @@ object ProcessCommandRunnerTests extends TestSuite:
 
     test("noninteractive askpass sudo preflight is covered through a fake"):
       val preflight = FakeSudoPreflight(
-        Vector(FakeSudoPreflightResponse(SudoPreflightRequest(SudoPreflightMode.AskPass), Right(())))
+        Vector(FakeSudoPreflightResponse(
+          SudoPreflightRequest(SudoPreflightMode.AskPass),
+          Right(())
+        ))
       )
       val strategy = new PreflightSudoStrategy(preflight, SudoPreflightMode.AskPass)
-      val spec = CommandSpec.shell(CommandArgument("id -u"), sudo = SudoMode.Required)
+      val spec     = CommandSpec.shell(CommandArgument("id -u"), sudo = SudoMode.Required)
 
       val prepared = strategy.prepare(spec)
 
       assert(preflight.calls == Vector(SudoPreflightRequest(SudoPreflightMode.AskPass)))
-      assert(prepared.exists(_.invocation == CommandInvocation.Shell(CommandArgument("id -u"), Vector("sudo", "-A", "/bin/sh", "-c"))))
+      assert(prepared.exists(_.invocation ==
+        CommandInvocation.Shell(CommandArgument("id -u"), Vector("sudo", "-A", "/bin/sh", "-c"))))
 
     test("noninteractive sudo without askpass fails before prompting"):
       val strategy = PreflightSudoStrategy.fromEnvironment(
@@ -181,14 +198,12 @@ object ProcessCommandRunnerTests extends TestSuite:
 
       assert(strategy.left.toOption.exists(_.message.contains("SUDO_ASKPASS")))
 
-  private def liveRunner: ProcessCommandRunner =
-    new ProcessCommandRunner(SudoStrategy.Passthrough)
+  private def liveRunner: ProcessCommandRunner = new ProcessCommandRunner(SudoStrategy.Passthrough)
 
   private def dryRunRunner: ProcessCommandRunner =
     new ProcessCommandRunner(SudoStrategy.Passthrough, mode = CommandRunMode.DryRun)
 
-  private def tempDir(): Path =
-    Files.createTempDirectory("initkit-process-runner-test-")
+  private def tempDir(): Path = Files.createTempDirectory("initkit-process-runner-test-")
 
   private def tempScript(name: String, content: String): Path =
     val path = tempDir().resolve(name)
@@ -203,8 +218,7 @@ object ProcessCommandRunnerTests extends TestSuite:
       attempts += 1
     if !Files.exists(path) then fail(s"timed out waiting for $path")
 
-  private def processAlive(pid: Long): Boolean =
-    ProcessHandle.of(pid).isPresent && ProcessHandle.of(pid).get().isAlive
+  private def processAlive(pid: Long): Boolean = ProcessHandle.of(pid).isPresent &&
+    ProcessHandle.of(pid).get().isAlive
 
-  private def fail(message: String): Nothing =
-    throw new java.lang.AssertionError(message)
+  private def fail(message: String): Nothing = throw new java.lang.AssertionError(message)

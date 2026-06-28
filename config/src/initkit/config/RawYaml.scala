@@ -11,17 +11,14 @@ enum RawYaml:
   case SequenceValue(items: Vector[RawYaml])
   case MappingValue(fields: VectorMap[String, RawYaml])
 
-  def asMapping: Option[VectorMap[String, RawYaml]] =
-    this match
-      case RawYaml.MappingValue(fields) => Some(fields)
-      case _                            => None
+  def asMapping: Option[VectorMap[String, RawYaml]] = this match
+    case RawYaml.MappingValue(fields) => Some(fields)
+    case _                            => None
 
-  def asSequence: Option[Vector[RawYaml]] =
-    this match
-      case RawYaml.SequenceValue(items) => Some(items)
-      case _                            => None
+  def asSequence: Option[Vector[RawYaml]] = this match
+    case RawYaml.SequenceValue(items) => Some(items)
+    case _                            => None
 
-  def asString: Option[String] =
-    this match
-      case RawYaml.StringValue(value) => Some(value)
-      case _                          => None
+  def asString: Option[String] = this match
+    case RawYaml.StringValue(value) => Some(value)
+    case _                          => None

@@ -12,7 +12,11 @@ final case class ExecutionPolicy(
 )
 
 object ExecutionPolicy:
-  def fromManifest(policy: Option[Policy], dryRunOverride: Option[ExecutionRunMode]): ExecutionPolicy =
+
+  def fromManifest(
+      policy: Option[Policy],
+      dryRunOverride: Option[ExecutionRunMode]
+  ): ExecutionPolicy =
     val manifestPolicy = policy.getOrElse(Policy(None, None, None, None))
 
     ExecutionPolicy(
@@ -35,6 +39,7 @@ final case class RebootExecutionPolicy(
 )
 
 object RebootExecutionPolicy:
+
   def fromManifest(policy: Option[RebootPolicy]): RebootExecutionPolicy =
     val manifestPolicy = policy.getOrElse(RebootPolicy(None, None))
 
@@ -51,9 +56,10 @@ final case class PlanEntryExecutionPolicy(
 )
 
 object PlanEntryExecutionPolicy:
+
   def fromManifest(execution: Option[Execution]): PlanEntryExecutionPolicy =
     val manifestExecution = execution.getOrElse(Execution(None, None, None, Vector.empty))
-    val mode = manifestExecution.mode match
+    val mode              = manifestExecution.mode match
       case Some("parallel") => PlanEntryExecutionMode.Parallel
       case _                => PlanEntryExecutionMode.Sequential
 
@@ -75,20 +81,27 @@ final case class PlanOperationSummary(
 )
 
 object PlanOperationSummary:
-  def fromPlanEntry(index: Int, entry: PlanEntry): Either[Vector[ManifestValidationError], PlanOperationSummary] =
-    (required(entry.name, s"spec.plan[$index].name"), required(entry.kind, s"spec.plan[$index].kind")) match
-      case (Right(name), Right(kind)) =>
-        Right(PlanOperationSummary(index, name, kind, entry.description))
-      case (nameResult, kindResult) =>
-        Left(leftErrors(nameResult) ++ leftErrors(kindResult))
 
-  private def required(value: Option[String], path: String): Either[Vector[ManifestValidationError], String] =
-    value.map(_.trim).filter(_.nonEmpty) match
-      case Some(trimmed) => Right(trimmed)
-      case None          => Left(Vector(ManifestValidationError(path, "is required")))
+  def fromPlanEntry(
+      index: Int,
+      entry: PlanEntry
+  ): Either[Vector[ManifestValidationError], PlanOperationSummary] = (
+    required(entry.name, s"spec.plan[$index].name"),
+    required(entry.kind, s"spec.plan[$index].kind")
+  ) match
+    case (Right(name), Right(kind)) =>
+      Right(PlanOperationSummary(index, name, kind, entry.description))
+    case (nameResult, kindResult) => Left(leftErrors(nameResult) ++ leftErrors(kindResult))
 
-  private def leftErrors[A](value: Either[Vector[ManifestValidationError], A]): Vector[ManifestValidationError] =
-    value.left.toOption.getOrElse(Vector.empty)
+  private def required(
+      value: Option[String],
+      path: String
+  ): Either[Vector[ManifestValidationError], String] = value.map(_.trim).filter(_.nonEmpty) match
+    case Some(trimmed) => Right(trimmed)
+    case None          => Left(Vector(ManifestValidationError(path, "is required")))
+
+  private def leftErrors[A](value: Either[Vector[ManifestValidationError], A])
+      : Vector[ManifestValidationError] = value.left.toOption.getOrElse(Vector.empty)
 
 final case class PackagePlanOperation[+S <: PackageSpec](
     summary: PlanOperationSummary,
@@ -116,37 +129,36 @@ enum PlanOperation:
   case Interrupt(operation: InstallerPlanOperation[InstallerSpec.Interrupt])
   case Commands(operation: InstallerPlanOperation[InstallerSpec.Commands])
 
-  def summary: PlanOperationSummary =
-    this match
-      case AptPackages(operation)     => operation.summary
-      case PacmanPackages(operation)  => operation.summary
-      case DnfPackages(operation)     => operation.summary
-      case ZypperPackages(operation)  => operation.summary
-      case FlatpakPackages(operation) => operation.summary
-      case SnapPackages(operation)    => operation.summary
-      case BinaryDownloads(operation) => operation.summary
-      case ShellScripts(operation)    => operation.summary
-      case NerdFonts(operation)       => operation.summary
-      case DotfilesApply(operation)   => operation.summary
-      case Interrupt(operation)       => operation.summary
-      case Commands(operation)        => operation.summary
+  def summary: PlanOperationSummary = this match
+    case AptPackages(operation)     => operation.summary
+    case PacmanPackages(operation)  => operation.summary
+    case DnfPackages(operation)     => operation.summary
+    case ZypperPackages(operation)  => operation.summary
+    case FlatpakPackages(operation) => operation.summary
+    case SnapPackages(operation)    => operation.summary
+    case BinaryDownloads(operation) => operation.summary
+    case ShellScripts(operation)    => operation.summary
+    case NerdFonts(operation)       => operation.summary
+    case DotfilesApply(operation)   => operation.summary
+    case Interrupt(operation)       => operation.summary
+    case Commands(operation)        => operation.summary
 
-  def execution: PlanEntryExecutionPolicy =
-    this match
-      case AptPackages(operation)     => operation.execution
-      case PacmanPackages(operation)  => operation.execution
-      case DnfPackages(operation)     => operation.execution
-      case ZypperPackages(operation)  => operation.execution
-      case FlatpakPackages(operation) => operation.execution
-      case SnapPackages(operation)    => operation.execution
-      case BinaryDownloads(operation) => operation.execution
-      case ShellScripts(operation)    => operation.execution
-      case NerdFonts(operation)       => operation.execution
-      case DotfilesApply(operation)   => operation.execution
-      case Interrupt(operation)       => operation.execution
-      case Commands(operation)        => operation.execution
+  def execution: PlanEntryExecutionPolicy = this match
+    case AptPackages(operation)     => operation.execution
+    case PacmanPackages(operation)  => operation.execution
+    case DnfPackages(operation)     => operation.execution
+    case ZypperPackages(operation)  => operation.execution
+    case FlatpakPackages(operation) => operation.execution
+    case SnapPackages(operation)    => operation.execution
+    case BinaryDownloads(operation) => operation.execution
+    case ShellScripts(operation)    => operation.execution
+    case NerdFonts(operation)       => operation.execution
+    case DotfilesApply(operation)   => operation.execution
+    case Interrupt(operation)       => operation.execution
+    case Commands(operation)        => operation.execution
 
 object PlanOperation:
+
   def decode(runnable: RunnablePlanEntry): Either[Vector[ManifestValidationError], PlanOperation] =
     decode(runnable.index, runnable.entry)
 
@@ -159,45 +171,47 @@ object PlanOperation:
       else if InstallerSpecDecoder.isInstallerKind(summary.kind) then
         InstallerSpecDecoder.decode(entry, index).flatMap(installerOperation(summary, execution))
       else
-        Left(Vector(ManifestValidationError(s"spec.plan[$index].kind", s"unsupported plan kind '${summary.kind}'")))
+        Left(Vector(ManifestValidationError(
+          s"spec.plan[$index].kind",
+          s"unsupported plan kind '${summary.kind}'"
+        )))
 
   private def packageOperation(
       summary: PlanOperationSummary,
       execution: PlanEntryExecutionPolicy
-  )(spec: PackageSpec): Either[Vector[ManifestValidationError], PlanOperation] =
-    spec match
-      case typed: PackageSpec.Apt =>
-        Right(PlanOperation.AptPackages(PackagePlanOperation(summary, execution, typed)))
-      case typed: PackageSpec.Pacman =>
-        Right(PlanOperation.PacmanPackages(PackagePlanOperation(summary, execution, typed)))
-      case typed: PackageSpec.Dnf =>
-        Right(PlanOperation.DnfPackages(PackagePlanOperation(summary, execution, typed)))
-      case typed: PackageSpec.Zypper =>
-        Right(PlanOperation.ZypperPackages(PackagePlanOperation(summary, execution, typed)))
-      case typed: PackageSpec.Flatpak =>
-        Right(PlanOperation.FlatpakPackages(PackagePlanOperation(summary, execution, typed)))
-      case typed: PackageSpec.Snap =>
-        Right(PlanOperation.SnapPackages(PackagePlanOperation(summary, execution, typed)))
+  )(spec: PackageSpec): Either[Vector[ManifestValidationError], PlanOperation] = spec match
+    case typed: PackageSpec.Apt =>
+      Right(PlanOperation.AptPackages(PackagePlanOperation(summary, execution, typed)))
+    case typed: PackageSpec.Pacman =>
+      Right(PlanOperation.PacmanPackages(PackagePlanOperation(summary, execution, typed)))
+    case typed: PackageSpec.Dnf =>
+      Right(PlanOperation.DnfPackages(PackagePlanOperation(summary, execution, typed)))
+    case typed: PackageSpec.Zypper =>
+      Right(PlanOperation.ZypperPackages(PackagePlanOperation(summary, execution, typed)))
+    case typed: PackageSpec.Flatpak =>
+      Right(PlanOperation.FlatpakPackages(PackagePlanOperation(summary, execution, typed)))
+    case typed: PackageSpec.Snap =>
+      Right(PlanOperation.SnapPackages(PackagePlanOperation(summary, execution, typed)))
 
   private def installerOperation(
       summary: PlanOperationSummary,
       execution: PlanEntryExecutionPolicy
-  )(spec: InstallerSpec): Either[Vector[ManifestValidationError], PlanOperation] =
-    spec match
-      case typed: InstallerSpec.BinaryDownloads =>
-        Right(PlanOperation.BinaryDownloads(InstallerPlanOperation(summary, execution, typed)))
-      case typed: InstallerSpec.ShellScripts =>
-        Right(PlanOperation.ShellScripts(InstallerPlanOperation(summary, execution, typed)))
-      case typed: InstallerSpec.NerdFonts =>
-        Right(PlanOperation.NerdFonts(InstallerPlanOperation(summary, execution, typed)))
-      case typed: InstallerSpec.DotfilesApply =>
-        Right(PlanOperation.DotfilesApply(InstallerPlanOperation(summary, execution, typed)))
-      case typed: InstallerSpec.Interrupt =>
-        Right(PlanOperation.Interrupt(InstallerPlanOperation(summary, execution, typed)))
-      case typed: InstallerSpec.Commands =>
-        Right(PlanOperation.Commands(InstallerPlanOperation(summary, execution, typed)))
+  )(spec: InstallerSpec): Either[Vector[ManifestValidationError], PlanOperation] = spec match
+    case typed: InstallerSpec.BinaryDownloads =>
+      Right(PlanOperation.BinaryDownloads(InstallerPlanOperation(summary, execution, typed)))
+    case typed: InstallerSpec.ShellScripts =>
+      Right(PlanOperation.ShellScripts(InstallerPlanOperation(summary, execution, typed)))
+    case typed: InstallerSpec.NerdFonts =>
+      Right(PlanOperation.NerdFonts(InstallerPlanOperation(summary, execution, typed)))
+    case typed: InstallerSpec.DotfilesApply =>
+      Right(PlanOperation.DotfilesApply(InstallerPlanOperation(summary, execution, typed)))
+    case typed: InstallerSpec.Interrupt =>
+      Right(PlanOperation.Interrupt(InstallerPlanOperation(summary, execution, typed)))
+    case typed: InstallerSpec.Commands =>
+      Right(PlanOperation.Commands(InstallerPlanOperation(summary, execution, typed)))
 
 trait PlanOperationInstaller:
+
   def install(operation: PlanOperation, policy: ExecutionPolicy): PlanOperationOutcome =
     operation match
       case PlanOperation.AptPackages(typed)     => installApt(typed, policy)
@@ -314,6 +328,7 @@ final case class DryRunOperationData(
 )
 
 enum DryRunAction:
+
   case Command(
       argv: Vector[String],
       shell: Option[String],
@@ -321,6 +336,7 @@ enum DryRunAction:
       workingDirectory: Option[String],
       stdinFile: Option[String] = None
   )
+
   case FileWrite(path: String, mode: Option[String], description: String)
   case StateWrite(path: String, resumeFrom: Option[InterruptResumeFrom])
   case Message(text: String)
@@ -332,20 +348,23 @@ final case class PlanResult(
     interrupted: Vector[PlanInterrupt],
     remaining: Vector[PlanOperationSummary]
 ):
-  def counts: PlanResultCounts =
-    PlanResultCounts(
-      completed = completed.size,
-      skipped = skipped.size,
-      failed = failed.size,
-      interrupted = interrupted.size,
-      remaining = remaining.size
-    )
+
+  def counts: PlanResultCounts = PlanResultCounts(
+    completed = completed.size,
+    skipped = skipped.size,
+    failed = failed.size,
+    interrupted = interrupted.size,
+    remaining = remaining.size
+  )
 
 object PlanResult:
+
   def fromEvents(events: Vector[PlanEvent], remaining: Vector[PlanOperationSummary]): PlanResult =
     PlanResult(
       completed = events.collect { case PlanEvent.Completed(operation, _, _) => operation },
-      skipped = events.collect { case PlanEvent.Skipped(operation, reasons, _) => PlanSkip(operation, reasons) },
+      skipped = events.collect { case PlanEvent.Skipped(operation, reasons, _) =>
+        PlanSkip(operation, reasons)
+      },
       failed = events.collect { case PlanEvent.Failed(_, failure, _) => failure },
       interrupted = events.collect { case PlanEvent.Interrupted(_, interrupt, _) => interrupt },
       remaining = remaining

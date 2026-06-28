@@ -7,6 +7,7 @@ import scala.concurrent.duration.*
 import utest.*
 
 object CommandContractsTests extends TestSuite:
+
   val tests: Tests = Tests:
     test("preserves direct argv boundaries and execution metadata"):
       val spec = CommandSpec.direct(
@@ -18,7 +19,7 @@ object CommandContractsTests extends TestSuite:
         cwd = Some(Paths.get("/work/tree")),
         env = VectorMap(
           "GIT_ASKPASS" -> CommandEnvironmentValue("/bin/false"),
-          "API_TOKEN" -> CommandEnvironmentValue("secret", Sensitivity.Secret)
+          "API_TOKEN"   -> CommandEnvironmentValue("secret", Sensitivity.Secret)
         ),
         sudo = SudoMode.Required,
         timeout = Some(30.seconds)
@@ -48,7 +49,10 @@ object CommandContractsTests extends TestSuite:
         timeout = Some(5.seconds)
       )
 
-      assert(spec.invocation == CommandInvocation.Shell(CommandArgument("printf '%s\n' \"$TOKEN\""), Vector("/bin/bash", "-lc")))
+      assert(spec.invocation == CommandInvocation.Shell(
+        CommandArgument("printf '%s\n' \"$TOKEN\""),
+        Vector("/bin/bash", "-lc")
+      ))
       assert(spec.cwd == Some(Paths.get("/tmp/initkit")))
       assert(spec.env("TOKEN").value == "secret")
       assert(spec.timeout == Some(5.seconds))
@@ -64,8 +68,9 @@ object CommandContractsTests extends TestSuite:
           CommandArgument("literal-secret", Sensitivity.Sensitive(Some("fixture")))
         ),
         env = VectorMap(
-          "API_TOKEN" -> CommandEnvironmentValue("abc123"),
-          "CONFIG_URL" -> CommandEnvironmentValue("https://example.test/path?password=abc123&plain=yes"),
+          "API_TOKEN"  -> CommandEnvironmentValue("abc123"),
+          "CONFIG_URL" ->
+            CommandEnvironmentValue("https://example.test/path?password=abc123&plain=yes"),
           "PLAIN" -> CommandEnvironmentValue("hello")
         )
       )
@@ -75,7 +80,9 @@ object CommandContractsTests extends TestSuite:
       redacted.invocation match
         case RedactedCommandInvocation.Direct(argv) =>
           assert(argv(0) == "curl")
-          assert(argv(1).contains("https://%5Bredacted%5D@example.test/download?token=[redacted]&plain=yes"))
+          assert(argv(
+            1
+          ).contains("https://%5Bredacted%5D@example.test/download?token=[redacted]&plain=yes"))
           assert(argv(2) == "--password")
           assert(argv(3) == CommandRedactor.Redaction)
           assert(argv(4) == s"api_key=${CommandRedactor.Redaction}")
@@ -94,19 +101,26 @@ object CommandContractsTests extends TestSuite:
         )
         .redacted
 
-      assert(redacted.invocation == RedactedCommandInvocation.Shell(CommandRedactor.Redaction, Vector("/bin/sh", "-c")))
+      assert(redacted.invocation ==
+        RedactedCommandInvocation.Shell(CommandRedactor.Redaction, Vector("/bin/sh", "-c")))
 
     test("fake command executor returns queued results and records calls"):
-      val first = CommandSpec.direct(Vector(CommandArgument("echo"), CommandArgument("one")))
-      val second = CommandSpec.direct(Vector(CommandArgument("echo"), CommandArgument("two")))
+      val first    = CommandSpec.direct(Vector(CommandArgument("echo"), CommandArgument("one")))
+      val second   = CommandSpec.direct(Vector(CommandArgument("echo"), CommandArgument("two")))
       val executor = FakeCommandExecutor(
         Vector(
-          FakeCommandResponse(first, CommandResultData.exited(0, stdout = "one\n", duration = 10.millis)),
-          FakeCommandResponse(second, CommandResultData.exited(2, stderr = "bad\n", duration = 20.millis))
+          FakeCommandResponse(
+            first,
+            CommandResultData.exited(0, stdout = "one\n", duration = 10.millis)
+          ),
+          FakeCommandResponse(
+            second,
+            CommandResultData.exited(2, stderr = "bad\n", duration = 20.millis)
+          )
         )
       )
 
-      val firstResult = executor.run(first)
+      val firstResult  = executor.run(first)
       val secondResult = executor.run(second)
 
       assert(firstResult.succeeded)
@@ -118,7 +132,7 @@ object CommandContractsTests extends TestSuite:
 
     test("fake command executor reports unexpected commands without running the host"):
       val expected = CommandSpec.direct(Vector(CommandArgument("expected")))
-      val actual = CommandSpec.direct(Vector(CommandArgument("actual")))
+      val actual   = CommandSpec.direct(Vector(CommandArgument("actual")))
       val executor = FakeCommandExecutor(
         Vector(FakeCommandResponse(expected, CommandResultData.exited(0, duration = 1.millis)))
       )
@@ -136,7 +150,8 @@ object CommandContractsTests extends TestSuite:
         sudo = SudoMode.Required
       )
       val prepared = CommandSpec.direct(
-        argv = Vector(CommandArgument("sudo"), CommandArgument("apt-get"), CommandArgument("update")),
+        argv =
+          Vector(CommandArgument("sudo"), CommandArgument("apt-get"), CommandArgument("update")),
         sudo = SudoMode.Disabled
       )
       val strategy = FakeSudoStrategy(
@@ -154,5 +169,4 @@ object CommandContractsTests extends TestSuite:
 
       assert(SudoStrategy.Passthrough.prepare(spec) == Right(spec))
 
-  private def fail(message: String): Nothing =
-    throw new java.lang.AssertionError(message)
+  private def fail(message: String): Nothing = throw new java.lang.AssertionError(message)

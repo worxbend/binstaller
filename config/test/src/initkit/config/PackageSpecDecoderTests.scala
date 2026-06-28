@@ -3,6 +3,7 @@ package initkit.config
 import utest.*
 
 object PackageSpecDecoderTests extends TestSuite:
+
   val tests: Tests = Tests:
     test("decodes valid apt package specs"):
       val spec = decodeValidPackageSpec(
@@ -131,8 +132,7 @@ object PackageSpecDecoderTests extends TestSuite:
 
       assertEmptyInstallError(errors, "snap-empty")
 
-  private val emptyInstallSpec: String =
-    """
+  private val emptyInstallSpec: String = """
     install: []
     """
 
@@ -140,20 +140,19 @@ object PackageSpecDecoderTests extends TestSuite:
       name: String,
       kind: String,
       spec: String
-  ): PackageSpec =
-    loadValidatedPackage(name, kind, spec) match
-      case Right(entry) =>
-        PackageSpecDecoder.decode(entry, index = 0) match
-          case Right(spec)  => spec
-          case Left(errors) => fail(s"expected package spec, found ${errors.map(_.message).mkString("; ")}")
-      case Left(errors) => fail(s"expected valid manifest, found ${errors.map(_.message).mkString("; ")}")
+  ): PackageSpec = loadValidatedPackage(name, kind, spec) match
+    case Right(entry) => PackageSpecDecoder.decode(entry, index = 0) match
+        case Right(spec)  => spec
+        case Left(errors) =>
+          fail(s"expected package spec, found ${errors.map(_.message).mkString("; ")}")
+    case Left(errors) =>
+      fail(s"expected valid manifest, found ${errors.map(_.message).mkString("; ")}")
 
   private def validatePackageSpec(
       name: String,
       kind: String,
       spec: String
-  ): Vector[ManifestValidationError] =
-    loadValidatedPackage(name, kind, spec).left.toOption.get
+  ): Vector[ManifestValidationError] = loadValidatedPackage(name, kind, spec).left.toOption.get
 
   private def loadValidatedPackage(
       name: String,
@@ -165,7 +164,7 @@ object PackageSpecDecoderTests extends TestSuite:
       val config = tmp / "config.yaml"
       os.write(config, packageManifest(name, kind, spec))
       ManifestLoader.loadValidated(config.toNIO) match
-        case Right(manifest) => Right(manifest.spec.plan.head)
+        case Right(manifest)                                  => Right(manifest.spec.plan.head)
         case Left(error: ManifestLoadError.ValidationFailure) => Left(error.errors)
         case Left(error) => fail(s"expected validation result, found ${error.message}")
     finally os.remove.all(tmp)
@@ -189,23 +188,22 @@ object PackageSpecDecoderTests extends TestSuite:
   private def assertEmptyInstallError(
       errors: Vector[ManifestValidationError],
       name: String
-  ): Unit =
-    assert(
-      errors.exists(
-        _.message == s"spec.plan[0].spec.install: plan entry '$name' must contain at least one package"
-      )
+  ): Unit = assert(
+    errors.exists(
+      _.message ==
+        s"spec.plan[0].spec.install: plan entry '$name' must contain at least one package"
     )
+  )
 
   private def indent(source: String, spaces: Int): String =
     val padding = " " * spaces
     stripYaml(source).split("\n").map(line => s"$padding$line").mkString("\n")
 
   private def stripYaml(source: String): String =
-    val lines = source.replace("\r\n", "\n").split("\n").toVector
+    val lines        = source.replace("\r\n", "\n").split("\n").toVector
     val contentLines = lines.filter(_.trim.nonEmpty)
-    val indent = contentLines.map(_.takeWhile(_ == ' ').length).minOption.getOrElse(0)
+    val indent       = contentLines.map(_.takeWhile(_ == ' ').length).minOption.getOrElse(0)
 
     lines.map(line => if line.length >= indent then line.drop(indent) else line).mkString("\n").trim
 
-  private def fail(message: String): Nothing =
-    throw new java.lang.AssertionError(message)
+  private def fail(message: String): Nothing = throw new java.lang.AssertionError(message)

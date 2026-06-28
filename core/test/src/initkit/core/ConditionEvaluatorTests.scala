@@ -5,6 +5,7 @@ import initkit.host.HostFacts
 import utest.*
 
 object ConditionEvaluatorTests extends TestSuite:
+
   val tests: Tests = Tests:
     test("matches exact distribution condition"):
       val result = ConditionEvaluator.evaluate(
@@ -46,7 +47,8 @@ object ConditionEvaluatorTests extends TestSuite:
           )
         )
       )
-      assert(result.userFacingSkipReasons == Vector("host distribution is 'fedora', expected one of 'debian', 'ubuntu'"))
+      assert(result.userFacingSkipReasons ==
+        Vector("host distribution is 'fedora', expected one of 'debian', 'ubuntu'"))
 
     test("uses injected host facts for commandExists"):
       val result = ConditionEvaluator.evaluate(
@@ -64,25 +66,25 @@ object ConditionEvaluatorTests extends TestSuite:
 
       assert(!result.matched)
       assert(result.skipReasons == Vector(ConditionSkipReason.MissingCommand("systemctl")))
-      assert(result.userFacingSkipReasons == Vector("required command 'systemctl' is not available"))
+      assert(result.userFacingSkipReasons ==
+        Vector("required command 'systemctl' is not available"))
 
   private def condition(
       family: Option[MatchExpression] = None,
       distribution: Option[MatchExpression] = None,
       commandExists: Option[String] = None
-  ): Condition =
-    Condition(
-      os = Some(
-        OsCondition(
-          family = family,
-          distribution = distribution,
-          version = None,
-          codename = None,
-          architecture = None,
-          desktop = None,
-          raw = RawYaml.MappingValue(scala.collection.immutable.VectorMap.empty)
-        )
-      ),
-      commandExists = commandExists,
-      raw = RawYaml.MappingValue(scala.collection.immutable.VectorMap.empty)
-    )
+  ): Condition = Condition(
+    os = Some(
+      OsCondition(
+        family = family,
+        distribution = distribution,
+        version = None,
+        codename = None,
+        architecture = None,
+        desktop = None,
+        raw = RawYaml.MappingValue(scala.collection.immutable.VectorMap.empty)
+      )
+    ),
+    commandExists = commandExists,
+    raw = RawYaml.MappingValue(scala.collection.immutable.VectorMap.empty)
+  )

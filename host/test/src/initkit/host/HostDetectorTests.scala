@@ -5,6 +5,7 @@ import java.nio.file.{Path, Paths}
 import utest.*
 
 object HostDetectorTests extends TestSuite:
+
   val tests: Tests = Tests:
     test("reads linux distribution fields from os release"):
       val system = FakeHostSystem(
@@ -96,11 +97,8 @@ object HostDetectorTests extends TestSuite:
       executableFiles: Set[Path] = Set.empty,
       pathSeparator: String = ":"
   ) extends HostSystem:
-    override def env(name: String): Option[String] =
-      envVars.get(name)
+    override def env(name: String): Option[String] = envVars.get(name)
 
-    override def readFile(path: Path): Option[String] =
-      files.get(path)
+    override def readFile(path: Path): Option[String] = files.get(path)
 
-    override def isExecutableRegularFile(path: Path): Boolean =
-      executableFiles.contains(path)
+    override def isExecutableRegularFile(path: Path): Boolean = executableFiles.contains(path)

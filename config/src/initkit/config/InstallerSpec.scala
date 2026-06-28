@@ -4,18 +4,21 @@ enum InstallerSpec:
   case BinaryDownloads(items: Vector[BinaryDownloadItem])
   case ShellScripts(items: Vector[ShellScriptItem])
   case NerdFonts(tool: ToolInvocation, config: GeneratedConfig, preview: Option[PreviewInvocation])
+
   case DotfilesApply(
       tool: ToolInvocation,
       repository: GitRepository,
       config: DotfilesConfig,
       preview: Option[PreviewInvocation]
   )
+
   case Interrupt(
       reason: String,
       state: InterruptState,
       instructions: Vector[String],
       exit: InterruptExit
   )
+
   case Commands(items: Vector[CommandItem])
 
 final case class BinaryDownloadItem(

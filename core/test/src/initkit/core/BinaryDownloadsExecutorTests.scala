@@ -15,6 +15,7 @@ import initkit.config.*
 import utest.*
 
 object BinaryDownloadsExecutorTests extends TestSuite:
+
   val tests: Tests = Tests:
     test("plain binary download writes to a temp file before replacing destination"):
       withTempDir: tempDir =>
@@ -22,8 +23,8 @@ object BinaryDownloadsExecutorTests extends TestSuite:
         Files.createDirectories(destination.getParent)
         Files.writeString(destination, "old", StandardCharsets.UTF_8)
 
-        val bytes = "new binary\n".getBytes(StandardCharsets.UTF_8)
-        val item = binaryItem(destination, bytes)
+        val bytes      = "new binary\n".getBytes(StandardCharsets.UTF_8)
+        val item       = binaryItem(destination, bytes)
         val httpClient = RecordingBinaryDownloadHttpClient(Vector(
           RecordingBinaryDownloadResponse.bytes(item.url, bytes)
         ))
@@ -32,7 +33,8 @@ object BinaryDownloadsExecutorTests extends TestSuite:
           binaryDownloadHttpClient = httpClient
         )
 
-        val outcome = installer.install(PlanOperation.BinaryDownloads(operation(Vector(item))), applyPolicy)
+        val outcome =
+          installer.install(PlanOperation.BinaryDownloads(operation(Vector(item))), applyPolicy)
 
         assert(outcome == PlanOperationOutcome.Completed(Vector("installed 1 binary download")))
         assert(Files.readAllBytes(destination).toVector == bytes.toVector)
@@ -46,8 +48,8 @@ object BinaryDownloadsExecutorTests extends TestSuite:
     test("HTTP failures include plan entry and item-level context"):
       withTempDir: tempDir =>
         val destination = tempDir.resolve("tool")
-        val item = binaryItem(destination, "payload".getBytes(StandardCharsets.UTF_8))
-        val httpClient = RecordingBinaryDownloadHttpClient(Vector(
+        val item        = binaryItem(destination, "payload".getBytes(StandardCharsets.UTF_8))
+        val httpClient  = RecordingBinaryDownloadHttpClient(Vector(
           RecordingBinaryDownloadResponse.failure(
             BinaryDownloadHttpError.HttpStatus(item.url, 503, "service unavailable")
           )
@@ -57,7 +59,8 @@ object BinaryDownloadsExecutorTests extends TestSuite:
           binaryDownloadHttpClient = httpClient
         )
 
-        val outcome = installer.install(PlanOperation.BinaryDownloads(operation(Vector(item))), applyPolicy)
+        val outcome =
+          installer.install(PlanOperation.BinaryDownloads(operation(Vector(item))), applyPolicy)
         val failure = outcome match
           case PlanOperationOutcome.Failed(value) => value
           case other                              => fail(s"expected failed outcome, got $other")
@@ -73,8 +76,8 @@ object BinaryDownloadsExecutorTests extends TestSuite:
     test("SHA256 mismatch fails before installation"):
       withTempDir: tempDir =>
         val destination = tempDir.resolve("tool")
-        val bytes = "unexpected content".getBytes(StandardCharsets.UTF_8)
-        val item = binaryItem(destination, bytes).copy(
+        val bytes       = "unexpected content".getBytes(StandardCharsets.UTF_8)
+        val item        = binaryItem(destination, bytes).copy(
           checksum = Some(Checksum(ChecksumAlgorithm.Sha256, "0" * 64))
         )
         val httpClient = RecordingBinaryDownloadHttpClient(Vector(
@@ -85,7 +88,8 @@ object BinaryDownloadsExecutorTests extends TestSuite:
           binaryDownloadHttpClient = httpClient
         )
 
-        val outcome = installer.install(PlanOperation.BinaryDownloads(operation(Vector(item))), applyPolicy)
+        val outcome =
+          installer.install(PlanOperation.BinaryDownloads(operation(Vector(item))), applyPolicy)
         val failure = outcome match
           case PlanOperationOutcome.Failed(value) => value
           case other                              => fail(s"expected failed outcome, got $other")
@@ -98,17 +102,18 @@ object BinaryDownloadsExecutorTests extends TestSuite:
     test("dry-run previews direct downloads without calling HTTP"):
       withTempDir: tempDir =>
         val destination = tempDir.resolve("tool")
-        val item = binaryItem(destination, "payload".getBytes(StandardCharsets.UTF_8))
-        val httpClient = RecordingBinaryDownloadHttpClient(Vector.empty)
-        val installer = new PackageManagerInstallers(
+        val item        = binaryItem(destination, "payload".getBytes(StandardCharsets.UTF_8))
+        val httpClient  = RecordingBinaryDownloadHttpClient(Vector.empty)
+        val installer   = new PackageManagerInstallers(
           FakeCommandExecutor(Vector.empty),
           binaryDownloadHttpClient = httpClient
         )
 
-        val outcome = installer.install(PlanOperation.BinaryDownloads(operation(Vector(item))), dryRunPolicy)
+        val outcome =
+          installer.install(PlanOperation.BinaryDownloads(operation(Vector(item))), dryRunPolicy)
         val dryRun = outcome match
           case PlanOperationOutcome.DryRun(data) => data
-          case other                            => fail(s"expected dry-run outcome, got $other")
+          case other                             => fail(s"expected dry-run outcome, got $other")
 
         assert(httpClient.calls.isEmpty)
         assert(!Files.exists(destination))
@@ -116,16 +121,20 @@ object BinaryDownloadsExecutorTests extends TestSuite:
           DryRunAction.Message(
             s"download binary 'tool' from ${item.url} to ${destination.getParent.resolve(".initkit-tool.download")} with sha256 verification"
           ),
-          DryRunAction.FileWrite(destination.toString, Some("0755"), "install binary download 'tool'")
+          DryRunAction.FileWrite(
+            destination.toString,
+            Some("0755"),
+            "install binary download 'tool'"
+          )
         ))
 
     test("tar.gz archive extraction installs the selected member"):
       withTempDir: tempDir =>
-        val destination = tempDir.resolve("tool")
+        val destination   = tempDir.resolve("tool")
         val selectedBytes = "selected tool\n".getBytes(StandardCharsets.UTF_8)
-        val archiveBytes = tarGz(Vector(
+        val archiveBytes  = tarGz(Vector(
           "docs/readme.txt" -> "readme".getBytes(StandardCharsets.UTF_8),
-          "bin/tool" -> selectedBytes
+          "bin/tool"        -> selectedBytes
         ))
         val item = binaryItem(destination, archiveBytes).copy(
           archive = Some(Archive(ArchiveType.TarGz, "bin/tool", None))
@@ -138,7 +147,8 @@ object BinaryDownloadsExecutorTests extends TestSuite:
           binaryDownloadHttpClient = httpClient
         )
 
-        val outcome = installer.install(PlanOperation.BinaryDownloads(operation(Vector(item))), applyPolicy)
+        val outcome =
+          installer.install(PlanOperation.BinaryDownloads(operation(Vector(item))), applyPolicy)
 
         assert(outcome == PlanOperationOutcome.Completed(Vector("installed 1 binary download")))
         assert(Files.readAllBytes(destination).toVector == selectedBytes.toVector)
@@ -147,11 +157,11 @@ object BinaryDownloadsExecutorTests extends TestSuite:
 
     test("stripComponents is applied before selecting archive members"):
       withTempDir: tempDir =>
-        val destination = tempDir.resolve("tool")
-        val wrongBytes = "wrong\n".getBytes(StandardCharsets.UTF_8)
+        val destination   = tempDir.resolve("tool")
+        val wrongBytes    = "wrong\n".getBytes(StandardCharsets.UTF_8)
         val selectedBytes = "selected\n".getBytes(StandardCharsets.UTF_8)
-        val archiveBytes = tarGz(Vector(
-          "nested/tool" -> wrongBytes,
+        val archiveBytes  = tarGz(Vector(
+          "nested/tool"      -> wrongBytes,
           "root/nested/tool" -> selectedBytes
         ))
         val item = binaryItem(destination, archiveBytes).copy(
@@ -165,7 +175,8 @@ object BinaryDownloadsExecutorTests extends TestSuite:
           binaryDownloadHttpClient = httpClient
         )
 
-        val outcome = installer.install(PlanOperation.BinaryDownloads(operation(Vector(item))), applyPolicy)
+        val outcome =
+          installer.install(PlanOperation.BinaryDownloads(operation(Vector(item))), applyPolicy)
 
         assert(outcome == PlanOperationOutcome.Completed(Vector("installed 1 binary download")))
         assert(Files.readAllBytes(destination).toVector == selectedBytes.toVector)
@@ -173,19 +184,27 @@ object BinaryDownloadsExecutorTests extends TestSuite:
     test("parallel binary downloads honor maxConcurrency"):
       withTempDir: tempDir =>
         val items = (1 to 6).toVector.map: index =>
-          binaryItem(tempDir.resolve(s"tool-$index"), s"payload-$index".getBytes(StandardCharsets.UTF_8)).copy(
+          binaryItem(
+            tempDir.resolve(s"tool-$index"),
+            s"payload-$index".getBytes(StandardCharsets.UTF_8)
+          ).copy(
             name = s"tool-$index",
             url = s"https://example.test/tool-$index"
           )
         val httpClient = ConcurrentBinaryDownloadHttpClient.successful(delayMillis = 75)
-        val installer = new PackageManagerInstallers(
+        val installer  = new PackageManagerInstallers(
           FakeCommandExecutor(Vector.empty),
           binaryDownloadHttpClient = httpClient
         )
 
         val outcome = installer.install(
           PlanOperation.BinaryDownloads(
-            operation(items, mode = PlanEntryExecutionMode.Parallel, maxConcurrency = 2, failFast = false)
+            operation(
+              items,
+              mode = PlanEntryExecutionMode.Parallel,
+              maxConcurrency = 2,
+              failFast = false
+            )
           ),
           applyPolicy
         )
@@ -197,19 +216,27 @@ object BinaryDownloadsExecutorTests extends TestSuite:
     test("parallel failFast stops remaining downloads when feasible"):
       withTempDir: tempDir =>
         val items = (1 to 12).toVector.map: index =>
-          binaryItem(tempDir.resolve(s"tool-$index"), s"payload-$index".getBytes(StandardCharsets.UTF_8)).copy(
+          binaryItem(
+            tempDir.resolve(s"tool-$index"),
+            s"payload-$index".getBytes(StandardCharsets.UTF_8)
+          ).copy(
             name = s"tool-$index",
             url = s"https://example.test/tool-$index"
           )
         val httpClient = ConcurrentBinaryDownloadHttpClient.failFirst(delayMillis = 250)
-        val installer = new PackageManagerInstallers(
+        val installer  = new PackageManagerInstallers(
           FakeCommandExecutor(Vector.empty),
           binaryDownloadHttpClient = httpClient
         )
 
         val outcome = installer.install(
           PlanOperation.BinaryDownloads(
-            operation(items, mode = PlanEntryExecutionMode.Parallel, maxConcurrency = 2, failFast = true)
+            operation(
+              items,
+              mode = PlanEntryExecutionMode.Parallel,
+              maxConcurrency = 2,
+              failFast = true
+            )
           ),
           applyPolicy
         )
@@ -220,38 +247,35 @@ object BinaryDownloadsExecutorTests extends TestSuite:
         assert(failure.message.contains("tool-1 download failed"))
         assert(httpClient.calls.size < items.size)
 
-  private val dryRunPolicy: ExecutionPolicy =
-    ExecutionPolicy(
-      mode = ExecutionRunMode.DryRun,
-      continueOnError = false,
-      requireSudo = true,
-      reboot = RebootExecutionPolicy(allowed = false, prompt = true)
-    )
+  private val dryRunPolicy: ExecutionPolicy = ExecutionPolicy(
+    mode = ExecutionRunMode.DryRun,
+    continueOnError = false,
+    requireSudo = true,
+    reboot = RebootExecutionPolicy(allowed = false, prompt = true)
+  )
 
-  private val applyPolicy: ExecutionPolicy =
-    dryRunPolicy.copy(mode = ExecutionRunMode.Apply)
+  private val applyPolicy: ExecutionPolicy = dryRunPolicy.copy(mode = ExecutionRunMode.Apply)
 
   private def operation(
       items: Vector[BinaryDownloadItem],
       mode: PlanEntryExecutionMode = PlanEntryExecutionMode.Sequential,
       maxConcurrency: Int = 1,
       failFast: Boolean = true
-  ): InstallerPlanOperation[InstallerSpec.BinaryDownloads] =
-    InstallerPlanOperation(
-      summary = PlanOperationSummary(
-        index = 3,
-        name = "direct-binaries",
-        kind = "binary-downloads",
-        description = Some("Download standalone binaries and place them on PATH.")
-      ),
-      execution = PlanEntryExecutionPolicy(
-        mode = mode,
-        maxConcurrency = maxConcurrency,
-        failFast = failFast,
-        locks = Vector.empty
-      ),
-      spec = InstallerSpec.BinaryDownloads(items)
-    )
+  ): InstallerPlanOperation[InstallerSpec.BinaryDownloads] = InstallerPlanOperation(
+    summary = PlanOperationSummary(
+      index = 3,
+      name = "direct-binaries",
+      kind = "binary-downloads",
+      description = Some("Download standalone binaries and place them on PATH.")
+    ),
+    execution = PlanEntryExecutionPolicy(
+      mode = mode,
+      maxConcurrency = maxConcurrency,
+      failFast = failFast,
+      locks = Vector.empty
+    ),
+    spec = InstallerSpec.BinaryDownloads(items)
+  )
 
   private def binaryItem(destination: Path, bytes: Array[Byte]): BinaryDownloadItem =
     BinaryDownloadItem(
@@ -263,16 +287,15 @@ object BinaryDownloadsExecutorTests extends TestSuite:
       archive = None
     )
 
-  private def sha256Hex(bytes: Array[Byte]): String =
-    MessageDigest
-      .getInstance("SHA-256")
-      .digest(bytes)
-      .map(byte => f"${byte & 0xff}%02x")
-      .mkString
+  private def sha256Hex(bytes: Array[Byte]): String = MessageDigest
+    .getInstance("SHA-256")
+    .digest(bytes)
+    .map(byte => f"${byte & 0xff}%02x")
+    .mkString
 
   private def tarGz(entries: Vector[(String, Array[Byte])]): Array[Byte] =
     val bytes = ByteArrayOutputStream()
-    val gzip = GZIPOutputStream(bytes)
+    val gzip  = GZIPOutputStream(bytes)
     try
       entries.foreach { case (name, content) => writeTarEntry(gzip, name, content) }
       gzip.write(Array.fill[Byte](1024)(0))
@@ -315,15 +338,13 @@ object BinaryDownloadsExecutorTests extends TestSuite:
     try test(path)
     finally deleteRecursively(path)
 
-  private def deleteRecursively(path: Path): Unit =
-    if Files.exists(path) then
-      Files
-        .walk(path)
-        .sorted(Comparator.reverseOrder())
-        .forEach(Files.deleteIfExists)
+  private def deleteRecursively(path: Path): Unit = if Files.exists(path) then
+    Files
+      .walk(path)
+      .sorted(Comparator.reverseOrder())
+      .forEach(Files.deleteIfExists)
 
-  private def fail(message: String): Nothing =
-    throw new java.lang.AssertionError(message)
+  private def fail(message: String): Nothing = throw new java.lang.AssertionError(message)
 
 private final case class BinaryDownloadCall(
     url: String,
@@ -336,6 +357,7 @@ private enum RecordingBinaryDownloadResponse:
   case Failure(error: BinaryDownloadHttpError)
 
 private object RecordingBinaryDownloadResponse:
+
   def bytes(url: String, bytes: Array[Byte]): RecordingBinaryDownloadResponse =
     RecordingBinaryDownloadResponse.Bytes(url, bytes)
 
@@ -345,21 +367,28 @@ private object RecordingBinaryDownloadResponse:
 private final class RecordingBinaryDownloadHttpClient(
     responses: Vector[RecordingBinaryDownloadResponse]
 ) extends BinaryDownloadHttpClient:
-  private val stateRef = AtomicReference(RecordingBinaryDownloadHttpClientState(responses, Vector.empty))
 
-  def calls: Vector[BinaryDownloadCall] =
-    stateRef.get().calls
+  private val stateRef =
+    AtomicReference(RecordingBinaryDownloadHttpClientState(responses, Vector.empty))
+
+  def calls: Vector[BinaryDownloadCall] = stateRef.get().calls
 
   override def download(
       url: String,
       destination: Path,
       config: BinaryDownloadHttpConfig
   ): Either[BinaryDownloadHttpError, BinaryDownloadHttpResponse] =
-    val state = stateRef.get()
+    val state    = stateRef.get()
     val response = state.pending.headOption.getOrElse:
-      RecordingBinaryDownloadResponse.Failure(BinaryDownloadHttpError.Transport(url, "no fake response configured"))
+      RecordingBinaryDownloadResponse.Failure(BinaryDownloadHttpError.Transport(
+        url,
+        "no fake response configured"
+      ))
 
-    stateRef.set(state.copy(pending = state.pending.drop(1), calls = state.calls :+ BinaryDownloadCall(url, destination, config)))
+    stateRef.set(state.copy(
+      pending = state.pending.drop(1),
+      calls = state.calls :+ BinaryDownloadCall(url, destination, config)
+    ))
 
     response match
       case RecordingBinaryDownloadResponse.Bytes(expectedUrl, bytes) if expectedUrl == url =>
@@ -367,8 +396,7 @@ private final class RecordingBinaryDownloadHttpClient(
         Right(BinaryDownloadHttpResponse(200, Some(bytes.length.toLong)))
       case RecordingBinaryDownloadResponse.Bytes(expectedUrl, _) =>
         Left(BinaryDownloadHttpError.Transport(url, s"unexpected URL: expected $expectedUrl"))
-      case RecordingBinaryDownloadResponse.Failure(error) =>
-        Left(error)
+      case RecordingBinaryDownloadResponse.Failure(error) => Left(error)
 
 private final case class RecordingBinaryDownloadHttpClientState(
     pending: Vector[RecordingBinaryDownloadResponse],
@@ -379,15 +407,14 @@ private final class ConcurrentBinaryDownloadHttpClient private (
     delayMillis: Long,
     failFirstCall: Boolean
 ) extends BinaryDownloadHttpClient:
-  private val callsQueue = ConcurrentLinkedQueue[BinaryDownloadCall]()
-  private val activeCount = AtomicInteger(0)
+  private val callsQueue       = ConcurrentLinkedQueue[BinaryDownloadCall]()
+  private val activeCount      = AtomicInteger(0)
   private val maxObservedCount = AtomicInteger(0)
 
   def calls: Vector[BinaryDownloadCall] =
     callsQueue.toArray.toVector.map(_.asInstanceOf[BinaryDownloadCall])
 
-  def maxObserved: Int =
-    maxObservedCount.get()
+  def maxObserved: Int = maxObservedCount.get()
 
   override def download(
       url: String,
@@ -402,9 +429,8 @@ private final class ConcurrentBinaryDownloadHttpClient private (
         Left(BinaryDownloadHttpError.Transport(url, "planned failure"))
       else
         sleep(url) match
-          case Left(error) =>
-            Left(error)
-          case Right(()) =>
+          case Left(error) => Left(error)
+          case Right(())   =>
             val bytes = payloadFor(url)
             Files.write(destination, bytes)
             Right(BinaryDownloadHttpResponse(200, Some(bytes.length.toLong)))
@@ -429,6 +455,7 @@ private final class ConcurrentBinaryDownloadHttpClient private (
     name.replace("tool-", "payload-").getBytes(StandardCharsets.UTF_8)
 
 private object ConcurrentBinaryDownloadHttpClient:
+
   def successful(delayMillis: Long): ConcurrentBinaryDownloadHttpClient =
     new ConcurrentBinaryDownloadHttpClient(delayMillis, failFirstCall = false)
 

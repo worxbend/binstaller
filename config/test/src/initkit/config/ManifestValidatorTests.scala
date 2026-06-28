@@ -3,6 +3,7 @@ package initkit.config
 import utest.*
 
 object ManifestValidatorTests extends TestSuite:
+
   val tests: Tests = Tests:
     test("validates the example manifest"):
       val result = ManifestLoader.loadValidated(ManifestLoaderTests.exampleConfigPath)
@@ -24,7 +25,9 @@ object ManifestValidatorTests extends TestSuite:
         """
       )
 
-      assert(errors.exists(_.message.contains("apiVersion: unsupported apiVersion 'initkit.io/v1beta1'")))
+      assert(
+        errors.exists(_.message.contains("apiVersion: unsupported apiVersion 'initkit.io/v1beta1'"))
+      )
       assert(errors.exists(_.message.contains("kind: unsupported kind 'OtherProfile'")))
 
     test("reports missing and duplicate plan names with plan entry context"):
@@ -71,9 +74,15 @@ object ManifestValidatorTests extends TestSuite:
         """
       )
 
-      assert(errors.exists(_.message.contains("spec.plan[0].kind: unsupported plan kind 'custom-installer'")))
-      assert(errors.exists(_.message.contains("spec.plan[0].execution.mode: unsupported execution mode 'sideways'")))
-      assert(errors.exists(_.message.contains("spec.plan[0].execution.maxConcurrency: must be at least 1")))
+      assert(errors.exists(
+        _.message.contains("spec.plan[0].kind: unsupported plan kind 'custom-installer'")
+      ))
+      assert(errors.exists(
+        _.message.contains("spec.plan[0].execution.mode: unsupported execution mode 'sideways'")
+      ))
+      assert(errors.exists(
+        _.message.contains("spec.plan[0].execution.maxConcurrency: must be at least 1")
+      ))
 
     test("rejects sequential max concurrency greater than one"):
       val errors = validateYaml(
@@ -131,7 +140,8 @@ object ManifestValidatorTests extends TestSuite:
       )
 
       assert(
-        errors.exists(_.message == "spec.plan[0].spec.install: plan entry 'base' must contain at least one package")
+        errors.exists(_.message ==
+          "spec.plan[0].spec.install: plan entry 'base' must contain at least one package")
       )
 
     test("rejects unsupported checksum algorithms"):
@@ -154,7 +164,8 @@ object ManifestValidatorTests extends TestSuite:
 
       assert(
         errors.exists(
-          _.message == "spec.plan[0].spec.items[0].checksum.algorithm: unsupported checksum algorithm 'md5'"
+          _.message ==
+            "spec.plan[0].spec.items[0].checksum.algorithm: unsupported checksum algorithm 'md5'"
         )
       )
 
@@ -180,8 +191,10 @@ object ManifestValidatorTests extends TestSuite:
 
         val errors = loadValidated(config).left.toOption.get
 
-        assert(errors.exists(_.message == "spec.plan[0].spec.state.format: unsupported state format 'yaml'"))
-        assert(errors.exists(_.message == "spec.plan[0].spec.state.path: must not point to the manifest file"))
+        assert(errors.exists(_.message ==
+          "spec.plan[0].spec.state.format: unsupported state format 'yaml'"))
+        assert(errors.exists(_.message ==
+          "spec.plan[0].spec.state.path: must not point to the manifest file"))
       finally os.remove.all(tmp)
 
     test("reports multiple obvious validation errors in one pass"):
@@ -206,11 +219,17 @@ object ManifestValidatorTests extends TestSuite:
       assert(errors.size >= 5)
       assert(errors.exists(_.message.contains("apiVersion: unsupported apiVersion 'wrong'")))
       assert(errors.exists(_.message.contains("kind: unsupported kind 'Wrong'")))
-      assert(errors.exists(_.message.contains("spec.plan[0].kind: unsupported plan kind 'unknown-kind'")))
-      assert(errors.exists(_.message.contains("spec.plan[1].name: duplicate plan name 'duplicate'")))
+      assert(
+        errors.exists(_.message.contains("spec.plan[0].kind: unsupported plan kind 'unknown-kind'"))
+      )
+      assert(
+        errors.exists(_.message.contains("spec.plan[1].name: duplicate plan name 'duplicate'"))
+      )
       assert(
         errors.exists(
-          _.message.contains("spec.plan[1].spec.install: plan entry 'duplicate' must contain at least one package")
+          _.message.contains(
+            "spec.plan[1].spec.install: plan entry 'duplicate' must contain at least one package"
+          )
         )
       )
 
@@ -227,16 +246,15 @@ object ManifestValidatorTests extends TestSuite:
 
   private def loadValidated(config: os.Path): Either[Vector[ManifestValidationError], Manifest] =
     ManifestLoader.loadValidated(config.toNIO) match
-      case Right(manifest) => Right(manifest)
+      case Right(manifest)                                  => Right(manifest)
       case Left(error: ManifestLoadError.ValidationFailure) => Left(error.errors)
       case Left(error) => fail(s"expected validation result, found ${error.message}")
 
   private def stripYaml(source: String): String =
-    val lines = source.replace("\r\n", "\n").split("\n").toVector
+    val lines        = source.replace("\r\n", "\n").split("\n").toVector
     val contentLines = lines.filter(_.trim.nonEmpty)
-    val indent = contentLines.map(_.takeWhile(_ == ' ').length).minOption.getOrElse(0)
+    val indent       = contentLines.map(_.takeWhile(_ == ' ').length).minOption.getOrElse(0)
 
     lines.map(line => if line.length >= indent then line.drop(indent) else line).mkString("\n").trim
 
-  private def fail(message: String): Nothing =
-    throw new java.lang.AssertionError(message)
+  private def fail(message: String): Nothing = throw new java.lang.AssertionError(message)

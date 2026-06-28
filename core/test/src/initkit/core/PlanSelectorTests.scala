@@ -6,6 +6,7 @@ import scala.collection.immutable.VectorMap
 import utest.*
 
 object PlanSelectorTests extends TestSuite:
+
   val tests: Tests = Tests:
     test("only matches entries by name or kind"):
       val selection = PlanSelector.select(
@@ -55,8 +56,16 @@ object PlanSelectorTests extends TestSuite:
     test("condition and completed skips remain reportable"):
       val selection = PlanSelector.select(
         Vector(
-          entry("ubuntu-tools", "apt-packages", distribution = Some(MatchExpression.Exact("ubuntu"))),
-          entry("fedora-tools", "dnf-packages", distribution = Some(MatchExpression.Exact("fedora"))),
+          entry(
+            "ubuntu-tools",
+            "apt-packages",
+            distribution = Some(MatchExpression.Exact("ubuntu"))
+          ),
+          entry(
+            "fedora-tools",
+            "dnf-packages",
+            distribution = Some(MatchExpression.Exact("fedora"))
+          ),
           entry("finished", "commands")
         ),
         PlanSelectionRequest.fromFilters(
@@ -111,31 +120,34 @@ object PlanSelectorTests extends TestSuite:
       name: String,
       kind: String,
       distribution: Option[MatchExpression] = None
-  ): PlanEntry =
-    PlanEntry(
-      name = Some(name),
-      kind = Some(kind),
-      description = None,
-      execution = Some(
-        Execution(mode = Some("sequential"), maxConcurrency = None, failFast = None, locks = Vector.empty)
-      ),
-      when = distribution.map(condition),
-      spec = Some(RawYaml.MappingValue(VectorMap.empty))
-    )
+  ): PlanEntry = PlanEntry(
+    name = Some(name),
+    kind = Some(kind),
+    description = None,
+    execution = Some(
+      Execution(
+        mode = Some("sequential"),
+        maxConcurrency = None,
+        failFast = None,
+        locks = Vector.empty
+      )
+    ),
+    when = distribution.map(condition),
+    spec = Some(RawYaml.MappingValue(VectorMap.empty))
+  )
 
-  private def condition(distribution: MatchExpression): Condition =
-    Condition(
-      os = Some(
-        OsCondition(
-          family = None,
-          distribution = Some(distribution),
-          version = None,
-          codename = None,
-          architecture = None,
-          desktop = None,
-          raw = RawYaml.MappingValue(VectorMap.empty)
-        )
-      ),
-      commandExists = None,
-      raw = RawYaml.MappingValue(VectorMap.empty)
-    )
+  private def condition(distribution: MatchExpression): Condition = Condition(
+    os = Some(
+      OsCondition(
+        family = None,
+        distribution = Some(distribution),
+        version = None,
+        codename = None,
+        architecture = None,
+        desktop = None,
+        raw = RawYaml.MappingValue(VectorMap.empty)
+      )
+    ),
+    commandExists = None,
+    raw = RawYaml.MappingValue(VectorMap.empty)
+  )

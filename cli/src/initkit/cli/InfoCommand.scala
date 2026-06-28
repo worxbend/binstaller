@@ -37,5 +37,4 @@ final class InfoCommand extends Callable[Int]:
 
     0
 
-  private def commandOut: PrintWriter =
-    spec.commandLine().getOut()
+  private def commandOut: PrintWriter = spec.commandLine().getOut()

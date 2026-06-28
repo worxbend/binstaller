@@ -9,9 +9,9 @@ final case class Metadata(
 )
 
 object Metadata:
-  val empty: Metadata =
-    Metadata(
-      name = None,
-      labels = VectorMap.empty,
-      annotations = VectorMap.empty
-    )
+
+  val empty: Metadata = Metadata(
+    name = None,
+    labels = VectorMap.empty,
+    annotations = VectorMap.empty
+  )

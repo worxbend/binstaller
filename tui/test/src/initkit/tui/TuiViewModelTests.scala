@@ -10,8 +10,7 @@ import initkit.host.HostFacts
 import utest.*
 
 object TuiViewModelTests extends TestSuite:
-  private val clock: Clock =
-    Clock.fixed(Instant.parse("2026-06-28T12:00:00Z"), ZoneOffset.UTC)
+  private val clock: Clock = Clock.fixed(Instant.parse("2026-06-28T12:00:00Z"), ZoneOffset.UTC)
 
   val tests: Tests = Tests:
     test("builds ordered rows with profile host state and all statuses"):
@@ -47,8 +46,8 @@ object TuiViewModelTests extends TestSuite:
 
     test("includes condition skip reasons and interrupt markers"):
       val viewModel = buildViewModel()
-      val skipped = viewModel.rows(1)
-      val pause = viewModel.rows(3)
+      val skipped   = viewModel.rows(1)
+      val pause     = viewModel.rows(3)
 
       assert(skipped.reasons == Vector("host distribution is 'ubuntu', expected 'fedora'"))
       assert(pause.interrupt.contains(
@@ -83,7 +82,7 @@ object TuiViewModelTests extends TestSuite:
 
     test("focused toggle changes selectable row selection only"):
       val toggledRunnable = buildViewModel().toggleFocused
-      val focusedSkipped = buildViewModel().copy(focusedIndex = Some(1)).toggleFocused
+      val focusedSkipped  = buildViewModel().copy(focusedIndex = Some(1)).toggleFocused
 
       assert(!toggledRunnable.rows.head.selected)
       assert(toggledRunnable.counts.selected == 0)
@@ -92,7 +91,7 @@ object TuiViewModelTests extends TestSuite:
 
     test("focus movement updates focused row without changing selection"):
       val moved = buildViewModel().moveFocus(2)
-      val last = moved.focusLast
+      val last  = moved.focusLast
       val first = last.focusFirst
 
       assert(moved.focusedRow.map(_.name) == Some("completed"))
@@ -102,7 +101,8 @@ object TuiViewModelTests extends TestSuite:
 
     test("select all runnable selects every selectable row"):
       val viewModel = buildViewModel(
-        selection = TuiSelectionInputs.fromOptions(select = Vector("does-not-match"), skip = Vector.empty)
+        selection =
+          TuiSelectionInputs.fromOptions(select = Vector("does-not-match"), skip = Vector.empty)
       )
 
       val selected = viewModel.selectAllRunnable
@@ -114,22 +114,26 @@ object TuiViewModelTests extends TestSuite:
 
     test("text layout renders ASCII checklist markers and disabled reasons"):
       val viewModel = buildViewModel()
-      val lines = TuiTextLayout.checklistLines(viewModel)
+      val lines     = TuiTextLayout.checklistLines(viewModel)
       val textLines = lines.map(_.text)
 
       assert(textLines.exists(_.contains("> [x] run runnable (commands)")))
       assert(textLines.exists(_.contains("[-] skip fedora-only (commands) disabled")))
-      assert(textLines.exists(_.contains("reason: host distribution is 'ubuntu', expected 'fedora'")))
+      assert(
+        textLines.exists(_.contains("reason: host distribution is 'ubuntu', expected 'fedora'"))
+      )
       assert(textLines.exists(_.contains("[=] done completed (commands) disabled")))
       assert(TuiTextLayout.statusLine(viewModel).contains("developer-workstation"))
       assert(TuiTextLayout.detailsLines(viewModel).exists(_.contains("selected: yes")))
-      assert(TuiTextLayout.outputLines(viewModel).exists(_.contains("ready: 1 selected runnable entries")))
+      assert(TuiTextLayout.outputLines(
+        viewModel
+      ).exists(_.contains("ready: 1 selected runnable entries")))
 
   private def buildViewModel(
       selection: TuiSelectionInputs = TuiSelectionInputs()
   ): TuiViewModel =
     val manifest = workstationManifest()
-    val state = stateWithStatuses(manifest)
+    val state    = stateWithStatuses(manifest)
 
     TuiViewModel.from(
       TuiViewModelRequest(
@@ -150,7 +154,11 @@ object TuiViewModelTests extends TestSuite:
     val started = ExecutionState.markStarted(
       ExecutionState.markFailed(
         ExecutionState.markInterrupted(
-          ExecutionState.markCompleted(ExecutionState.initial(manifest, clock), "completed", clock.instant()),
+          ExecutionState.markCompleted(
+            ExecutionState.initial(manifest, clock),
+            "completed",
+            clock.instant()
+          ),
           "pause",
           "restart the shell",
           Some(InterruptResumeFrom.Current),
@@ -168,96 +176,108 @@ object TuiViewModelTests extends TestSuite:
     assert(started.entries.exists(entry => entry.status == PlanEntryStatus.Running))
     started
 
-  private def workstationManifest(): Manifest =
-    Manifest(
-      apiVersion = Some("initkit.io/v1alpha1"),
-      kind = Some("WorkstationProfile"),
-      metadata = Metadata(Some("developer-workstation"), VectorMap.empty, VectorMap.empty),
-      spec = ManifestSpec(
-        target = Some(
-          Target(
-            Some(
-              TargetOs(
-                family = Some("linux"),
-                distribution = Some("ubuntu"),
-                version = Some("24.04"),
-                codename = Some("noble"),
-                architecture = Some("amd64"),
-                desktop = None
-              )
+  private def workstationManifest(): Manifest = Manifest(
+    apiVersion = Some("initkit.io/v1alpha1"),
+    kind = Some("WorkstationProfile"),
+    metadata = Metadata(Some("developer-workstation"), VectorMap.empty, VectorMap.empty),
+    spec = ManifestSpec(
+      target = Some(
+        Target(
+          Some(
+            TargetOs(
+              family = Some("linux"),
+              distribution = Some("ubuntu"),
+              version = Some("24.04"),
+              codename = Some("noble"),
+              architecture = Some("amd64"),
+              desktop = None
             )
           )
-        ),
-        policy = Some(Policy(dryRun = Some(true), continueOnError = None, requireSudo = None, reboot = None)),
-        vars = VectorMap.empty,
-        sources = None,
-        plan = Vector(
-          entry("runnable", "commands"),
-          entry("fedora-only", "commands", distribution = Some(MatchExpression.Exact("fedora"))),
-          entry("completed", "commands"),
-          interruptEntry("pause"),
-          entry("failed", "commands"),
-          entry("running", "commands")
         )
+      ),
+      policy = Some(Policy(
+        dryRun = Some(true),
+        continueOnError = None,
+        requireSudo = None,
+        reboot = None
+      )),
+      vars = VectorMap.empty,
+      sources = None,
+      plan = Vector(
+        entry("runnable", "commands"),
+        entry("fedora-only", "commands", distribution = Some(MatchExpression.Exact("fedora"))),
+        entry("completed", "commands"),
+        interruptEntry("pause"),
+        entry("failed", "commands"),
+        entry("running", "commands")
       )
     )
+  )
 
   private def entry(
       name: String,
       kind: String,
       distribution: Option[MatchExpression] = None
-  ): PlanEntry =
-    PlanEntry(
-      name = Some(name),
-      kind = Some(kind),
-      description = Some(s"$name description"),
-      execution = Some(Execution(Some("sequential"), maxConcurrency = None, failFast = None, locks = Vector.empty)),
-      when = distribution.map(condition),
-      spec = Some(RawYaml.MappingValue(VectorMap.empty))
-    )
+  ): PlanEntry = PlanEntry(
+    name = Some(name),
+    kind = Some(kind),
+    description = Some(s"$name description"),
+    execution = Some(Execution(
+      Some("sequential"),
+      maxConcurrency = None,
+      failFast = None,
+      locks = Vector.empty
+    )),
+    when = distribution.map(condition),
+    spec = Some(RawYaml.MappingValue(VectorMap.empty))
+  )
 
-  private def interruptEntry(name: String): PlanEntry =
-    PlanEntry(
-      name = Some(name),
-      kind = Some("interrupt"),
-      description = Some("pause for shell restart"),
-      execution = Some(Execution(Some("sequential"), maxConcurrency = None, failFast = None, locks = Vector.empty)),
-      when = None,
-      spec = Some(
-        RawYaml.MappingValue(
-          VectorMap(
-            "reason" -> RawYaml.StringValue("restart the shell"),
-            "state" -> RawYaml.MappingValue(
-              VectorMap(
-                "path" -> RawYaml.StringValue("/tmp/initkit.state.json"),
-                "format" -> RawYaml.StringValue("json"),
-                "resumeFrom" -> RawYaml.StringValue("next")
-              )
-            ),
-            "instructions" -> RawYaml.SequenceValue(Vector(RawYaml.StringValue("Open a new terminal."))),
-            "exit" -> RawYaml.MappingValue(
-              VectorMap(
-                "code" -> RawYaml.IntegerValue(75)
-              )
+  private def interruptEntry(name: String): PlanEntry = PlanEntry(
+    name = Some(name),
+    kind = Some("interrupt"),
+    description = Some("pause for shell restart"),
+    execution = Some(Execution(
+      Some("sequential"),
+      maxConcurrency = None,
+      failFast = None,
+      locks = Vector.empty
+    )),
+    when = None,
+    spec = Some(
+      RawYaml.MappingValue(
+        VectorMap(
+          "reason" -> RawYaml.StringValue("restart the shell"),
+          "state"  -> RawYaml.MappingValue(
+            VectorMap(
+              "path"       -> RawYaml.StringValue("/tmp/initkit.state.json"),
+              "format"     -> RawYaml.StringValue("json"),
+              "resumeFrom" -> RawYaml.StringValue("next")
+            )
+          ),
+          "instructions" ->
+            RawYaml.SequenceValue(Vector(RawYaml.StringValue("Open a new terminal."))),
+          "exit" -> RawYaml.MappingValue(
+            VectorMap(
+              "code" -> RawYaml.IntegerValue(75)
             )
           )
         )
       )
     )
+  )
 
-  private def condition(distribution: MatchExpression): Condition =
-    Condition(
-      os = Some(
-        OsCondition(
-          family = None,
-          distribution = Some(distribution),
-          version = None,
-          codename = None,
-          architecture = None,
-          desktop = None,
-          raw = RawYaml.MappingValue(VectorMap.empty)
-        )
-      ),
-      commandExists = None,
-      raw = RawYaml.MappingValue(VectorMap.empty)
-    )
+  private def condition(distribution: MatchExpression): Condition = Condition(
+    os = Some(
+      OsCondition(
+        family = None,
+        distribution = Some(distribution),
+        version = None,
+        codename = None,
+        architecture = None,
+        desktop = None,
+        raw = RawYaml.MappingValue(VectorMap.empty)
+      )
+    ),
+    commandExists = None,
+    raw = RawYaml.MappingValue(VectorMap.empty)
+  )
