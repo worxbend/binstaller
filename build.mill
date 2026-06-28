@@ -29,14 +29,10 @@ object cli extends InitkitScalaModule:
     def mvnDeps = Seq(mvn"com.lihaoyi::utest:0.9.5")
     def testFramework = "utest.runner.Framework"
 
-object app extends InitkitScalaModule:
-  def moduleDeps = Seq(cli)
-
+object config extends InitkitScalaModule:
   def mvnDeps = Seq(
     mvn"org.snakeyaml:snakeyaml-engine:3.0.1"
   )
-
-  def mainClass = Some("initkit.Main")
 
   object test extends ScalaTests:
     def mvnDeps = Seq(
@@ -45,3 +41,8 @@ object app extends InitkitScalaModule:
     )
 
     def testFramework = "utest.runner.Framework"
+
+object app extends InitkitScalaModule:
+  def moduleDeps = Seq(cli)
+
+  def mainClass = Some("initkit.Main")

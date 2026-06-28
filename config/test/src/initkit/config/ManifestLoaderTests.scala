@@ -56,9 +56,13 @@ object ManifestLoaderTests extends TestSuite:
         val result = ManifestLoader.load(config.toNIO)
 
         assert(result.isLeft)
-        val message = result.left.toOption.get.message
-        assert(message.contains(config.toNIO.toAbsolutePath.normalize.toString))
-        assert(message.contains("while parsing"))
+        result.left.toOption.get match
+          case error: ManifestLoadError.ParseFailure =>
+            val message = error.message
+            assert(message.contains(config.toNIO.toAbsolutePath.normalize.toString))
+            assert(message.contains("while parsing"))
+            assert(!message.contains("\tat "))
+          case other => fail(s"expected parse failure, found $other")
       finally os.remove.all(tmp)
 
   private def loadExample(): Manifest =

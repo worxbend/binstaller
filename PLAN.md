@@ -108,13 +108,14 @@ non-stacktrace errors for missing config paths. Focused CLI tests were added,
 but Mill validation still cannot reach compilation in this sandbox because
 coursier downloads fail with `java.net.SocketException: Operation not permitted`.
 
-Progress note, 2026-06-28: T003 added `initkit.config` manifest models and a
-SnakeYAML Engine loader for top-level manifest metadata, policy, target,
-sources, plan entries, execution settings, conditions, and raw kind-specific
-plan specs. `config.example.yaml` coverage was added through focused loader
-tests, including path-aware YAML parse errors. Mill validation still cannot
-reach source compilation in this sandbox because coursier downloads fail with
-`java.net.SocketException: Operation not permitted`.
+Progress note, 2026-06-28: T003 added a dedicated Mill `config` module owning
+the public `initkit.config` manifest models and SnakeYAML Engine loader for
+top-level manifest metadata, policy, target, sources, plan entries, execution
+settings, conditions, and raw kind-specific plan specs. `config.example.yaml`
+coverage lives in `config/test/src`, including a path-aware invalid-YAML parse
+error check that asserts the loader returns a parse failure without
+stacktrace-shaped output. `./mill __.compile` and `./mill __.test` both pass
+for the current `config`, `app`, `cli`, and `tui` module graph.
 
 Validation checkpoint, 2026-06-28: `./mill app.compile` and `./mill app.test`
 were rerun for the completed T001-T003 chunk. Daemon-mode Mill cannot start its
