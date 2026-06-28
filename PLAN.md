@@ -89,6 +89,98 @@ tests, including path-aware YAML parse errors. Mill validation still cannot
 reach source compilation in this sandbox because coursier downloads fail with
 `java.net.SocketException: Operation not permitted`.
 
+Validation checkpoint, 2026-06-28: `./mill app.compile` and `./mill app.test`
+were rerun for the completed T001-T003 chunk. Daemon-mode Mill cannot start its
+localhost server in this sandbox (`java.net.SocketException: Operation not
+permitted`, followed by missing `out/mill-daemon/socketPort`). The documented
+fallback `COURSIER_CACHE=/tmp/initkit-coursier-cache ./mill --no-daemon
+app.compile` and `... app.test` reaches dependency resolution, but Maven
+artifact downloads are also blocked with `java.net.SocketException: Operation
+not permitted`. No source-level compile or test failure was reached; rerun the
+same checks in an environment that permits local server sockets and Maven
+downloads.
+
+Validation checkpoint 6, 2026-06-28: project metadata was rechecked
+(`build.mill`, `README.md`, and absence of scalafmt/scalafix/package-manager
+metadata); the only project-native checks remain `./mill app.compile` and
+`./mill app.test`. Both configured checks still fail before build compilation in
+daemon mode because the Mill server cannot create the localhost server socket.
+Fallback no-daemon runs with `COURSIER_CACHE=/tmp/initkit-coursier-cache` reach
+dependency resolution, but Maven artifact downloads from `repo1.maven.org` are
+blocked with `java.net.SocketException: Operation not permitted`. No source or
+test regression was reached, so no code fix was made; rerun the same checks in
+an environment that permits local server sockets and Maven downloads.
+
+Validation checkpoint 7, 2026-06-28: metadata was checked again (`build.mill`,
+`README.md`, and absence of scalafmt/scalafix/package-manager metadata). The
+configured `./mill app.compile` and `./mill app.test` commands still fail before
+build compilation because the daemon cannot bind its localhost server socket in
+this sandbox (`java.net.SocketException: Operation not permitted`, followed by
+missing `out/mill-daemon/socketPort`). `./mill --no-daemon resolve _` succeeds
+and confirms the `app` module is discoverable. Fallback validation with
+`COURSIER_CACHE=/tmp/initkit-coursier-cache ./mill --no-daemon app.compile` and
+`... app.test` reaches dependency resolution but cannot download Scala/Mill
+artifacts from Maven Central because network sockets are blocked. No source or
+test failure was reached; rerun compile and tests in an environment that permits
+local server sockets and Maven/coursier downloads.
+
+Validation checkpoint 8, 2026-06-28: metadata was rechecked and still exposes
+only the Mill `app` module with uTest; no scalafmt, scalafix, Makefile, justfile,
+GitHub workflow, sbt, Maven, npm, or other project-native validation metadata
+was found. The configured `./mill app.compile` and `./mill app.test` commands
+again fail before build compilation because daemon startup cannot create/bind
+its local server socket in this sandbox, leaving `out/mill-daemon/socketPort`
+missing. `./mill --no-daemon resolve _` succeeds and confirms build discovery.
+Fallback `COURSIER_CACHE=/tmp/initkit-coursier-cache ./mill --no-daemon
+app.compile` and `... app.test` reach dependency resolution but fail before
+source compilation because Maven Central downloads are blocked with
+`java.net.SocketException: Operation not permitted`. No source or test failure
+was reached, so no code fix was made; rerun the same compile and test checks in
+an environment that permits local server sockets and Maven/coursier downloads.
+
+Validation checkpoint 9, 2026-06-28: metadata was rechecked (`build.mill`,
+`README.md`, and absence of scalafmt/scalafix/Makefile/justfile/sbt/Maven/npm
+metadata). The configured `./mill app.compile` and `./mill app.test` commands
+again fail before build compilation because daemon startup cannot create/bind
+its local server socket in this sandbox (`java.net.SocketException: Operation
+not permitted`, followed by missing `out/mill-daemon/socketPort`). The
+no-daemon discovery command `./mill --no-daemon resolve _` succeeds and confirms
+the `app` module is present. Fallback validation with
+`COURSIER_CACHE=/tmp/initkit-coursier-cache ./mill --no-daemon app.compile` and
+`... app.test` reaches dependency resolution but cannot download Scala/Mill
+artifacts from Maven Central because network sockets are blocked. No source or
+test regression was reached, so no code fix was made; rerun the same compile
+and test checks in an environment that permits local server sockets and
+Maven/coursier downloads.
+
+Validation checkpoint 11, 2026-06-28: metadata was rechecked (`build.mill`,
+`README.md`, source/test layout, and absence of scalafmt/scalafix/Makefile/
+justfile/sbt/Maven/npm/workflow validation metadata). The project-native checks
+remain `./mill app.compile` and `./mill app.test`. Both configured daemon-mode
+commands still fail before build compilation because Mill cannot create its
+local server socket in this sandbox; `out/mill-daemon/server.log` reports
+`java.net.SocketException: Operation not permitted`, and the launcher reports
+missing `out/mill-daemon/socketPort`. `./mill --no-daemon resolve _` succeeds
+and confirms the `app` module is discoverable. Fallback checks with
+`COURSIER_CACHE=/tmp/initkit-coursier-cache ./mill --no-daemon app.compile` and
+`... app.test` reach dependency resolution but cannot download Scala/Mill
+artifacts from Maven Central because network sockets are blocked. No source or
+test failure was reached, so no code fix was made; rerun the same checks in an
+environment that permits local server sockets and Maven/coursier downloads.
+
+Validation checkpoint 13, 2026-06-28: metadata was rechecked (`build.mill`,
+`README.md`, Mill module discovery, and absence of scalafmt/scalafix/Makefile/
+justfile/sbt/Maven/npm/workflow validation metadata). `./mill app.compile`
+initially reached source compilation and failed because `picocli.CommandLine.Option`
+shadowed Scala `Option` in `Main.scala`; the picocli annotation import is now
+aliased as `CliOption`. `./mill app.test` then exposed test-scope issues:
+`ManifestLoaderTests` used an unavailable bare `fail` helper and looked for
+`config.example.yaml` under Mill's forked sandbox working directory. The tests
+now use a local assertion helper and locate the fixture by walking up from the
+forked working directory. Final `./mill app.compile`, `./mill app.test`, and
+`./mill --no-daemon resolve _` pass. Remaining risk is limited to future
+implementation tasks; this checkpoint reached source and test execution.
+
 Before implementing TUI-related work, scan the current TamboUI repository and
 docs, not only the existing local wrapper:
 

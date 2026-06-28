@@ -1,5 +1,7 @@
 package initkit.config
 
+import java.nio.file.{Files, Path}
+
 import utest.*
 
 object ManifestLoaderTests extends TestSuite:
@@ -60,6 +62,17 @@ object ManifestLoaderTests extends TestSuite:
       finally os.remove.all(tmp)
 
   private def loadExample(): Manifest =
-    ManifestLoader.load((os.pwd / "config.example.yaml").toNIO) match
+    ManifestLoader.load(exampleConfigPath) match
       case Right(manifest) => manifest
       case Left(error)     => fail(error.message)
+
+  private def exampleConfigPath: Path =
+    Iterator
+      .iterate(os.pwd.toNIO.toAbsolutePath.normalize)(_.getParent)
+      .takeWhile(_ != null)
+      .map(_.resolve("config.example.yaml"))
+      .find(Files.isRegularFile(_))
+      .getOrElse(throw new java.lang.AssertionError("config.example.yaml fixture not found"))
+
+  private def fail(message: String): Nothing =
+    throw new java.lang.AssertionError(message)

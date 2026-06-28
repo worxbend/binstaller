@@ -8,7 +8,7 @@ import scala.util.Try
 
 import picocli.CommandLine
 import picocli.CommandLine.Model.CommandSpec
-import picocli.CommandLine.{Command, Mixin, Option, Spec}
+import picocli.CommandLine.{Command, Mixin, Option as CliOption, Spec}
 import upickle.default.write
 
 object Main:
@@ -25,21 +25,21 @@ object Main:
       spec.commandLine().usage(spec.commandLine().getOut())
 
   final class SharedOptions:
-    @Option(
+    @CliOption(
       names = Array("--config"),
       paramLabel = "PATH",
       description = Array("YAML manifest path. Defaults to config.yaml.")
     )
     private var config: String = "config.yaml"
 
-    @Option(
+    @CliOption(
       names = Array("--state"),
       paramLabel = "PATH",
       description = Array("Read and write execution state in a separate JSON file.")
     )
     private var state: String = ""
 
-    @Option(
+    @CliOption(
       names = Array("--reset-state"),
       description = Array("Ignore and overwrite any existing execution state file.")
     )
@@ -75,20 +75,20 @@ object Main:
     @Mixin
     private var shared: SharedOptions = uninitialized
 
-    @Option(names = Array("--dry-run"), description = Array("Preview the selected work without applying changes."))
+    @CliOption(names = Array("--dry-run"), description = Array("Preview the selected work without applying changes."))
     private var dryRun: Boolean = false
 
-    @Option(names = Array("--yes"), description = Array("Skip interactive confirmations where supported."))
+    @CliOption(names = Array("--yes"), description = Array("Skip interactive confirmations where supported."))
     private var yes: Boolean = false
 
-    @Option(
+    @CliOption(
       names = Array("--only"),
       paramLabel = "NAME_OR_KIND",
       description = Array("Run only matching plan entries. May be repeated.")
     )
     private var onlyValues: Array[String] = Array.empty
 
-    @Option(
+    @CliOption(
       names = Array("--skip"),
       paramLabel = "NAME_OR_KIND",
       description = Array("Skip matching plan entries. May be repeated.")
@@ -138,13 +138,13 @@ object Main:
   final class InfoCommand extends Callable[Int]:
     @Spec private var spec: CommandSpec = uninitialized
 
-    @Option(
+    @CliOption(
       names = Array("-n", "--name"),
       description = Array("Application name to include in the snapshot")
     )
     private var name: String = "initkit"
 
-    @Option(names = Array("--json"), description = Array("Print the snapshot as pretty JSON"))
+    @CliOption(names = Array("--json"), description = Array("Print the snapshot as pretty JSON"))
     private var json: Boolean = false
 
     override def call(): Int =
@@ -173,23 +173,23 @@ object Main:
     @Mixin
     private var shared: SharedOptions = uninitialized
 
-    @Option(names = Array("-n", "--name"), description = Array("Name displayed in the TUI"))
+    @CliOption(names = Array("-n", "--name"), description = Array("Name displayed in the TUI"))
     private var name: String = "initkit"
 
-    @Option(names = Array("-t", "--title"), description = Array("Panel title"))
+    @CliOption(names = Array("-t", "--title"), description = Array("Panel title"))
     private var title: String = "Initkit"
 
-    @Option(names = Array("--dry-run"), description = Array("Start the TUI in preview mode."))
+    @CliOption(names = Array("--dry-run"), description = Array("Start the TUI in preview mode."))
     private var dryRun: Boolean = false
 
-    @Option(
+    @CliOption(
       names = Array("--select"),
       paramLabel = "NAME_OR_KIND",
       description = Array("Preselect matching plan entries. May be repeated.")
     )
     private var selectedValues: Array[String] = Array.empty
 
-    @Option(
+    @CliOption(
       names = Array("--skip"),
       paramLabel = "NAME_OR_KIND",
       description = Array("Start with matching plan entries unselected. May be repeated.")
