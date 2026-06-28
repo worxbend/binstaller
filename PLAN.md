@@ -72,6 +72,15 @@ commands were minimally moved to picocli so the build no longer needs
 environment because this sandbox blocks Mill/coursier downloads with
 `java.net.SocketException: Operation not permitted`.
 
+Progress note, 2026-06-28: T002 replaced the temporary CLI with a picocli
+`initkit` root command exposing `apply`, `info`, and `tui` subcommands.
+`apply` and `tui` now share `--config`, `--state`, and `--reset-state` options;
+`apply` parses `--dry-run`, `--yes`, `--only`, and `--skip`; `tui` parses
+`--dry-run`, `--select`, and `--skip`. Both `apply` and `tui` return clear
+non-stacktrace errors for missing config paths. Focused CLI tests were added,
+but Mill validation still cannot reach compilation in this sandbox because
+coursier downloads fail with `java.net.SocketException: Operation not permitted`.
+
 Before implementing TUI-related work, scan the current TamboUI repository and
 docs, not only the existing local wrapper:
 
