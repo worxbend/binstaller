@@ -137,6 +137,16 @@ valid and one invalid package entry for every package manager kind, and source
 typing is covered against `config.example.yaml`. `./mill __.compile`,
 `./mill __.test`, and `git diff --check` pass.
 
+Progress note, 2026-06-28: T006 added typed installer specs in the `config`
+module for the non-package plan kinds represented in `config.example.yaml`:
+`binary-downloads`, `shell-scripts`, `nerd-fonts`, `dotfiles-apply`,
+`interrupt`, and `commands`. `ManifestValidator` now delegates those kinds to
+`InstallerSpecDecoder`, so binary download URL/destination/mode, checksum and
+archive fields, interrupt JSON state settings, and command/script/tool config
+shape are validated through the same typed boundary future executors will use.
+Focused tests cover one valid and one invalid entry for every installer kind.
+`./mill __.compile`, `./mill __.test`, and `git diff --check` pass.
+
 Validation checkpoint, 2026-06-28: `./mill app.compile` and `./mill app.test`
 were rerun for the completed T001-T003 chunk. Daemon-mode Mill cannot start its
 localhost server in this sandbox (`java.net.SocketException: Operation not

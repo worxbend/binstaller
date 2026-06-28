@@ -1,22 +1,13 @@
 package initkit.config
 
 import java.nio.file.Path
-import scala.collection.immutable.VectorMap
 
 object ManifestValidator:
   private val SupportedApiVersion = "initkit.io/v1alpha1"
   private val SupportedKind = "WorkstationProfile"
   private val DefaultExecutionMode = "sequential"
   private val SupportedExecutionModes = Set("sequential", "parallel")
-  private val SupportedPlanKinds = PackageSpecDecoder.PackageKinds ++ Set(
-    "binary-downloads",
-    "shell-scripts",
-    "nerd-fonts",
-    "dotfiles-apply",
-    "interrupt",
-    "commands"
-  )
-  private val SupportedChecksumAlgorithms = Set("sha256", "sha512")
+  private val SupportedPlanKinds = PackageSpecDecoder.PackageKinds ++ InstallerSpecDecoder.InstallerKinds
 
   def validate(manifest: Manifest, manifestPath: Option[Path] = None): Either[Vector[ManifestValidationError], Manifest] =
     val errors =
@@ -65,95 +56,18 @@ object ManifestValidator:
 
     entry.spec match
       case None => Vector(error(specAt, "is required"))
-      case Some(RawYaml.MappingValue(fields)) =>
+      case Some(RawYaml.MappingValue(_)) =>
         kind match
           case packageKind if PackageSpecDecoder.isPackageKind(packageKind) =>
             PackageSpecDecoder.decode(packageKind, entry.spec, specAt, entry.name).left.toOption.getOrElse(Vector.empty)
-          case "binary-downloads"                               => validateBinaryDownloadSpec(fields, specAt)
-          case "interrupt"                                      => validateInterruptSpec(fields, specAt, manifestPath)
-          case _                                                => Vector.empty
+          case installerKind if InstallerSpecDecoder.isInstallerKind(installerKind) =>
+            InstallerSpecDecoder
+              .decode(installerKind, entry.spec, specAt, entry.name, manifestPath)
+              .left
+              .toOption
+              .getOrElse(Vector.empty)
+          case _ => Vector.empty
       case Some(other) => Vector(error(specAt, s"must be a mapping, found ${kindOf(other)}"))
-
-  private def validateBinaryDownloadSpec(
-      fields: VectorMap[String, RawYaml],
-      specAt: String
-  ): Vector[ManifestValidationError] =
-    fields.get("items") match
-      case Some(RawYaml.SequenceValue(items)) =>
-        items.zipWithIndex.flatMap((item, index) => validateBinaryDownloadItem(item, s"$specAt.items[$index]"))
-      case Some(other) => Vector(error(s"$specAt.items", s"must be a sequence, found ${kindOf(other)}"))
-      case None        => Vector.empty
-
-  private def validateBinaryDownloadItem(item: RawYaml, at: String): Vector[ManifestValidationError] =
-    item match
-      case RawYaml.MappingValue(fields) =>
-        fields.get("checksum").toVector.flatMap(validateChecksum(_, s"$at.checksum"))
-      case other => Vector(error(at, s"must be a mapping, found ${kindOf(other)}"))
-
-  private def validateChecksum(checksum: RawYaml, at: String): Vector[ManifestValidationError] =
-    checksum match
-      case RawYaml.MappingValue(fields) =>
-        fields.get("algorithm") match
-          case Some(RawYaml.StringValue(value)) if SupportedChecksumAlgorithms.contains(value.trim.toLowerCase) =>
-            Vector.empty
-          case Some(RawYaml.StringValue(value)) =>
-            Vector(error(s"$at.algorithm", s"unsupported checksum algorithm '$value'"))
-          case Some(other) => Vector(error(s"$at.algorithm", s"must be a string, found ${kindOf(other)}"))
-          case None        => Vector(error(s"$at.algorithm", "is required"))
-      case other => Vector(error(at, s"must be a mapping, found ${kindOf(other)}"))
-
-  private def validateInterruptSpec(
-      fields: VectorMap[String, RawYaml],
-      specAt: String,
-      manifestPath: Option[Path]
-  ): Vector[ManifestValidationError] =
-    fields.get("state") match
-      case Some(RawYaml.MappingValue(stateFields)) =>
-        validateInterruptState(stateFields, s"$specAt.state", manifestPath)
-      case Some(other) => Vector(error(s"$specAt.state", s"must be a mapping, found ${kindOf(other)}"))
-      case None        => Vector(error(s"$specAt.state", "is required"))
-
-  private def validateInterruptState(
-      fields: VectorMap[String, RawYaml],
-      stateAt: String,
-      manifestPath: Option[Path]
-  ): Vector[ManifestValidationError] =
-    validateInterruptStatePath(fields, stateAt, manifestPath) ++
-      validateInterruptStateFormat(fields, stateAt)
-
-  private def validateInterruptStatePath(
-      fields: VectorMap[String, RawYaml],
-      stateAt: String,
-      manifestPath: Option[Path]
-  ): Vector[ManifestValidationError] =
-    fields.get("path") match
-      case Some(RawYaml.StringValue(value)) =>
-        val requiredErrors = validateRequiredString(Some(value), s"$stateAt.path")
-        requiredErrors ++ validateStatePathSeparation(value, s"$stateAt.path", manifestPath)
-      case Some(other) => Vector(error(s"$stateAt.path", s"must be a string, found ${kindOf(other)}"))
-      case None        => Vector(error(s"$stateAt.path", "is required"))
-
-  private def validateInterruptStateFormat(
-      fields: VectorMap[String, RawYaml],
-      stateAt: String
-  ): Vector[ManifestValidationError] =
-    fields.get("format") match
-      case Some(RawYaml.StringValue(value)) if value.trim == "json" => Vector.empty
-      case Some(RawYaml.StringValue(value)) => Vector(error(s"$stateAt.format", s"unsupported state format '$value'"))
-      case Some(other) => Vector(error(s"$stateAt.format", s"must be a string, found ${kindOf(other)}"))
-      case None        => Vector(error(s"$stateAt.format", "is required"))
-
-  private def validateStatePathSeparation(
-      statePath: String,
-      at: String,
-      manifestPath: Option[Path]
-  ): Vector[ManifestValidationError] =
-    if statePath.contains("${") then Vector.empty
-    else
-      manifestPath match
-        case Some(path) if Path.of(statePath).toAbsolutePath.normalize() == path.toAbsolutePath.normalize() =>
-          Vector(error(at, "must not point to the manifest file"))
-        case _ => Vector.empty
 
   private def validateExecution(
       execution: Option[Execution],
