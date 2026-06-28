@@ -4,6 +4,8 @@ import java.io.IOException
 import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.nio.file.{Files, Path}
+import scala.collection.immutable.VectorMap
+import scala.concurrent.duration.DurationInt
 import scala.util.control.NonFatal
 
 import initkit.config.*
@@ -56,7 +58,8 @@ final class ShellScriptsExecutor(
       case Left(error)     => Left(ShellScriptFailure.TempFile(item.name, error.message))
       case Right(tempPath) =>
         try downloadAndRun(item, tempPath)
-        finally files.deleteIfExists(tempPath)
+        finally
+          if item.cleanup.getOrElse(true) then files.deleteIfExists(tempPath)
 
   private def downloadAndRun(
       item: ShellScriptItem,
@@ -159,11 +162,21 @@ object ShellScriptsExecutor:
     if readsScriptFromStdin(item) then
       CommandSpec.direct(
         argv = (Vector(item.shell) ++ item.args).map(CommandArgument(_)),
-        stdinFile = Some(tempPath)
+        cwd = item.cwd.map(Path.of(_)),
+        env = env(item.env),
+        sudo = sudoMode(item),
+        timeout = item.timeout.map(_.seconds),
+        stdinFile = Some(tempPath),
+        allowedExitCodes = item.allowedExitCodes.toSet
       )
     else
       CommandSpec.direct(
-        argv = (Vector(item.shell, tempPath.toString) ++ item.args).map(CommandArgument(_))
+        argv = (Vector(item.shell, tempPath.toString) ++ item.args).map(CommandArgument(_)),
+        cwd = item.cwd.map(Path.of(_)),
+        env = env(item.env),
+        sudo = sudoMode(item),
+        timeout = item.timeout.map(_.seconds),
+        allowedExitCodes = item.allowedExitCodes.toSet
       )
 
   def dryRunData(
@@ -201,16 +214,27 @@ object ShellScriptsExecutor:
     case RedactedCommandInvocation.Direct(argv) => DryRunAction.Command(
         argv = argv,
         shell = None,
-        sudo = false,
+        sudo = command.sudo == SudoMode.Required,
         workingDirectory = command.cwd.map(_.toString),
         stdinFile = command.redacted.stdinFile.map(_.toString)
       )
     case RedactedCommandInvocation.Shell(commandText, shell) => DryRunAction.Command(
         argv = Vector(commandText),
         shell = Some(shell.mkString(" ")),
-        sudo = false,
+        sudo = command.sudo == SudoMode.Required,
         workingDirectory = command.cwd.map(_.toString)
       )
 
   private def readsScriptFromStdin(item: ShellScriptItem): Boolean =
-    item.args.headOption.contains("-s")
+    item.download == ShellScriptDownloadMode.Stdin || item.args.headOption.contains("-s")
+
+  private def sudoMode(item: ShellScriptItem): SudoMode =
+    if item.sudo.contains(true) then SudoMode.Required else SudoMode.Disabled
+
+  private def env(entries: Vector[EnvironmentEntry]): VectorMap[String, CommandEnvironmentValue] =
+    VectorMap.from(entries.map(entry =>
+      entry.name -> CommandEnvironmentValue(
+        entry.value,
+        if entry.sensitive.contains(true) then Sensitivity.Secret else Sensitivity.Public
+      )
+    ))

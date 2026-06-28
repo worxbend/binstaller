@@ -20,7 +20,10 @@ final case class AptRepository(
 )
 
 final case class DnfSources(
-    repositories: Vector[DnfRepository]
+    repositories: Vector[DnfRepository],
+    releasePackages: Vector[ReleasePackage] = Vector.empty,
+    keyImports: Vector[GpgKeyImport] = Vector.empty,
+    commands: Vector[SourceCommand] = Vector.empty
 )
 
 final case class DnfRepository(
@@ -31,7 +34,9 @@ final case class DnfRepository(
 )
 
 final case class ZypperSources(
-    repositories: Vector[ZypperRepository]
+    repositories: Vector[ZypperRepository],
+    keyImports: Vector[GpgKeyImport] = Vector.empty,
+    commands: Vector[SourceCommand] = Vector.empty
 )
 
 final case class ZypperRepository(
@@ -48,4 +53,20 @@ final case class FlatpakRemote(
     name: String,
     url: String,
     ifMissing: Option[Boolean]
+)
+
+final case class ReleasePackage(
+    name: String,
+    url: String
+)
+
+final case class GpgKeyImport(
+    name: String,
+    url: String
+)
+
+final case class SourceCommand(
+    name: String,
+    run: String,
+    sudo: Option[Boolean]
 )

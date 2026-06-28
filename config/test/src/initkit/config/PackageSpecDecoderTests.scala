@@ -132,6 +132,52 @@ object PackageSpecDecoderTests extends TestSuite:
 
       assertEmptyInstallError(errors, "snap-empty")
 
+    test("decodes package manager actions and legacy parity package kinds"):
+      val apt = decodeValidPackageSpec(
+        "apt-actions",
+        "apt-packages",
+        """
+        actions:
+          - update
+          - action: dist-upgrade
+            args:
+              - --with-new-pkgs
+        """
+      )
+      val aur = decodeValidPackageSpec(
+        "aur-tools",
+        "aur-packages",
+        """
+        helper: yay
+        install:
+          - visual-studio-code-bin
+        """
+      )
+      val sdkman = decodeValidPackageSpec(
+        "sdkman-tools",
+        "sdkman-packages",
+        """
+        install:
+          - candidate: java
+            version: 21.0.4-tem
+          - gradle
+        """
+      )
+
+      assert(apt == PackageSpec.Apt(
+        update = None,
+        install = Vector.empty,
+        actions = Vector(
+          PackageAction("update", Vector.empty),
+          PackageAction("dist-upgrade", Vector("--with-new-pkgs"))
+        )
+      ))
+      assert(aur == PackageSpec.Aur(Some("yay"), Vector("visual-studio-code-bin")))
+      assert(sdkman == PackageSpec.Sdkman(Vector(
+        SdkmanPackage("java", Some("21.0.4-tem")),
+        SdkmanPackage("gradle", None)
+      )))
+
   private val emptyInstallSpec: String = """
     install: []
     """

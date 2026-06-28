@@ -292,6 +292,62 @@ object InstallerSpecDecoderTests extends TestSuite:
 
       assert(errors.exists(_.message == "spec.plan[0].spec.items[0].run: must not be empty"))
 
+    test("decodes expanded command file write binary and shell script fields"):
+      val fileWrites = decodeValidInstallerSpec(
+        "write-config",
+        "file-writes",
+        """
+        items:
+          - name: sddm-sway
+            path: /etc/sddm.conf.d/sway.conf
+            content: |
+              [General]
+              DisplayServer=wayland
+            sudo: true
+            owner: root
+            group: root
+            mode: "0644"
+        """
+      )
+      val commands = decodeValidInstallerSpec(
+        "admin-steps",
+        "commands",
+        """
+        items:
+          - name: enable-libvirt
+            run: systemctl enable --now libvirtd
+            cwd: /tmp
+            env:
+              FOO: bar
+            creates: /tmp/libvirt.done
+            unless: systemctl is-enabled libvirtd
+            allowedExitCodes: [0, 3]
+            timeout: 30
+        """
+      )
+
+      assert(fileWrites == InstallerSpec.FileWrites(Vector(
+        FileWriteItem(
+          name = "sddm-sway",
+          path = "/etc/sddm.conf.d/sway.conf",
+          content = "[General]\nDisplayServer=wayland\n",
+          sudo = Some(true),
+          owner = Some("root"),
+          group = Some("root"),
+          mode = Some("0644"),
+          when = None
+        )
+      )))
+      commands match
+        case InstallerSpec.Commands(Vector(item)) =>
+          assert(item.cwd.contains("/tmp"))
+          assert(item.env == Vector(EnvironmentEntry("FOO", "bar", None)))
+          assert(item.creates.contains("/tmp/libvirt.done"))
+          assert(item.unless.contains("systemctl is-enabled libvirtd"))
+          assert(item.allowedExitCodes == Vector(0, 3))
+          assert(item.timeout.contains(30))
+        case other => fail(s"expected commands spec, found $other")
+
   private def decodeValidInstallerSpec(
       name: String,
       kind: String,

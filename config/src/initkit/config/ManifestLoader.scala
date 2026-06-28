@@ -213,7 +213,24 @@ object ManifestLoader:
         optionalSequence(fields, "repositories", "spec.sources.dnf.repositories").flatMap:
           case Some(items) => decodeDnfRepositories(items)
           case None        => Right(Vector.empty)
-    yield DnfSources(repositories = repositories)
+      releasePackages <-
+        optionalSequence(fields, "releasePackages", "spec.sources.dnf.releasePackages").flatMap:
+          case Some(items) => decodeReleasePackages(items, "spec.sources.dnf.releasePackages")
+          case None        => Right(Vector.empty)
+      keyImports <-
+        optionalSequence(fields, "keyImports", "spec.sources.dnf.keyImports").flatMap:
+          case Some(items) => decodeGpgKeyImports(items, "spec.sources.dnf.keyImports")
+          case None        => Right(Vector.empty)
+      commands <-
+        optionalSequence(fields, "commands", "spec.sources.dnf.commands").flatMap:
+          case Some(items) => decodeSourceCommands(items, "spec.sources.dnf.commands")
+          case None        => Right(Vector.empty)
+    yield DnfSources(
+      repositories = repositories,
+      releasePackages = releasePackages,
+      keyImports = keyImports,
+      commands = commands
+    )
 
   private def decodeDnfRepositories(items: Vector[RawYaml]): DecodeResult[Vector[DnfRepository]] =
     sequence(items.zipWithIndex.map((item, index) =>
@@ -241,7 +258,15 @@ object ManifestLoader:
         optionalSequence(fields, "repositories", "spec.sources.zypper.repositories").flatMap:
           case Some(items) => decodeZypperRepositories(items)
           case None        => Right(Vector.empty)
-    yield ZypperSources(repositories = repositories)
+      keyImports <-
+        optionalSequence(fields, "keyImports", "spec.sources.zypper.keyImports").flatMap:
+          case Some(items) => decodeGpgKeyImports(items, "spec.sources.zypper.keyImports")
+          case None        => Right(Vector.empty)
+      commands <-
+        optionalSequence(fields, "commands", "spec.sources.zypper.commands").flatMap:
+          case Some(items) => decodeSourceCommands(items, "spec.sources.zypper.commands")
+          case None        => Right(Vector.empty)
+    yield ZypperSources(repositories = repositories, keyImports = keyImports, commands = commands)
 
   private def decodeZypperRepositories(items: Vector[RawYaml])
       : DecodeResult[Vector[ZypperRepository]] = sequence(
@@ -286,6 +311,49 @@ object ManifestLoader:
       url = url,
       ifMissing = ifMissing
     )
+
+  private def decodeReleasePackages(
+      items: Vector[RawYaml],
+      at: String
+  ): DecodeResult[Vector[ReleasePackage]] = sequence(
+    items.zipWithIndex.map((item, index) => decodeReleasePackage(item, s"$at[$index]"))
+  )
+
+  private def decodeReleasePackage(raw: RawYaml, at: String): DecodeResult[ReleasePackage] =
+    for
+      fields <- mapping(raw, at)
+      name   <- requiredScalarString(fields, "name", s"$at.name")
+      url    <- requiredScalarString(fields, "url", s"$at.url")
+    yield ReleasePackage(name, url)
+
+  private def decodeGpgKeyImports(
+      items: Vector[RawYaml],
+      at: String
+  ): DecodeResult[Vector[GpgKeyImport]] = sequence(
+    items.zipWithIndex.map((item, index) => decodeGpgKeyImport(item, s"$at[$index]"))
+  )
+
+  private def decodeGpgKeyImport(raw: RawYaml, at: String): DecodeResult[GpgKeyImport] =
+    for
+      fields <- mapping(raw, at)
+      name   <- requiredScalarString(fields, "name", s"$at.name")
+      url    <- requiredScalarString(fields, "url", s"$at.url")
+    yield GpgKeyImport(name, url)
+
+  private def decodeSourceCommands(
+      items: Vector[RawYaml],
+      at: String
+  ): DecodeResult[Vector[SourceCommand]] = sequence(
+    items.zipWithIndex.map((item, index) => decodeSourceCommand(item, s"$at[$index]"))
+  )
+
+  private def decodeSourceCommand(raw: RawYaml, at: String): DecodeResult[SourceCommand] =
+    for
+      fields <- mapping(raw, at)
+      name   <- requiredScalarString(fields, "name", s"$at.name")
+      run    <- requiredScalarString(fields, "run", s"$at.run")
+      sudo   <- optionalBoolean(fields, "sudo", s"$at.sudo")
+    yield SourceCommand(name, run, sudo)
 
   private def decodePlan(items: Vector[RawYaml]): DecodeResult[Vector[PlanEntry]] =
     sequence(items.zipWithIndex.map((item, index) => decodePlanEntry(item, s"spec.plan[$index]")))

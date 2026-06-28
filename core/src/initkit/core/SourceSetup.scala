@@ -254,14 +254,41 @@ object SourceSetupGenerator:
   private def dnfOperations(
       sources: DnfSources,
       policy: ExecutionPolicy
-  ): Vector[SourceSetupOperation] = sources.repositories.map: repository =>
-    SourceSetupOperation.WriteFile(
-      label = s"Write dnf source ${repository.name}",
-      path = Paths.get(s"/etc/yum.repos.d/${repository.name}.repo"),
-      content = dnfRepositoryFile(repository),
-      mode = Some("0644"),
-      sudo = policy.requireSudo
+  ): Vector[SourceSetupOperation] =
+    val keys     = sources.keyImports.map(rpmKeyImportOperation(_, policy))
+    val releases = sources.releasePackages.map(dnfReleasePackageOperation(_, policy))
+    val repos    = sources.repositories.map: repository =>
+      SourceSetupOperation.WriteFile(
+        label = s"Write dnf source ${repository.name}",
+        path = Paths.get(s"/etc/yum.repos.d/${repository.name}.repo"),
+        content = dnfRepositoryFile(repository),
+        mode = Some("0644"),
+        sudo = policy.requireSudo
+      )
+    val commands = sources.commands.map(sourceCommandOperation(_, policy))
+    keys ++ releases ++ repos ++ commands
+
+  private def rpmKeyImportOperation(
+      key: GpgKeyImport,
+      policy: ExecutionPolicy
+  ): SourceSetupOperation = SourceSetupOperation.RunCommand(
+    label = s"Import RPM GPG key ${key.name}",
+    command = CommandSpec.direct(
+      argv = Vector("rpm", "--import", key.url).map(CommandArgument(_)),
+      sudo = sudoMode(policy)
     )
+  )
+
+  private def dnfReleasePackageOperation(
+      releasePackage: ReleasePackage,
+      policy: ExecutionPolicy
+  ): SourceSetupOperation = SourceSetupOperation.RunCommand(
+    label = s"Install dnf release package ${releasePackage.name}",
+    command = CommandSpec.direct(
+      argv = Vector("dnf", "install", "-y", releasePackage.url).map(CommandArgument(_)),
+      sudo = sudoMode(policy)
+    )
+  )
 
   private def dnfRepositoryFile(repository: DnfRepository): String =
     val lines = Vector(
@@ -290,18 +317,34 @@ object SourceSetupGenerator:
   private def zypperOperations(
       sources: ZypperSources,
       policy: ExecutionPolicy
-  ): Vector[SourceSetupOperation] = sources.repositories.map: repository =>
-    val refresh =
-      Option.when(repository.autoRefresh.contains(true))(CommandArgument("--refresh")).toVector
-    SourceSetupOperation.RunCommand(
-      label = s"Add zypper source ${repository.name}",
-      command = CommandSpec.direct(
-        argv = Vector(CommandArgument("zypper"), CommandArgument("addrepo")) ++
-          refresh ++
-          Vector(CommandArgument(repository.url), CommandArgument(repository.name)),
-        sudo = sudoMode(policy)
+  ): Vector[SourceSetupOperation] =
+    val keys = sources.keyImports.map(rpmKeyImportOperation(_, policy))
+    val repos = sources.repositories.map: repository =>
+      val refresh =
+        Option.when(repository.autoRefresh.contains(true))(CommandArgument("--refresh")).toVector
+      SourceSetupOperation.RunCommand(
+        label = s"Add zypper source ${repository.name}",
+        command = CommandSpec.direct(
+          argv = Vector(CommandArgument("zypper"), CommandArgument("addrepo")) ++
+            refresh ++
+            Vector(CommandArgument(repository.url), CommandArgument(repository.name)),
+          sudo = sudoMode(policy)
+        )
       )
+    val commands = sources.commands.map(sourceCommandOperation(_, policy))
+    keys ++ repos ++ commands
+
+  private def sourceCommandOperation(
+      command: SourceCommand,
+      policy: ExecutionPolicy
+  ): SourceSetupOperation = SourceSetupOperation.RunCommand(
+    label = command.name,
+    command = CommandSpec.shell(
+      CommandArgument(command.run),
+      sudo =
+        if command.sudo.getOrElse(policy.requireSudo) then SudoMode.Required else SudoMode.Disabled
     )
+  )
 
   private def generateFlatpak(
       sources: Option[FlatpakSources],

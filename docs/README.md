@@ -10,6 +10,7 @@ If the main README is the friendly tour, this folder is the toolbox.
 - [Examples](examples.md): distro-specific profiles you can copy and edit.
 - [Developer guide](developer-guide.md): how to build, test, release, and contribute.
 - [Architecture overview](architecture.md): how the CLI, TUI, config loader, and engine fit together.
+- [Legacy bootstrap review](legacy-bootstrap-review.md): mapping from the old shell scripts to future typed plan kinds.
 
 ## Example Profiles
 

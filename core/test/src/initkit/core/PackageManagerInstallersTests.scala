@@ -156,6 +156,56 @@ object PackageManagerInstallersTests extends TestSuite:
 
       assert(commands.forall(_.sudo == SudoMode.Disabled))
 
+    test("generates legacy parity package action commands"):
+      val actions = Vector(
+        commandArgv(PackageManagerInstallers.commandSpecs(
+          PackagePlanOperation(
+            summary("apt-actions", "apt-packages"),
+            sequentialExecution,
+            PackageSpec.Apt(
+              update = None,
+              install = Vector.empty,
+              actions = Vector(PackageAction("dist-upgrade", Vector("--with-new-pkgs")))
+            )
+          ),
+          applyPolicy
+        ).head),
+        commandArgv(PackageManagerInstallers.commandSpecs(
+          PackagePlanOperation(
+            summary("dnf-actions", "dnf-packages"),
+            sequentialExecution,
+            PackageSpec.Dnf(
+              install = Vector.empty,
+              actions = Vector(PackageAction("swap", Vector("ffmpeg-free", "ffmpeg")))
+            )
+          ),
+          applyPolicy
+        ).head),
+        commandArgv(PackageManagerInstallers.commandSpecs(
+          PackagePlanOperation(
+            summary("aur-tools", "aur-packages"),
+            sequentialExecution,
+            PackageSpec.Aur(Some("yay"), Vector("visual-studio-code-bin"))
+          ),
+          applyPolicy
+        ).head),
+        commandArgv(PackageManagerInstallers.commandSpecs(
+          PackagePlanOperation(
+            summary("cargo-tools", "cargo-packages"),
+            sequentialExecution,
+            PackageSpec.Cargo(None, Vector("ripgrep"))
+          ),
+          applyPolicy
+        ).head)
+      )
+
+      assert(actions == Vector(
+        Vector("apt-get", "dist-upgrade", "-y", "--with-new-pkgs"),
+        Vector("dnf", "swap", "-y", "ffmpeg-free", "ffmpeg"),
+        Vector("yay", "-S", "--needed", "--noconfirm", "visual-studio-code-bin"),
+        Vector("cargo", "binstall", "-y", "ripgrep")
+      ))
+
   private val noninteractiveAptEnv: VectorMap[String, CommandEnvironmentValue] =
     VectorMap("DEBIAN_FRONTEND" -> CommandEnvironmentValue("noninteractive"))
 
@@ -221,6 +271,24 @@ object PackageManagerInstallersTests extends TestSuite:
       command.invocation match
         case CommandInvocation.Direct(argv) => argv.map(_.value)
         case CommandInvocation.Shell(_, _)  => fail("expected direct command")
+
+  private def commandArgv(command: CommandSpec): Vector[String] = command.invocation match
+    case CommandInvocation.Direct(argv) => argv.map(_.value)
+    case CommandInvocation.Shell(_, _)  => fail("expected direct command")
+
+  private val sequentialExecution: PlanEntryExecutionPolicy = PlanEntryExecutionPolicy(
+    mode = PlanEntryExecutionMode.Sequential,
+    maxConcurrency = 1,
+    failFast = true,
+    locks = Vector.empty
+  )
+
+  private def summary(name: String, kind: String): PlanOperationSummary = PlanOperationSummary(
+    index = 0,
+    name = name,
+    kind = kind,
+    description = None
+  )
 
   private def perPackage(
       prefix: Vector[String],

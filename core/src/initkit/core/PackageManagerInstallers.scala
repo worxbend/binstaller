@@ -72,13 +72,41 @@ final class PackageManagerInstallers(
     policy
   )
 
+  override def installAur(
+      operation: PackagePlanOperation[PackageSpec.Aur],
+      policy: ExecutionPolicy
+  ): PlanOperationOutcome = installPackageCommands(
+    operation.summary,
+    PackageManagerInstallers.commandSpecs(operation, policy, aptUpdateBeforeInstall),
+    policy
+  )
+
+  override def installCargo(
+      operation: PackagePlanOperation[PackageSpec.Cargo],
+      policy: ExecutionPolicy
+  ): PlanOperationOutcome = installPackageCommands(
+    operation.summary,
+    PackageManagerInstallers.commandSpecs(operation, policy, aptUpdateBeforeInstall),
+    policy
+  )
+
+  override def installSdkman(
+      operation: PackagePlanOperation[PackageSpec.Sdkman],
+      policy: ExecutionPolicy
+  ): PlanOperationOutcome = installPackageCommands(
+    operation.summary,
+    PackageManagerInstallers.commandSpecs(operation, policy, aptUpdateBeforeInstall),
+    policy
+  )
+
   override def installBinaryDownloads(
       operation: InstallerPlanOperation[InstallerSpec.BinaryDownloads],
       policy: ExecutionPolicy
   ): PlanOperationOutcome = new BinaryDownloadsExecutor(
     binaryDownloadHttpClient,
     binaryDownloadFiles,
-    binaryDownloadHttpConfig
+    binaryDownloadHttpConfig,
+    commandExecutor
   )
     .install(operation, policy)
 
@@ -102,6 +130,12 @@ final class PackageManagerInstallers(
       policy: ExecutionPolicy
   ): PlanOperationOutcome =
     new DotfilesExecutor(commandExecutor, dotfilesFiles).install(operation, policy)
+
+  override def installFileWrites(
+      operation: InstallerPlanOperation[InstallerSpec.FileWrites],
+      policy: ExecutionPolicy
+  ): PlanOperationOutcome =
+    new FileWritesExecutor(commandExecutor, hostFacts).install(operation, policy)
 
   override def installInterrupt(
       operation: InstallerPlanOperation[InstallerSpec.Interrupt],
@@ -172,6 +206,9 @@ object PackageManagerInstallers:
     case spec: PackageSpec.Zypper  => zypperCommandSpecs(spec, policy)
     case spec: PackageSpec.Flatpak => flatpakCommandSpecs(spec, policy)
     case spec: PackageSpec.Snap    => snapCommandSpecs(spec, policy)
+    case spec: PackageSpec.Aur     => aurCommandSpecs(spec)
+    case spec: PackageSpec.Cargo   => cargoCommandSpecs(spec)
+    case spec: PackageSpec.Sdkman  => sdkmanCommandSpecs(spec)
 
   def dryRunData(
       summary: PlanOperationSummary,
@@ -188,7 +225,7 @@ object PackageManagerInstallers:
       aptUpdateBeforeInstall: Boolean
   ): Vector[CommandSpec] = Option
     .when(spec.update.contains(true) || aptUpdateBeforeInstall)(aptGet(Vector("update"), policy))
-    .toVector ++
+    .toVector ++ aptActionCommandSpecs(spec.actions, policy) ++
     spec.install.map(packageName => aptGet(Vector("install", "-y", packageName), policy))
 
   private def pacmanCommandSpecs(
@@ -206,13 +243,14 @@ object PackageManagerInstallers:
     val installCommands = spec.install.map: packageName =>
       direct(Vector("pacman", "-S", "--needed", "--noconfirm", packageName), policy)
 
-    syncCommand ++ installCommands
+    syncCommand ++ pacmanActionCommandSpecs(spec.actions, policy) ++ installCommands
 
   private def dnfCommandSpecs(
       spec: PackageSpec.Dnf,
       policy: ExecutionPolicy
   ): Vector[CommandSpec] =
-    spec.install.map(packageName => direct(Vector("dnf", "install", "-y", packageName), policy))
+    dnfActionCommandSpecs(spec.actions, policy) ++
+      spec.install.map(packageName => direct(Vector("dnf", "install", "-y", packageName), policy))
 
   private def zypperCommandSpecs(
       spec: PackageSpec.Zypper,
@@ -222,7 +260,7 @@ object PackageManagerInstallers:
       Vector("zypper", "--non-interactive", "refresh"),
       policy
     ))
-    .toVector ++
+    .toVector ++ zypperActionCommandSpecs(spec.actions, policy) ++
     spec.install.map: packageName =>
       direct(Vector("zypper", "--non-interactive", "install", "-y", packageName), policy)
 
@@ -251,6 +289,89 @@ object PackageManagerInstallers:
       policy
     )
 
+  private def aurCommandSpecs(spec: PackageSpec.Aur): Vector[CommandSpec] =
+    val helper = spec.helper.getOrElse("paru")
+    spec.install.map(packageName =>
+      CommandSpec.direct(
+        Vector(helper, "-S", "--needed", "--noconfirm", packageName).map(CommandArgument(_))
+      )
+    )
+
+  private def cargoCommandSpecs(spec: PackageSpec.Cargo): Vector[CommandSpec] =
+    spec.installer match
+      case Some("cargo") | Some("cargo-install") =>
+        spec.install.map(packageName =>
+          CommandSpec.direct(Vector("cargo", "install", packageName).map(CommandArgument(_)))
+        )
+      case Some("cargo-binstall") | None =>
+        spec.install.map(packageName =>
+          CommandSpec.direct(
+            Vector("cargo", "binstall", "-y", packageName).map(CommandArgument(_))
+          )
+        )
+      case Some(other) =>
+        spec.install.map(packageName =>
+          CommandSpec.direct(Vector(other, packageName).map(CommandArgument(_)))
+        )
+
+  private def sdkmanCommandSpecs(spec: PackageSpec.Sdkman): Vector[CommandSpec] =
+    spec.install.map: item =>
+      val install = (Vector("sdk", "install", item.candidate) ++ item.version.toVector)
+        .map(shellQuote)
+        .mkString(" ")
+      CommandSpec.shell(
+        command = CommandArgument(
+          s"""source "$${SDKMAN_DIR:-$${HOME}/.sdkman}/bin/sdkman-init.sh" && $install"""
+        ),
+        shell = Vector("bash", "-lc")
+      )
+
+  private def aptActionCommandSpecs(
+      actions: Vector[PackageAction],
+      policy: ExecutionPolicy
+  ): Vector[CommandSpec] = actions.map: action =>
+    action.action match
+      case "update"       => aptGet(Vector("update") ++ action.args, policy)
+      case "upgrade"      => aptGet(Vector("upgrade", "-y") ++ action.args, policy)
+      case "dist-upgrade" => aptGet(Vector("dist-upgrade", "-y") ++ action.args, policy)
+      case other          => aptGet(Vector(other) ++ action.args, policy)
+
+  private def pacmanActionCommandSpecs(
+      actions: Vector[PackageAction],
+      policy: ExecutionPolicy
+  ): Vector[CommandSpec] = actions.map: action =>
+    action.action match
+      case "sync-upgrade" | "syu" | "upgrade" =>
+        direct(Vector("pacman", "-Syu", "--noconfirm") ++ action.args, policy)
+      case other => direct(Vector("pacman", other) ++ action.args, policy)
+
+  private def dnfActionCommandSpecs(
+      actions: Vector[PackageAction],
+      policy: ExecutionPolicy
+  ): Vector[CommandSpec] = actions.map: action =>
+    action.action match
+      case "check-update" =>
+        direct(Vector("dnf", "check-update") ++ action.args, policy, allowedExitCodes = Set(0, 100))
+      case "upgrade" => direct(Vector("dnf", "upgrade", "-y") ++ action.args, policy)
+      case "swap" => direct(Vector("dnf", "swap", "-y") ++ action.args, policy)
+      case "groupupdate" | "group-update" =>
+        direct(Vector("dnf", "groupupdate", "-y") ++ action.args, policy)
+      case other => direct(Vector("dnf", other) ++ action.args, policy)
+
+  private def zypperActionCommandSpecs(
+      actions: Vector[PackageAction],
+      policy: ExecutionPolicy
+  ): Vector[CommandSpec] = actions.map: action =>
+    action.action match
+      case "refresh" => direct(Vector("zypper", "--non-interactive", "refresh") ++ action.args, policy)
+      case "update"  => direct(Vector("zypper", "--non-interactive", "update", "-y") ++ action.args, policy)
+      case "dup"     => direct(Vector("zypper", "--non-interactive", "dup", "-y") ++ action.args, policy)
+      case "dup-from" => direct(
+          Vector("zypper", "--non-interactive", "dup", "-y", "--from") ++ action.args,
+          policy
+        )
+      case other => direct(Vector("zypper", "--non-interactive", other) ++ action.args, policy)
+
   private def aptGet(
       arguments: Vector[String],
       policy: ExecutionPolicy
@@ -263,11 +384,13 @@ object PackageManagerInstallers:
   private def direct(
       values: Vector[String],
       policy: ExecutionPolicy,
-      env: VectorMap[String, CommandEnvironmentValue] = VectorMap.empty
+      env: VectorMap[String, CommandEnvironmentValue] = VectorMap.empty,
+      allowedExitCodes: Set[Int] = Set(0)
   ): CommandSpec = CommandSpec.direct(
     argv = values.map(CommandArgument(_)),
     env = env,
-    sudo = sudoMode(policy)
+    sudo = sudoMode(policy),
+    allowedExitCodes = allowedExitCodes
   )
 
   private def sudoMode(policy: ExecutionPolicy): SudoMode =
@@ -287,3 +410,5 @@ object PackageManagerInstallers:
         sudo = command.sudo == SudoMode.Required,
         workingDirectory = command.cwd.map(_.toString)
       )
+
+  private def shellQuote(value: String): String = s"'${value.replace("'", "'\"'\"'")}'"

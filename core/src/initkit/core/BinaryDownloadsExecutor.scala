@@ -4,7 +4,7 @@ import java.io.{EOFException, InputStream, IOException, OutputStream}
 import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 import java.security.MessageDigest
-import java.util.zip.GZIPInputStream
+import java.util.zip.{GZIPInputStream, ZipInputStream}
 import scala.collection.mutable
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.jdk.CollectionConverters.*
@@ -19,7 +19,8 @@ import sttp.model.Uri
 final class BinaryDownloadsExecutor(
     httpClient: BinaryDownloadHttpClient = BinaryDownloadHttpClient.Sttp,
     files: BinaryDownloadFiles = BinaryDownloadFiles.Jvm,
-    config: BinaryDownloadHttpConfig = BinaryDownloadHttpConfig.default
+    config: BinaryDownloadHttpConfig = BinaryDownloadHttpConfig.default,
+    commandExecutor: CommandExecutor = FakeCommandExecutor(Vector.empty)
 ):
 
   def install(
@@ -118,6 +119,7 @@ final class BinaryDownloadsExecutor(
       _ <- download(item, tempPath)
       _ <- verifyChecksum(item, tempPath)
       _ <- installDownloadedItem(item, tempPath, destination)
+      _ <- installSymlinks(item, destination)
     yield ()
 
   private def installDownloadedItem(
@@ -125,20 +127,51 @@ final class BinaryDownloadsExecutor(
       downloadedPath: Path,
       destination: Path
   ): Either[BinaryDownloadFailure, Unit] = item.archive match
-    case None          => installFile(item, downloadedPath, destination)
-    case Some(archive) =>
-      files.createTempDownload(s"${item.name}-archive-member", destination) match
-        case Left(error)          => Left(BinaryDownloadFailure.File(item.name, error.message))
-        case Right(extractedPath) =>
-          try
-            for
-              _ <- BinaryTarGzExtractor
-                .extractSelectedFile(downloadedPath, archive, extractedPath)
-                .left
-                .map(error => BinaryDownloadFailure.Archive(item.name, error.message))
-              _ <- installFile(item, extractedPath, destination)
-            yield ()
-          finally files.deleteIfExists(extractedPath)
+    case None => installFile(item, downloadedPath, destination)
+    case Some(archive) => archive.archiveType match
+        case ArchiveType.TarGz => extractNativeArchive(
+            item,
+            destination,
+            path => BinaryTarGzExtractor
+              .extractSelectedFile(downloadedPath, archive, path)
+              .left
+              .map(_.message)
+          )
+        case ArchiveType.Zip => extractNativeArchive(
+            item,
+            destination,
+            path => BinaryZipExtractor
+              .extractSelectedFile(downloadedPath, archive, path)
+              .left
+              .map(_.message)
+          )
+        case ArchiveType.TarXz =>
+          files.createTempDownload(s"${item.name}-archive-member", destination) match
+            case Left(error)          => Left(BinaryDownloadFailure.File(item.name, error.message))
+            case Right(extractedPath) =>
+              try
+                val result =
+                  commandExecutor.run(tarXzExtractCommand(downloadedPath, archive, extractedPath))
+                if result.succeeded then installFile(item, extractedPath, destination)
+                else Left(BinaryDownloadFailure.Command(result))
+              finally files.deleteIfExists(extractedPath)
+
+  private def extractNativeArchive(
+      item: BinaryDownloadItem,
+      destination: Path,
+      extract: Path => Either[String, Unit]
+  ): Either[BinaryDownloadFailure, Unit] =
+    files.createTempDownload(s"${item.name}-archive-member", destination) match
+      case Left(error)          => Left(BinaryDownloadFailure.File(item.name, error.message))
+      case Right(extractedPath) =>
+        try
+          for
+            _ <- extract(extractedPath).left.map(error =>
+              BinaryDownloadFailure.Archive(item.name, error)
+            )
+            _ <- installFile(item, extractedPath, destination)
+          yield ()
+        finally files.deleteIfExists(extractedPath)
 
   private def installFile(
       item: BinaryDownloadItem,
@@ -153,6 +186,43 @@ final class BinaryDownloadsExecutor(
         BinaryDownloadFailure.File(item.name, error.message)
       )
     yield ()
+
+  private def installSymlinks(
+      item: BinaryDownloadItem,
+      destination: Path
+  ): Either[BinaryDownloadFailure, Unit] =
+    item.symlinks.foldLeft(Right(()): Either[BinaryDownloadFailure, Unit]) {
+      case (Right(_), symlink) =>
+        val target = Path.of(symlink.target.getOrElse(destination.toString))
+        val link   = Path.of(symlink.path)
+        if symlink.sudo.contains(true) then
+          val result = commandExecutor.run(CommandSpec.direct(
+            Vector("ln", "-sfn", target.toString, link.toString).map(CommandArgument(_)),
+            sudo = SudoMode.Required
+          ))
+          if result.succeeded then Right(()) else Left(BinaryDownloadFailure.Command(result))
+        else
+          files.createSymlink(target, link).left.map(error =>
+            BinaryDownloadFailure.File(item.name, error.message)
+          )
+      case (left, _) => left
+    }
+
+  private def tarXzExtractCommand(
+      archivePath: Path,
+      archive: Archive,
+      destination: Path
+  ): CommandSpec =
+    val strip = archive.stripComponents.toVector.flatMap(value =>
+      Vector("--strip-components", value.toString)
+    )
+    CommandSpec.shell(
+      CommandArgument(
+        (Vector("tar", "-xJOf", BinaryDownloadsExecutor.shellQuote(archivePath.toString)) ++
+          strip ++ Vector(BinaryDownloadsExecutor.shellQuote(archive.path))).mkString(" ") +
+          s" > ${BinaryDownloadsExecutor.shellQuote(destination.toString)}"
+      )
+    )
 
   private def download(
       item: BinaryDownloadItem,
@@ -183,6 +253,7 @@ private enum BinaryDownloadFailure:
   case Download(itemName: String, detail: String)
   case ChecksumMismatch(itemName: String, expected: String, actual: String)
   case File(itemName: String, detail: String)
+  case Command(result: CommandResult)
 
   def message: String = this match
     case Archive(itemName, detail)  => s"$itemName archive extraction failed: $detail"
@@ -190,11 +261,66 @@ private enum BinaryDownloadFailure:
     case ChecksumMismatch(itemName, expected, actual) =>
       s"$itemName checksum mismatch: expected ${BinaryDownloadsExecutor.normalizeChecksum(expected)}, got $actual"
     case File(itemName, detail) => s"$itemName file operation failed: $detail"
+    case Command(result)        =>
+      s"binary download command failed: ${CommandsExecutor.describe(result.spec)} " +
+        s"(${CommandsExecutor.describeTermination(result.termination)})"
 
 private final class BinaryDownloadFailFast(val failure: BinaryDownloadFailure)
     extends RuntimeException(failure.message, null, false, false)
 
 private final case class BinaryTarGzExtractionError(message: String)
+
+private final case class BinaryZipExtractionError(message: String)
+
+private object BinaryZipExtractor:
+
+  def extractSelectedFile(
+      archivePath: Path,
+      archive: Archive,
+      destination: Path
+  ): Either[BinaryZipExtractionError, Unit] =
+    val selectedPath = normalizeZipPath(archive.path)
+    val stripComponents = archive.stripComponents.getOrElse(0)
+    try
+      val input = ZipInputStream(Files.newInputStream(archivePath))
+      try extractMatchingEntry(input, selectedPath, stripComponents, destination)
+      finally input.close()
+    catch
+      case error: IOException =>
+        Left(BinaryZipExtractionError(Option(error.getMessage).getOrElse(error.getClass.getName)))
+      case error: SecurityException =>
+        Left(BinaryZipExtractionError(Option(error.getMessage).getOrElse(error.getClass.getName)))
+
+  private def extractMatchingEntry(
+      input: ZipInputStream,
+      selectedPath: String,
+      stripComponents: Int,
+      destination: Path
+  ): Either[BinaryZipExtractionError, Unit] =
+    var entry = input.getNextEntry
+    while entry != null do
+      val entryName = normalizeZipPath(entry.getName)
+      val stripped  = entryName.split("/").drop(stripComponents).mkString("/")
+      if !entry.isDirectory && (stripped == selectedPath || entryName == selectedPath) then
+        copyEntry(input, destination)
+        return Right(())
+      entry = input.getNextEntry
+
+    Left(BinaryZipExtractionError(s"archive member '$selectedPath' was not found"))
+
+  private def copyEntry(input: ZipInputStream, destination: Path): Unit =
+    val parent = Option(destination.toAbsolutePath.normalize().getParent)
+      .getOrElse(Path.of(".").toAbsolutePath.normalize())
+    Files.createDirectories(parent)
+    val output = Files.newOutputStream(destination)
+    try input.transferTo(output)
+    finally output.close()
+
+  private def normalizeZipPath(value: String): String = value
+    .replace('\\', '/')
+    .split("/")
+    .filter(component => component.nonEmpty && component != ".")
+    .mkString("/")
 
 private object BinaryTarGzExtractor:
   private val TarBlockSize      = 512
@@ -213,6 +339,7 @@ private object BinaryTarGzExtractor:
       destination: Path
   ): Either[BinaryTarGzExtractionError, Unit] = archive.archiveType match
     case ArchiveType.TarGz => extractTarGzFile(archivePath, archive, destination)
+    case other => Left(BinaryTarGzExtractionError(s"unsupported tar.gz extractor type $other"))
 
   private def extractTarGzFile(
       archivePath: Path,
@@ -458,6 +585,7 @@ trait BinaryDownloadFiles:
   def previewTempDownloadPath(itemName: String, destination: Path): Path
   def setMode(path: Path, mode: String): Either[BinaryDownloadFileError, Unit]
   def moveIntoPlace(source: Path, destination: Path): Either[BinaryDownloadFileError, Unit]
+  def createSymlink(target: Path, link: Path): Either[BinaryDownloadFileError, Unit]
   def deleteIfExists(path: Path): Unit
 
 final case class BinaryDownloadFileError(message: String)
@@ -504,6 +632,16 @@ object BinaryDownloadFiles:
       catch
         case _: AtomicMoveNotSupportedException =>
           Files.move(source, absoluteDestination, StandardCopyOption.REPLACE_EXISTING)
+      ()
+
+    override def createSymlink(
+        target: Path,
+        link: Path
+    ): Either[BinaryDownloadFileError, Unit] = safely:
+      val absoluteLink = link.toAbsolutePath.normalize()
+      Option(absoluteLink.getParent).foreach(Files.createDirectories(_))
+      Files.deleteIfExists(absoluteLink)
+      Files.createSymbolicLink(absoluteLink, target)
       ()
 
     override def deleteIfExists(path: Path): Unit =
@@ -594,6 +732,8 @@ object BinaryDownloadsExecutor:
   private def checksumName(algorithm: ChecksumAlgorithm): String = algorithm match
     case ChecksumAlgorithm.Sha256 => "sha256"
     case ChecksumAlgorithm.Sha512 => "sha512"
+
+  private[core] def shellQuote(value: String): String = s"'${value.replace("'", "'\"'\"'")}'"
 
   private def posixPermissions(value: Int): Set[PosixFilePermission] =
     val permissions = Set.newBuilder[PosixFilePermission]

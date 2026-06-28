@@ -147,6 +147,29 @@ sources:
       - name: flathub
         url: https://flathub.org/repo/flathub.flatpakrepo
         ifMissing: true
+
+  dnf:
+    keyImports:
+      - name: microsoft
+        url: https://packages.microsoft.com/keys/microsoft.asc
+    releasePackages:
+      - name: rpmfusion-free
+        url: https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-%fedora.noarch.rpm
+    repositories:
+      - name: vscode
+        description: Visual Studio Code
+        baseUrl: https://packages.microsoft.com/yumrepos/vscode
+        gpgKey: https://packages.microsoft.com/keys/microsoft.asc
+
+  zypper:
+    repositories:
+      - name: packman
+        url: https://ftp.gwdg.de/pub/linux/misc/packman/suse/openSUSE_Tumbleweed/
+        autoRefresh: true
+    commands:
+      - name: opi codecs
+        run: opi codecs
+        sudo: false
 ```
 
 Source setup only runs when selected package entries need it.
@@ -240,6 +263,9 @@ Conditions are evaluated against detected host facts, not `spec.target`.
 kind: apt-packages
 spec:
   update: true
+  actions:
+    - upgrade
+    - dist-upgrade
   install:
     - build-essential
     - git
@@ -250,6 +276,12 @@ spec:
 ```yaml
 kind: dnf-packages
 spec:
+  actions:
+    - check-update
+    - action: swap
+      args: [ffmpeg-free, ffmpeg]
+    - action: groupupdate
+      args: ["multimedia"]
   install:
     - "@development-tools"
     - git
@@ -261,6 +293,8 @@ spec:
 kind: pacman-packages
 spec:
   sync: true
+  actions:
+    - sync-upgrade
   install:
     - base-devel
     - git
@@ -272,6 +306,10 @@ spec:
 kind: zypper-packages
 spec:
   refresh: true
+  actions:
+    - dup
+    - action: dup-from
+      args: [packman, --allow-vendor-change]
   install:
     - patterns-devel-base-devel_basis
     - git
@@ -297,6 +335,47 @@ spec:
     - name: code
       classic: true
     - name: postman
+```
+
+### `aur-packages`
+
+Installs AUR packages one package per command with `paru` by default, or a configured helper.
+
+```yaml
+kind: aur-packages
+spec:
+  helper: yay
+  install:
+    - visual-studio-code-bin
+```
+
+### `cargo-packages`
+
+Installs Rust CLI tools one tool per command with `cargo binstall` by default.
+
+```yaml
+kind: cargo-packages
+spec:
+  installer: cargo-binstall
+  install:
+    - ripgrep
+    - fd-find
+```
+
+Use `installer: cargo` to run `cargo install <tool>`.
+
+### `sdkman-packages`
+
+Installs SDKMAN candidates through `sdk install`.
+
+```yaml
+kind: sdkman-packages
+spec:
+  install:
+    - candidate: java
+      version: 21.0.4-tem
+    - gradle
+    - maven
 ```
 
 ## Installer Kinds
@@ -325,9 +404,12 @@ Archive example:
 
 ```yaml
 archive:
-  type: tar.gz
+  type: tar.gz # also: zip, tar.xz
   stripComponents: 1
   path: linux-amd64/helm
+symlinks:
+  - path: /usr/local/bin/helm
+    sudo: true
 ```
 
 ### `shell-scripts`
@@ -342,7 +424,34 @@ spec:
       url: https://sh.rustup.rs
       shell: sh
       args: [-s, --, -y]
+      download: stdin
+      mode: unattended
+      env:
+        RUSTUP_INIT_SKIP_PATH_CHECK: "yes"
       creates: "${HOME}/.cargo/bin/rustc"
+      cleanup: true
+```
+
+Downloaded installer files use `download: file`. Set `sudo`, `cwd`, `timeout`,
+and `allowedExitCodes` on an item when the installer needs them.
+
+### `file-writes`
+
+Writes arbitrary files through a temporary file and an `install` command.
+
+```yaml
+kind: file-writes
+spec:
+  items:
+    - name: sddm-sway
+      path: /etc/sddm.conf.d/sway.conf
+      content: |
+        [General]
+        DisplayServer=wayland
+      sudo: true
+      owner: root
+      group: root
+      mode: "0644"
 ```
 
 ### `nerd-fonts`
@@ -421,9 +530,19 @@ spec:
     - name: enable-docker
       run: systemctl enable --now docker
       sudo: true
+      cwd: /tmp
+      env:
+        FOO: bar
+      creates: /tmp/docker-enabled
+      unless: systemctl is-enabled docker
+      allowedExitCodes: [0, 3]
+      timeout: 30
       when:
         commandExists: systemctl
 ```
+
+Use `commands` for small host operations such as user group changes, login shell
+changes, system service commands, simple Git clones, Git config, and time setup.
 
 ## State Files
 

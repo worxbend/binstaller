@@ -13,7 +13,8 @@ final case class CommandSpec(
     env: VectorMap[String, CommandEnvironmentValue],
     sudo: SudoMode,
     timeout: Option[FiniteDuration],
-    stdinFile: Option[Path] = None
+    stdinFile: Option[Path] = None,
+    allowedExitCodes: Set[Int] = Set(0)
 ):
   def redacted: RedactedCommandSpec = CommandRedactor.redact(this)
 
@@ -25,14 +26,16 @@ object CommandSpec:
       env: VectorMap[String, CommandEnvironmentValue] = VectorMap.empty,
       sudo: SudoMode = SudoMode.Disabled,
       timeout: Option[FiniteDuration] = None,
-      stdinFile: Option[Path] = None
+      stdinFile: Option[Path] = None,
+      allowedExitCodes: Set[Int] = Set(0)
   ): CommandSpec = CommandSpec(
     invocation = CommandInvocation.Direct(argv),
     cwd = cwd,
     env = env,
     sudo = sudo,
     timeout = timeout,
-    stdinFile = stdinFile
+    stdinFile = stdinFile,
+    allowedExitCodes = allowedExitCodes
   )
 
   def shell(
@@ -42,14 +45,16 @@ object CommandSpec:
       env: VectorMap[String, CommandEnvironmentValue] = VectorMap.empty,
       sudo: SudoMode = SudoMode.Disabled,
       timeout: Option[FiniteDuration] = None,
-      stdinFile: Option[Path] = None
+      stdinFile: Option[Path] = None,
+      allowedExitCodes: Set[Int] = Set(0)
   ): CommandSpec = CommandSpec(
     invocation = CommandInvocation.Shell(command, shell),
     cwd = cwd,
     env = env,
     sudo = sudo,
     timeout = timeout,
-    stdinFile = stdinFile
+    stdinFile = stdinFile,
+    allowedExitCodes = allowedExitCodes
   )
 
 enum CommandInvocation:
@@ -82,7 +87,8 @@ final case class RedactedCommandSpec(
     env: VectorMap[String, String],
     sudo: SudoMode,
     timeout: Option[FiniteDuration],
-    stdinFile: Option[Path]
+    stdinFile: Option[Path],
+    allowedExitCodes: Set[Int]
 )
 
 enum RedactedCommandInvocation:
@@ -98,7 +104,8 @@ object CommandRedactor:
     env = redactEnv(spec.env),
     sudo = spec.sudo,
     timeout = spec.timeout,
-    stdinFile = spec.stdinFile
+    stdinFile = spec.stdinFile,
+    allowedExitCodes = spec.allowedExitCodes
   )
 
   def redactInvocation(invocation: CommandInvocation): RedactedCommandInvocation = invocation match
@@ -212,7 +219,7 @@ final case class CommandResult(
     case CommandTermination.Exited(code) => Some(code)
     case _                               => None
 
-  def succeeded: Boolean = exitCode.contains(0)
+  def succeeded: Boolean = exitCode.exists(spec.allowedExitCodes.contains)
 
 enum CommandTermination:
   case Exited(code: Int)

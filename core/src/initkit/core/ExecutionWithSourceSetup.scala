@@ -39,7 +39,7 @@ object ExecutionWithSourceSetup:
   private def selectedHasPackageEntry(request: ExecutionEngineRequest): Boolean =
     selectedEntries(request).exists:
       case SelectedSourceSetupEntry.Runnable(entry) =>
-        entry.entry.kind.exists(PackageSpecDecoder.isPackageKind)
+        entry.entry.kind.exists(PackageSpecDecoder.isSourceSetupPackageKind)
       case SelectedSourceSetupEntry.Skipped(_) => false
 
   private def selectedSummaries(request: ExecutionEngineRequest): Vector[PlanOperationSummary] =

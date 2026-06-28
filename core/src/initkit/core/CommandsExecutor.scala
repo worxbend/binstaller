@@ -1,5 +1,9 @@
 package initkit.core
 
+import java.nio.file.{Files, Path}
+import scala.collection.immutable.VectorMap
+import scala.concurrent.duration.DurationInt
+
 import initkit.config.*
 import initkit.host.HostFacts
 
@@ -29,11 +33,17 @@ final class CommandsExecutor(
 
     steps.foreach:
       case step: CommandExecutionStep.Skipped               => skipped = skipped :+ step
-      case CommandExecutionStep.Run(_, command) if !stopped =>
-        val result = commandExecutor.run(command)
-        results = results :+ result
-        if !result.succeeded && operation.execution.failFast then
-          stopped = true
+      case CommandExecutionStep.Run(item, command) if !stopped =>
+        if shouldSkipByUnless(item) then
+          skipped = skipped :+ CommandExecutionStep.Skipped(
+            item,
+            Vector(s"unless command succeeded: ${item.unless.get}")
+          )
+        else
+          val result = commandExecutor.run(command)
+          results = results :+ result
+          if !result.succeeded && operation.execution.failFast then
+            stopped = true
       case CommandExecutionStep.Run(_, _) => ()
 
     val failures = results.filter(!_.succeeded)
@@ -56,6 +66,9 @@ final class CommandsExecutor(
     case (0, _) => s"skipped $skipped command(s)"
     case _      => s"ran $ran command(s), skipped $skipped command(s)"
 
+  private def shouldSkipByUnless(item: CommandItem): Boolean =
+    CommandsExecutor.unlessCommand(item).exists(command => commandExecutor.run(command).succeeded)
+
 enum CommandExecutionStep:
   case Run(item: CommandItem, command: CommandSpec)
   case Skipped(item: CommandItem, reasons: Vector[String])
@@ -71,13 +84,17 @@ object CommandsExecutor:
 
   def commandSpec(item: CommandItem, policy: ExecutionPolicy): CommandSpec = CommandSpec.shell(
     command = CommandArgument(item.run),
-    sudo = sudoMode(item, policy)
+    cwd = item.cwd.map(Path.of(_)),
+    env = env(item.env),
+    sudo = sudoMode(item, policy),
+    timeout = item.timeout.map(_.seconds),
+    allowedExitCodes = item.allowedExitCodes.toSet
   )
 
   def dryRunData(
       summary: PlanOperationSummary,
       steps: Vector[CommandExecutionStep]
-  ): DryRunOperationData = DryRunOperationData(summary, steps.map(dryRunAction))
+  ): DryRunOperationData = DryRunOperationData(summary, steps.flatMap(dryRunActions))
 
   def describe(spec: CommandSpec): String = spec.redacted.invocation match
     case RedactedCommandInvocation.Direct(argv)          => argv.mkString(" ")
@@ -96,17 +113,50 @@ object CommandsExecutor:
   ): CommandExecutionStep =
     val condition = ConditionEvaluator.evaluate(item.when, hostFacts)
 
-    if condition.matched then
-      CommandExecutionStep.Run(item, commandSpec(item, policy))
-    else
+    val createsReason = item.creates
+      .filter(path => Files.exists(Path.of(path)))
+      .map(path => s"creates path already exists: $path")
+
+    if !condition.matched then
       CommandExecutionStep.Skipped(item, condition.userFacingSkipReasons)
+    else if createsReason.nonEmpty then
+      CommandExecutionStep.Skipped(item, createsReason.toVector)
+    else
+      CommandExecutionStep.Run(item, commandSpec(item, policy))
 
   private def sudoMode(item: CommandItem, policy: ExecutionPolicy): SudoMode =
     if item.sudo.getOrElse(policy.requireSudo) then SudoMode.Required
     else SudoMode.Disabled
 
-  private def dryRunAction(step: CommandExecutionStep): DryRunAction = step match
-    case CommandExecutionStep.Run(_, command) => command.redacted.invocation match
+  private def env(entries: Vector[EnvironmentEntry]): VectorMap[String, CommandEnvironmentValue] =
+    VectorMap.from(entries.map(entry =>
+      entry.name -> CommandEnvironmentValue(
+        entry.value,
+        if entry.sensitive.contains(true) then Sensitivity.Secret else Sensitivity.Public
+      )
+    ))
+
+  def unlessCommand(item: CommandItem): Option[CommandSpec] = item.unless.map(command =>
+    CommandSpec.shell(
+      CommandArgument(command),
+      cwd = item.cwd.map(Path.of(_)),
+      env = env(item.env),
+      sudo = SudoMode.Disabled,
+      timeout = item.timeout.map(_.seconds),
+      allowedExitCodes = item.allowedExitCodes.toSet
+    )
+  )
+
+  private def dryRunActions(step: CommandExecutionStep): Vector[DryRunAction] = step match
+    case CommandExecutionStep.Run(item, command) =>
+      val confirmation = item.confirm.toVector.map(message =>
+        DryRunAction.Message(s"confirm command '${item.name}': $message")
+      )
+      confirmation :+ dryRunCommand(command)
+    case CommandExecutionStep.Skipped(item, reasons) =>
+      Vector(DryRunAction.Message(s"skip command '${item.name}': ${reasons.mkString("; ")}"))
+
+  private def dryRunCommand(command: CommandSpec): DryRunAction = command.redacted.invocation match
         case RedactedCommandInvocation.Direct(argv) => DryRunAction.Command(
             argv = argv,
             shell = None,
@@ -119,5 +169,3 @@ object CommandsExecutor:
             sudo = command.sudo == SudoMode.Required,
             workingDirectory = command.cwd.map(_.toString)
           )
-    case CommandExecutionStep.Skipped(item, reasons) =>
-      DryRunAction.Message(s"skip command '${item.name}': ${reasons.mkString("; ")}")

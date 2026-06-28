@@ -768,6 +768,49 @@ Implement these kinds first because they are represented in the example config:
 - `interrupt`
 - `commands`
 
+Add the following legacy-parity kinds after the first supported executor set.
+They come from reviewing the old
+[`w0rxbend/system-bootstrap/scripts`](https://github.com/w0rxbend/system-bootstrap/tree/main/scripts)
+bootstrap shell scripts on 2026-06-29:
+
+- `aur-packages`: install AUR packages with `paru` or `yay`, one package per command.
+- `cargo-packages`: install Rust CLI tools through `cargo-binstall` or `cargo install`, one tool per command.
+- `sdkman-packages`: install SDKMAN candidates such as Java, Gradle, Maven, Scala, and VisualVM.
+- `file-writes`: write arbitrary config files with optional sudo, owner, group, and mode.
+
+Do not create dedicated kinds too early for simple host operations that are
+already clear as shell commands. Prefer the common `commands` kind for:
+
+- user group changes such as `usermod -aG libvirt "${USER}"`
+- login shell changes such as `chsh -s "$(which zsh)"`
+- system service enable/start/restart commands such as `systemctl enable --now libvirtd`
+- simple Git clones for shell/editor/tmux plugins
+- Git configuration such as `git config --global pull.rebase true`
+- time configuration such as `timedatectl set-ntp true`
+
+Revisit dedicated kinds for those operations only when they need richer
+cross-distro semantics, idempotency that cannot be expressed with `creates` or
+`unless`, or specialized TUI rendering beyond command preview/status.
+
+Also extend existing package-manager/source support for old-script parity:
+
+- `apt-packages`, `dnf-packages`, `pacman-packages`, and `zypper-packages`
+  need explicit non-install actions such as update, upgrade, dist-upgrade,
+  `dnf swap`, `dnf groupupdate`, `pacman -Syu`, `zypper dup`, and
+  `zypper dup --from packman --allow-vendor-change`.
+- source setup must support GPG key imports, RPM release-package URLs,
+  Microsoft VS Code repos, RPM Fusion repos, Packman repos, Flatpak remotes,
+  and command-backed repo helpers such as openSUSE `opi codecs`.
+- `binary-downloads` must handle direct binaries, AppImages, zip archives,
+  `tar.gz`, `tar.xz`, selected archive paths, symlink creation, and optional
+  sudo symlinks into system paths.
+- `shell-scripts` must support installer scripts piped from URLs, downloaded
+  installer files, extra environment variables, interactive vs unattended
+  mode, `creates` idempotency checks, and cleanup of temporary installer files.
+- `commands` must support enough structure to be the normal home for small
+  administrative steps: `cwd`, `env`, `sudo`, `creates`, `unless`,
+  `allowedExitCodes`, `confirm`, `timeout`, and item-level conditions.
+
 Each plan entry has this common shape:
 
 ```yaml
@@ -1468,6 +1511,242 @@ Acceptance criteria:
 - `systemctl enable --now docker` is skipped when `systemctl` is missing
 - sudo is applied only to items that request it or require it through policy
 - dry-run prints command text without executing
+
+## Phase 15A: Legacy Bootstrap Parity
+
+Review source:
+[`w0rxbend/system-bootstrap/scripts`](https://github.com/w0rxbend/system-bootstrap/tree/main/scripts),
+checked on 2026-06-29.
+
+The old scripts contain useful workstation behaviors that should be modeled in
+Initkit without forcing users to copy large shell scripts into one opaque
+block. Use typed plan kinds where the action has repeated structure and needs
+custom validation. Use the common `commands` kind for small administrative
+operations that are already readable as one or two shell commands.
+
+Script coverage findings:
+
+- `arch/00-system-update.sh`, `arch/01-aur-packages.sh`,
+  `arch/02-base-packages.sh`, and `arch/03-hyprland.sh` need pacman update,
+  pacman install, AUR install, GPU-conditional packages, service enablement,
+  user group changes, shell changes, and Oh My Zsh installer support.
+- `fedora/00-system-update.sh`, `fedora/01-packages.sh`, and
+  `fedora/02-extras.sh` need DNF check/update/upgrade, package install,
+  group install/update, package swap, RPM Fusion release packages, Microsoft
+  repo/key setup, GPU-conditional packages, Podman/Docker compatibility setup,
+  and timedatectl support.
+- `opensuse/00-system-update.sh`, `opensuse/01-packages.sh`,
+  `opensuse/02-extras.sh`, and `opensuse/03-sddm.sh` need zypper refresh,
+  update, `dup`, Packman vendor changes, `opi codecs`, repository add/modify,
+  GPG auto import, arbitrary root-owned file writes, ownership changes, and
+  service restart.
+- `binary-dist.sh` needs richer archive extraction, AppImage/direct binary
+  installation, selected-file installation, symlink creation, and optional sudo
+  symlinks.
+- `cli-tools.sh` and `sdkman-packages.sh` need shell installer support plus
+  SDKMAN candidate installs after sourcing SDKMAN initialization.
+- `cargo-packages.sh` needs cargo-binstall/cargo-install package execution.
+- `configurations.sh` and `oh-my-zsh-plugins.sh` need structured command
+  entries for git repository cloning, Git config, and time configuration.
+- `flatpak.sh` and `flatpak-obs-plugins.sh` are covered by `flatpak-packages`,
+  but the examples should preserve categories and install one Flatpak app or
+  plugin per command.
+- `nerd-fonts.p0.sh` is superseded by the typed `nerd-fonts` executor backed
+  by `worxbend/nerd-font-installer`.
+
+Dedicated-kind decision:
+
+- add dedicated kinds for `aur-packages`, `cargo-packages`,
+  `sdkman-packages`, and `file-writes`
+- keep user group changes, login shell changes, systemd service actions, simple
+  Git clones, Git config, and timedatectl settings under `commands` for now
+- make `commands` structured enough that these operations are still safe to
+  preview, confirm, resume, and test item by item
+- revisit dedicated wrappers later only if real configs show repeated
+  cross-distro behavior that command items cannot express cleanly
+
+New or extended config examples:
+
+```yaml
+- name: arch-aur-cli
+  kind: aur-packages
+  execution:
+    mode: sequential
+    locks: [system-package-manager]
+  when:
+    os:
+      distribution:
+        oneOf: [arch, endeavouros]
+  spec:
+    helper: paru
+    install:
+      - visual-studio-code-bin
+      - google-chrome
+```
+
+```yaml
+- name: fedora-code-repo
+  kind: sources
+  when:
+    os:
+      distribution: fedora
+  spec:
+    rpmKeys:
+      - https://packages.microsoft.com/keys/microsoft.asc
+    dnf:
+      repositories:
+        - name: vscode
+          file: /etc/yum.repos.d/vscode.repo
+          content: |
+            [code]
+            name=Visual Studio Code
+            baseurl=https://packages.microsoft.com/yumrepos/vscode
+            enabled=1
+            autorefresh=1
+            type=rpm-md
+            gpgcheck=1
+            gpgkey=https://packages.microsoft.com/keys/microsoft.asc
+```
+
+```yaml
+- name: fedora-codecs
+  kind: dnf-actions
+  when:
+    os:
+      distribution: fedora
+  spec:
+    actions:
+      - type: install
+        item: https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-${host.os.version}.noarch.rpm
+      - type: install
+        item: https://download1.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-${host.os.version}.noarch.rpm
+      - type: swap
+        remove: ffmpeg-free
+        install: ffmpeg
+        args: [--allowerasing]
+```
+
+```yaml
+- name: opensuse-packman-codecs
+  kind: zypper-actions
+  when:
+    os:
+      distribution: opensuse-tumbleweed
+  spec:
+    actions:
+      - type: dup
+        args: [--from, packman, --allow-vendor-change]
+      - type: command
+        run: opi codecs
+```
+
+```yaml
+- name: shell-and-services
+  kind: commands
+  spec:
+    items:
+      - name: change-login-shell
+        run: chsh -s "$(which zsh)" "${USER}"
+        confirm: true
+        message: Requires logout/login before the new shell is visible.
+        when:
+          commandExists: zsh
+      - name: enable-libvirt
+        run: systemctl enable --now libvirtd
+        sudo: true
+        when:
+          commandExists: systemctl
+      - name: add-user-to-libvirt
+        run: usermod -aG libvirt "${USER}"
+        sudo: true
+        confirm: true
+```
+
+```yaml
+- name: git-and-time-config
+  kind: commands
+  spec:
+    items:
+      - name: clone-tmux-plugin-manager
+        run: git clone https://github.com/tmux-plugins/tpm "${HOME}/.tmux/plugins/tpm"
+        creates: "${HOME}/.tmux/plugins/tpm/.git"
+      - name: git-default-branch
+        run: git config --global init.defaultBranch main
+      - name: git-pull-rebase
+        run: git config --global pull.rebase true
+      - name: enable-network-time
+        run: timedatectl set-ntp true
+        sudo: true
+        when:
+          commandExists: timedatectl
+```
+
+```yaml
+- name: sddm-sway-config
+  kind: file-writes
+  spec:
+    files:
+      - path: /var/lib/sddm/.config/sway/config
+        sudo: true
+        owner: sddm
+        group: sddm
+        mode: "0644"
+        content: |
+          exec systemctl --user import-environment
+```
+
+```yaml
+- name: rust-cli-tools
+  kind: cargo-packages
+  spec:
+    installer: cargo-binstall
+    install:
+      - eza
+      - fd-find
+      - ripgrep
+```
+
+```yaml
+- name: jvm-tools
+  kind: sdkman-packages
+  spec:
+    install:
+      - candidate: java
+      - candidate: gradle
+      - candidate: maven
+      - candidate: scala
+```
+
+Execution requirements:
+
+- all install-like item lists in these new kinds follow the package-manager
+  correction: run one item per command, continue attempting later items, and
+  report partial failure after all items finish
+- support `allowedExitCodes` for commands such as `dnf check-update`, where a
+  non-zero exit code can still mean a usable result
+- support richer conditions: file exists, directory exists, command exists,
+  user exists, group exists, service exists, and command-output predicates for
+  hardware checks such as `lspci | grep -i amd | grep -i vga`
+- support `creates`, `unless`, `cwd`, `env`, `sudo`, `confirm`, `timeout`,
+  `retries`, `allowedExitCodes`, and `cleanup` on command-like items where
+  applicable
+- make dangerous actions visible in TUI and dry-run output: service restart,
+  shell change, group membership change, root-owned file write, and package
+  manager upgrade/dist-upgrade
+- state files must record item-level results for these new kinds so a resumed
+  run can skip completed items without losing partial-failure details
+
+Acceptance criteria:
+
+- every reviewed legacy script has either a typed plan-kind mapping or a
+  documented structured `commands` item
+- examples exist for Fedora, EndeavourOS/Arch, openSUSE Tumbleweed, and Ubuntu
+  covering repositories, package actions, shell/tool installers, services, and
+  post-install configuration
+- tests use fake command runners and assert generated argv for every new kind
+- tests cover middle-item failure and verify later items are still attempted
+- dry-run output clearly shows repo writes, file writes, sudo use, service
+  changes, shell changes, and symlink creation
 
 ## Phase 16: Logging And Reporting
 

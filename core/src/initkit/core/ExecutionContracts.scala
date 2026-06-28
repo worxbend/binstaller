@@ -122,10 +122,14 @@ enum PlanOperation:
   case ZypperPackages(operation: PackagePlanOperation[PackageSpec.Zypper])
   case FlatpakPackages(operation: PackagePlanOperation[PackageSpec.Flatpak])
   case SnapPackages(operation: PackagePlanOperation[PackageSpec.Snap])
+  case AurPackages(operation: PackagePlanOperation[PackageSpec.Aur])
+  case CargoPackages(operation: PackagePlanOperation[PackageSpec.Cargo])
+  case SdkmanPackages(operation: PackagePlanOperation[PackageSpec.Sdkman])
   case BinaryDownloads(operation: InstallerPlanOperation[InstallerSpec.BinaryDownloads])
   case ShellScripts(operation: InstallerPlanOperation[InstallerSpec.ShellScripts])
   case NerdFonts(operation: InstallerPlanOperation[InstallerSpec.NerdFonts])
   case DotfilesApply(operation: InstallerPlanOperation[InstallerSpec.DotfilesApply])
+  case FileWrites(operation: InstallerPlanOperation[InstallerSpec.FileWrites])
   case Interrupt(operation: InstallerPlanOperation[InstallerSpec.Interrupt])
   case Commands(operation: InstallerPlanOperation[InstallerSpec.Commands])
 
@@ -136,10 +140,14 @@ enum PlanOperation:
     case ZypperPackages(operation)  => operation.summary
     case FlatpakPackages(operation) => operation.summary
     case SnapPackages(operation)    => operation.summary
+    case AurPackages(operation)     => operation.summary
+    case CargoPackages(operation)   => operation.summary
+    case SdkmanPackages(operation)  => operation.summary
     case BinaryDownloads(operation) => operation.summary
     case ShellScripts(operation)    => operation.summary
     case NerdFonts(operation)       => operation.summary
     case DotfilesApply(operation)   => operation.summary
+    case FileWrites(operation)      => operation.summary
     case Interrupt(operation)       => operation.summary
     case Commands(operation)        => operation.summary
 
@@ -150,10 +158,14 @@ enum PlanOperation:
     case ZypperPackages(operation)  => operation.execution
     case FlatpakPackages(operation) => operation.execution
     case SnapPackages(operation)    => operation.execution
+    case AurPackages(operation)     => operation.execution
+    case CargoPackages(operation)   => operation.execution
+    case SdkmanPackages(operation)  => operation.execution
     case BinaryDownloads(operation) => operation.execution
     case ShellScripts(operation)    => operation.execution
     case NerdFonts(operation)       => operation.execution
     case DotfilesApply(operation)   => operation.execution
+    case FileWrites(operation)      => operation.execution
     case Interrupt(operation)       => operation.execution
     case Commands(operation)        => operation.execution
 
@@ -192,6 +204,12 @@ object PlanOperation:
       Right(PlanOperation.FlatpakPackages(PackagePlanOperation(summary, execution, typed)))
     case typed: PackageSpec.Snap =>
       Right(PlanOperation.SnapPackages(PackagePlanOperation(summary, execution, typed)))
+    case typed: PackageSpec.Aur =>
+      Right(PlanOperation.AurPackages(PackagePlanOperation(summary, execution, typed)))
+    case typed: PackageSpec.Cargo =>
+      Right(PlanOperation.CargoPackages(PackagePlanOperation(summary, execution, typed)))
+    case typed: PackageSpec.Sdkman =>
+      Right(PlanOperation.SdkmanPackages(PackagePlanOperation(summary, execution, typed)))
 
   private def installerOperation(
       summary: PlanOperationSummary,
@@ -205,6 +223,8 @@ object PlanOperation:
       Right(PlanOperation.NerdFonts(InstallerPlanOperation(summary, execution, typed)))
     case typed: InstallerSpec.DotfilesApply =>
       Right(PlanOperation.DotfilesApply(InstallerPlanOperation(summary, execution, typed)))
+    case typed: InstallerSpec.FileWrites =>
+      Right(PlanOperation.FileWrites(InstallerPlanOperation(summary, execution, typed)))
     case typed: InstallerSpec.Interrupt =>
       Right(PlanOperation.Interrupt(InstallerPlanOperation(summary, execution, typed)))
     case typed: InstallerSpec.Commands =>
@@ -220,10 +240,14 @@ trait PlanOperationInstaller:
       case PlanOperation.ZypperPackages(typed)  => installZypper(typed, policy)
       case PlanOperation.FlatpakPackages(typed) => installFlatpak(typed, policy)
       case PlanOperation.SnapPackages(typed)    => installSnap(typed, policy)
+      case PlanOperation.AurPackages(typed)     => installAur(typed, policy)
+      case PlanOperation.CargoPackages(typed)   => installCargo(typed, policy)
+      case PlanOperation.SdkmanPackages(typed)  => installSdkman(typed, policy)
       case PlanOperation.BinaryDownloads(typed) => installBinaryDownloads(typed, policy)
       case PlanOperation.ShellScripts(typed)    => installShellScripts(typed, policy)
       case PlanOperation.NerdFonts(typed)       => installNerdFonts(typed, policy)
       case PlanOperation.DotfilesApply(typed)   => installDotfilesApply(typed, policy)
+      case PlanOperation.FileWrites(typed)      => installFileWrites(typed, policy)
       case PlanOperation.Interrupt(typed)       => installInterrupt(typed, policy)
       case PlanOperation.Commands(typed)        => installCommands(typed, policy)
 
@@ -257,6 +281,21 @@ trait PlanOperationInstaller:
       policy: ExecutionPolicy
   ): PlanOperationOutcome
 
+  def installAur(
+      operation: PackagePlanOperation[PackageSpec.Aur],
+      policy: ExecutionPolicy
+  ): PlanOperationOutcome = unsupported(operation.summary)
+
+  def installCargo(
+      operation: PackagePlanOperation[PackageSpec.Cargo],
+      policy: ExecutionPolicy
+  ): PlanOperationOutcome = unsupported(operation.summary)
+
+  def installSdkman(
+      operation: PackagePlanOperation[PackageSpec.Sdkman],
+      policy: ExecutionPolicy
+  ): PlanOperationOutcome = unsupported(operation.summary)
+
   def installBinaryDownloads(
       operation: InstallerPlanOperation[InstallerSpec.BinaryDownloads],
       policy: ExecutionPolicy
@@ -276,6 +315,20 @@ trait PlanOperationInstaller:
       operation: InstallerPlanOperation[InstallerSpec.DotfilesApply],
       policy: ExecutionPolicy
   ): PlanOperationOutcome
+
+  def installFileWrites(
+      operation: InstallerPlanOperation[InstallerSpec.FileWrites],
+      policy: ExecutionPolicy
+  ): PlanOperationOutcome = unsupported(operation.summary)
+
+  private def unsupported(summary: PlanOperationSummary): PlanOperationOutcome =
+    PlanOperationOutcome.Failed(
+      PlanFailure(
+        summary,
+        "operation is not supported by this installer",
+        exitCode = None
+      )
+    )
 
   def installInterrupt(
       operation: InstallerPlanOperation[InstallerSpec.Interrupt],

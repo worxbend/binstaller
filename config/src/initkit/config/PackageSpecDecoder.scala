@@ -10,10 +10,22 @@ object PackageSpecDecoder:
     "dnf-packages",
     "zypper-packages",
     "flatpak-packages",
-    "snap-packages"
+    "snap-packages",
+    "aur-packages",
+    "cargo-packages",
+    "sdkman-packages"
   )
 
   def isPackageKind(kind: String): Boolean = PackageKinds.contains(kind)
+
+  def isSourceSetupPackageKind(kind: String): Boolean = Set(
+    "apt-packages",
+    "pacman-packages",
+    "dnf-packages",
+    "zypper-packages",
+    "flatpak-packages",
+    "snap-packages"
+  ).contains(kind)
 
   def decode(entry: PlanEntry, index: Int): Either[Vector[ManifestValidationError], PackageSpec] =
     entry.kind.flatMap(nonEmptyTrimmed) match
@@ -38,20 +50,53 @@ object PackageSpecDecoder:
   ): Either[Vector[ManifestValidationError], PackageSpec] = kind match
     case "apt-packages" => buildPackageSpec(
         decodeOptionalBoolean(fields, "update", s"$specAt.update"),
-        decodeInstallList(fields, specAt, entryName)
+        decodeOptionalInstallList(fields, specAt),
+        decodeActions(fields, specAt),
+        specAt,
+        entryName,
+        allowActionOnly = fields.get("update").contains(RawYaml.BooleanValue(true)),
+        installFieldPresent = fields.contains("install")
       )(PackageSpec.Apt.apply)
     case "pacman-packages" => buildPackageSpec(
         decodeOptionalBoolean(fields, "sync", s"$specAt.sync"),
-        decodeInstallList(fields, specAt, entryName)
+        decodeOptionalInstallList(fields, specAt),
+        decodeActions(fields, specAt),
+        specAt,
+        entryName,
+        allowActionOnly = fields.get("sync").contains(RawYaml.BooleanValue(true)),
+        installFieldPresent = fields.contains("install")
       )(PackageSpec.Pacman.apply)
-    case "dnf-packages" => decodeInstallList(fields, specAt, entryName).map(PackageSpec.Dnf.apply)
+    case "dnf-packages" => buildPackageSpec(
+        Right(()),
+        decodeOptionalInstallList(fields, specAt),
+        decodeActions(fields, specAt),
+        specAt,
+        entryName,
+        allowActionOnly = false,
+        installFieldPresent = fields.contains("install")
+      )((_, install, actions) => PackageSpec.Dnf(install, actions))
     case "zypper-packages" => buildPackageSpec(
         decodeOptionalBoolean(fields, "refresh", s"$specAt.refresh"),
-        decodeInstallList(fields, specAt, entryName)
+        decodeOptionalInstallList(fields, specAt),
+        decodeActions(fields, specAt),
+        specAt,
+        entryName,
+        allowActionOnly = fields.get("refresh").contains(RawYaml.BooleanValue(true)),
+        installFieldPresent = fields.contains("install")
       )(PackageSpec.Zypper.apply)
     case "flatpak-packages" => buildFlatpakSpec(fields, specAt, entryName)
     case "snap-packages"    =>
       decodeSnapInstallList(fields, specAt, entryName).map(PackageSpec.Snap.apply)
+    case "aur-packages" => buildPackageSpec(
+        decodeOptionalString(fields, "helper", s"$specAt.helper"),
+        decodeInstallList(fields, specAt, entryName)
+      )(PackageSpec.Aur.apply)
+    case "cargo-packages" => buildPackageSpec(
+        decodeOptionalString(fields, "installer", s"$specAt.installer"),
+        decodeInstallList(fields, specAt, entryName)
+      )(PackageSpec.Cargo.apply)
+    case "sdkman-packages" => decodeSdkmanInstallList(fields, specAt, entryName)
+        .map(PackageSpec.Sdkman.apply)
     case other => Left(Vector(error(specAt, s"unsupported package kind '$other'")))
 
   private def buildFlatpakSpec(
@@ -71,6 +116,29 @@ object PackageSpecDecoder:
       second: Either[Vector[ManifestValidationError], B]
   )(build: (A, B) => C): Either[Vector[ManifestValidationError], C] =
     combine(first, second).map(build.tupled)
+
+  private def buildPackageSpec[A, B, C, D](
+      first: Either[Vector[ManifestValidationError], A],
+      second: Either[Vector[ManifestValidationError], Vector[String]],
+      third: Either[Vector[ManifestValidationError], Vector[PackageAction]],
+      specAt: String,
+      entryName: Option[String],
+      allowActionOnly: Boolean,
+      installFieldPresent: Boolean
+  )(build: (A, Vector[String], Vector[PackageAction]) => D): Either[Vector[ManifestValidationError], D] =
+    combine(first, second, third).flatMap:
+      case (_, install, actions) if install.isEmpty && actions.isEmpty && !allowActionOnly =>
+        if installFieldPresent then
+          Left(Vector(error(
+            s"$specAt.install",
+            withEntryName(entryName, "must contain at least one package")
+          )))
+        else
+          Left(Vector(error(
+            specAt,
+            withEntryName(entryName, "must define at least one install item or action")
+          )))
+      case (a, b, c) => Right(build(a, b, c))
 
   private def combine[A, B](
       first: Either[Vector[ManifestValidationError], A],
@@ -109,6 +177,46 @@ object PackageSpecDecoder:
         withEntryName(entryName, "is required and must contain at least one package")
       )))
 
+  private def decodeOptionalInstallList(
+      fields: VectorMap[String, RawYaml],
+      specAt: String
+  ): Either[Vector[ManifestValidationError], Vector[String]] = fields.get("install") match
+    case Some(RawYaml.SequenceValue(items)) =>
+      sequence(items.zipWithIndex.map((item, index) =>
+        decodeString(item, s"$specAt.install[$index]")
+      ))
+    case Some(other) => Left(Vector(error(
+        s"$specAt.install",
+        s"must be a sequence, found ${kindOf(other)}"
+      )))
+    case None => Right(Vector.empty)
+
+  private def decodeActions(
+      fields: VectorMap[String, RawYaml],
+      specAt: String
+  ): Either[Vector[ManifestValidationError], Vector[PackageAction]] = fields.get("actions") match
+    case Some(RawYaml.SequenceValue(items)) =>
+      sequence(items.zipWithIndex.map((item, index) =>
+        decodeAction(item, s"$specAt.actions[$index]")
+      ))
+    case Some(other) => Left(Vector(error(
+        s"$specAt.actions",
+        s"must be a sequence, found ${kindOf(other)}"
+      )))
+    case None => Right(Vector.empty)
+
+  private def decodeAction(
+      raw: RawYaml,
+      at: String
+  ): Either[Vector[ManifestValidationError], PackageAction] = raw match
+    case RawYaml.StringValue(value) if value.trim.nonEmpty => Right(PackageAction(value, Vector.empty))
+    case RawYaml.StringValue(_) => Left(Vector(error(at, "must not be empty")))
+    case RawYaml.MappingValue(fields) => combine(
+        decodeRequiredString(fields, "action", s"$at.action"),
+        decodeStringSequence(fields, "args", s"$at.args")
+      ).map { case (action, args) => PackageAction(action, args) }
+    case other => Left(Vector(error(at, s"must be an action name or mapping, found ${kindOf(other)}")))
+
   private def decodeSnapInstallList(
       fields: VectorMap[String, RawYaml],
       specAt: String,
@@ -143,6 +251,40 @@ object PackageSpecDecoder:
     case other =>
       Left(Vector(error(at, s"must be a package name or mapping, found ${kindOf(other)}")))
 
+  private def decodeSdkmanInstallList(
+      fields: VectorMap[String, RawYaml],
+      specAt: String,
+      entryName: Option[String]
+  ): Either[Vector[ManifestValidationError], Vector[SdkmanPackage]] = fields.get("install") match
+    case Some(RawYaml.SequenceValue(items)) if items.nonEmpty =>
+      sequence(items.zipWithIndex.map((item, index) =>
+        decodeSdkmanPackage(item, s"$specAt.install[$index]")
+      ))
+    case Some(RawYaml.SequenceValue(_)) => Left(Vector(error(
+        s"$specAt.install",
+        withEntryName(entryName, "must contain at least one package")
+      )))
+    case Some(other) => Left(Vector(error(
+        s"$specAt.install",
+        s"must be a non-empty sequence, found ${kindOf(other)}"
+      )))
+    case None => Left(Vector(error(
+        s"$specAt.install",
+        withEntryName(entryName, "is required and must contain at least one package")
+      )))
+
+  private def decodeSdkmanPackage(
+      raw: RawYaml,
+      at: String
+  ): Either[Vector[ManifestValidationError], SdkmanPackage] = raw match
+    case RawYaml.StringValue(value) => decodeString(raw, at).map(SdkmanPackage(_, None))
+    case RawYaml.MappingValue(fields) => combine(
+        decodeRequiredString(fields, "candidate", s"$at.candidate"),
+        decodeOptionalString(fields, "version", s"$at.version")
+      ).map { case (candidate, version) => SdkmanPackage(candidate, version) }
+    case other =>
+      Left(Vector(error(at, s"must be a candidate name or mapping, found ${kindOf(other)}")))
+
   private def decodeRequiredString(
       fields: VectorMap[String, RawYaml],
       key: String,
@@ -175,6 +317,16 @@ object PackageSpecDecoder:
     case None                              => Right(None)
     case Some(RawYaml.BooleanValue(value)) => Right(Some(value))
     case Some(other) => Left(Vector(error(at, s"must be a boolean, found ${kindOf(other)}")))
+
+  private def decodeStringSequence(
+      fields: VectorMap[String, RawYaml],
+      key: String,
+      at: String
+  ): Either[Vector[ManifestValidationError], Vector[String]] = fields.get(key) match
+    case None                          => Right(Vector.empty)
+    case Some(RawYaml.SequenceValue(items)) =>
+      sequence(items.zipWithIndex.map((item, index) => decodeString(item, s"$at[$index]")))
+    case Some(other) => Left(Vector(error(at, s"must be a sequence, found ${kindOf(other)}")))
 
   private def sequence[A](
       values: Vector[Either[Vector[ManifestValidationError], A]]
