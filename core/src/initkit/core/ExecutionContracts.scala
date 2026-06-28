@@ -318,7 +318,8 @@ enum DryRunAction:
       argv: Vector[String],
       shell: Option[String],
       sudo: Boolean,
-      workingDirectory: Option[String]
+      workingDirectory: Option[String],
+      stdinFile: Option[String] = None
   )
   case FileWrite(path: String, mode: Option[String], description: String)
   case StateWrite(path: String, resumeFrom: Option[InterruptResumeFrom])

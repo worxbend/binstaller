@@ -8,7 +8,9 @@ import initkit.host.HostFacts
 final class PackageManagerInstallers(
     commandExecutor: CommandExecutor,
     aptUpdateBeforeInstall: Boolean = false,
-    hostFacts: HostFacts = HostFacts.fake()
+    hostFacts: HostFacts = HostFacts.fake(),
+    shellScriptDownloader: ShellScriptDownloader = ShellScriptDownloader.Jdk,
+    shellScriptFiles: ShellScriptFiles = ShellScriptFiles.Jvm
 ) extends PlanOperationInstaller:
   override def installApt(
       operation: PackagePlanOperation[PackageSpec.Apt],
@@ -80,7 +82,7 @@ final class PackageManagerInstallers(
       operation: InstallerPlanOperation[InstallerSpec.ShellScripts],
       policy: ExecutionPolicy
   ): PlanOperationOutcome =
-    unsupported(operation.summary)
+    new ShellScriptsExecutor(commandExecutor, shellScriptDownloader, shellScriptFiles).install(operation, policy)
 
   override def installNerdFonts(
       operation: InstallerPlanOperation[InstallerSpec.NerdFonts],

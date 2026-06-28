@@ -1796,3 +1796,16 @@ confirmed package-manager, sudo, and URL-shaped paths use fake executors,
 dry-run assertions, pure command-generation assertions, or harmless local
 process-runner fixtures; no test invokes real package managers, real sudo, or
 live network downloads. No source fix was needed.
+
+Progress note, 2026-06-28: T023 added shell-script installer support in the
+`core` module. `ShellScriptsExecutor` skips items whose `creates` path already
+exists, downloads scripts to per-item temp files through an injectable
+downloader, executes items sequentially through the shared `CommandExecutor`,
+and deletes temp files after each attempt. `CommandSpec` and dry-run command
+actions now expose optional stdin-file metadata so the rustup example renders
+as direct argv `sh -s -- -y --default-toolchain stable` with the downloaded
+script attached as stdin, while Miniforge renders as
+`bash <temp> -b -p ${home}/miniforge3`. Dry-run previews download and execution
+actions without creating temp files, downloading, or invoking the command
+executor. Checks passed: `./mill core.test`, `./mill __.compile`,
+`./mill __.test`, `git diff --check`, and `jq empty .agent-loop/tasks.json`.

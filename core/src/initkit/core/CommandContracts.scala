@@ -12,7 +12,8 @@ final case class CommandSpec(
     cwd: Option[Path],
     env: VectorMap[String, CommandEnvironmentValue],
     sudo: SudoMode,
-    timeout: Option[FiniteDuration]
+    timeout: Option[FiniteDuration],
+    stdinFile: Option[Path] = None
 ):
   def redacted: RedactedCommandSpec =
     CommandRedactor.redact(this)
@@ -23,14 +24,16 @@ object CommandSpec:
       cwd: Option[Path] = None,
       env: VectorMap[String, CommandEnvironmentValue] = VectorMap.empty,
       sudo: SudoMode = SudoMode.Disabled,
-      timeout: Option[FiniteDuration] = None
+      timeout: Option[FiniteDuration] = None,
+      stdinFile: Option[Path] = None
   ): CommandSpec =
     CommandSpec(
       invocation = CommandInvocation.Direct(argv),
       cwd = cwd,
       env = env,
       sudo = sudo,
-      timeout = timeout
+      timeout = timeout,
+      stdinFile = stdinFile
     )
 
   def shell(
@@ -39,14 +42,16 @@ object CommandSpec:
       cwd: Option[Path] = None,
       env: VectorMap[String, CommandEnvironmentValue] = VectorMap.empty,
       sudo: SudoMode = SudoMode.Disabled,
-      timeout: Option[FiniteDuration] = None
+      timeout: Option[FiniteDuration] = None,
+      stdinFile: Option[Path] = None
   ): CommandSpec =
     CommandSpec(
       invocation = CommandInvocation.Shell(command, shell),
       cwd = cwd,
       env = env,
       sudo = sudo,
-      timeout = timeout
+      timeout = timeout,
+      stdinFile = stdinFile
     )
 
 enum CommandInvocation:
@@ -79,7 +84,8 @@ final case class RedactedCommandSpec(
     cwd: Option[Path],
     env: VectorMap[String, String],
     sudo: SudoMode,
-    timeout: Option[FiniteDuration]
+    timeout: Option[FiniteDuration],
+    stdinFile: Option[Path]
 )
 
 enum RedactedCommandInvocation:
@@ -96,7 +102,8 @@ object CommandRedactor:
       cwd = spec.cwd,
       env = redactEnv(spec.env),
       sudo = spec.sudo,
-      timeout = spec.timeout
+      timeout = spec.timeout,
+      stdinFile = spec.stdinFile
     )
 
   def redactInvocation(invocation: CommandInvocation): RedactedCommandInvocation =

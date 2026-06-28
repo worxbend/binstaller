@@ -59,6 +59,17 @@ object ProcessCommandRunnerTests extends TestSuite:
       assert(result.stdout == "")
       assert(result.stderr == "")
 
+    test("feeds configured stdin file to direct argv commands"):
+      val input = tempDir().resolve("input.txt")
+      Files.writeString(input, "from-file", StandardOpenOption.CREATE_NEW)
+
+      val result = liveRunner.run(
+        CommandSpec.direct(Vector(CommandArgument("cat")), stdinFile = Some(input))
+      )
+
+      assert(result.succeeded)
+      assert(result.stdout == "from-file")
+
     test("large stdout and stderr streams do not deadlock"):
       val script = tempScript(
         "large-streams",

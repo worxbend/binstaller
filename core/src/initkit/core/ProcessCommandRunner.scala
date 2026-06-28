@@ -50,7 +50,7 @@ final class ProcessCommandRunner(
         val builder = processBuilder(command, spec)
         try
           val process = builder.start()
-          closeChildStdin(process)
+          closeChildStdin(process, spec)
           try captureProcessResult(spec, process, startedAt)
           catch
             case error: InterruptedException =>
@@ -109,6 +109,7 @@ final class ProcessCommandRunner(
     val environment = builder.environment()
     spec.env.foreach: (name, value) =>
       environment.put(name, value.value)
+    spec.stdinFile.foreach(path => builder.redirectInput(path.toFile))
     builder
 
   private def commandVector(spec: CommandSpec): Either[String, Vector[String]] =
@@ -136,9 +137,10 @@ final class ProcessCommandRunner(
         ()
     finally input.close()
 
-  private def closeChildStdin(process: Process): Unit =
-    try process.getOutputStream.close()
-    catch case _: IOException => ()
+  private def closeChildStdin(process: Process, spec: CommandSpec): Unit =
+    if spec.stdinFile.isEmpty then
+      try process.getOutputStream.close()
+      catch case _: IOException => ()
 
   private def terminateProcessTree(process: Process): Unit =
     val handles = processTree(process)
