@@ -167,6 +167,16 @@ representative os-release data, architecture aliases, PATH lookup, and fake host
 facts for later condition evaluation. `./mill __.compile`, `./mill __.test`,
 and `git diff --check` pass.
 
+Progress note, 2026-06-28: T009 added a `core` module for plan-condition
+evaluation that depends on `config` and `host`. `ConditionEvaluator` evaluates
+optional plan `when` conditions against injected `HostFacts`, including exact
+and `oneOf` OS selectors and `commandExists` checks, and returns structured
+skip reasons with user-facing messages for future CLI/TUI display. Focused
+tests cover matched distribution conditions, skipped distribution mismatches,
+available commands, and missing-command skips. `./mill core.compile`,
+`./mill core.test`, `./mill __.compile`, `./mill __.test`, and
+`git diff --check` pass.
+
 Validation checkpoint, 2026-06-28: `./mill app.compile` and `./mill app.test`
 were rerun for the completed T001-T003 chunk. Daemon-mode Mill cannot start its
 localhost server in this sandbox (`java.net.SocketException: Operation not
