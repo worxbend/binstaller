@@ -2468,3 +2468,19 @@ dry-run smoke with `/tmp/initkit-orchestration-refactor-state.json`, the
 matching no-state-file assertion, `./mill app.run apply --help`,
 `./mill app.run tui --help`, `git diff --check`, and `jq empty
 .agent-loop/tasks.json`.
+
+Validation checkpoint T005 / iteration 57, 2026-06-29: the completed core and
+CLI/TUI refactor chunk was revalidated without source changes. Project
+metadata still exposes the checked-in `./mill` launcher, root `build.mill`, and
+`.scalafmt.conf`; no additional local build hooks beyond the Mill checks were
+found. Mill discovery passed for `./mill --no-daemon resolve _`, listing
+`app`, `cli`, `config`, `core`, `host`, `selective`, and `tui`. Configured
+validation passed: `./mill __.compile`,
+`./mill __.test`, and `./mill mill.scalalib.scalafmt/checkFormatAll`. Root,
+`apply`, and `tui` help smokes passed. The example dry-run with `--state
+/tmp/initkit-refactor-checkpoint-state.json` exited 0 and did not create the
+throwaway state file. `jq empty .agent-loop/tasks.json`, `jq empty
+.agent-loop/config.json`, `git diff --check`, and the conflict-marker scan all
+passed. No in-scope fix was needed. Remaining risk: full-screen manual TUI
+interaction remains covered by terminal-free tests, `TuiSmokeTests`, and
+`tui --help`, not by a human-driven terminal session in this validation loop.
