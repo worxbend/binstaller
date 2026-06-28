@@ -2090,3 +2090,19 @@ the full-screen UI. The example dry-run with `--state
 throwaway state file. `jq empty .agent-loop/tasks.json`,
 `jq empty .agent-loop/config.json`, and `git diff --check` also pass. No
 runtime source fix was needed.
+
+Validation checkpoint VALIDATION-51, 2026-06-28: the completed refreshed queue
+was revalidated without runtime source changes. Project metadata still exposes
+the checked-in `./mill` launcher, root `build.mill`, `.scalafmt.conf`, and a
+release-only native-image workflow; no additional local build hooks were found.
+Mill discovery passed for `./mill --no-daemon resolve _`. Configured validation
+passed for `./mill __.compile`, `./mill __.test`, and
+`./mill mill.scalalib.scalafmt/checkFormatAll`. Root, `apply`, and `tui` help
+smokes passed, and the example dry-run with `--state
+/tmp/initkit-validation-51-dry-run-state.json` exited 0 without creating the
+throwaway state file. `jq empty .agent-loop/tasks.json`, `jq empty
+.agent-loop/config.json`, `git diff --check`, and a conflict-marker scan also
+passed. No source fix was needed. Remaining risk: the GitHub release
+`app.nativeImage` path was not run locally because `native-image` is not on
+PATH in this environment; full-screen manual TUI behavior remains covered by
+terminal-free tests, the noninteractive TUI smoke, and `tui --help`.
