@@ -424,6 +424,15 @@ kind: BinaryDistributionProfile
   validation remains locally blocked because `native-image` is not on `PATH`
   under OpenJDK 25.0.3, and live raw-terminal TUI smoke remains manual because
   this agent shell is not an interactive TTY.
+- 2026-06-30: VALIDATION-21 revalidated the completed follow-up checkpoint.
+  Config, core, CLI, and TUI focused tests, recursive compile/test,
+  scalafmt, Mill module resolution, task JSON validation, app-level `--help`,
+  `plan`, `apply --dry-run`, `versions`, static non-interactive `plan --tui`
+  and `apply --dry-run --tui` smokes against `config.example.yaml`, and git
+  whitespace checks all passed with no source fixes required. Native image
+  validation remains locally blocked because `native-image` is not on `PATH`
+  under OpenJDK 25.0.3, and live raw-terminal TUI smoke remains manual because
+  this agent shell is not an interactive TTY.
 
 ## Current Agent Loop State
 
