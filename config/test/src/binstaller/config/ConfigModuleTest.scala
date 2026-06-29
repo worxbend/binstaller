@@ -12,17 +12,68 @@ object ConfigModuleTest extends TestSuite:
       assert(ConfigModule.moduleName == "config")
 
     test("config example loads into typed manifest"):
-      val result = ConfigModule.load(exampleConfigPath)
+      val profile = exampleProfile
 
-      result match
-        case Right(profile) =>
-          assert(profile.apiVersion == ApiVersion.V1Alpha1)
-          assert(profile.kind == ManifestKind.BinaryDistributionProfile)
-          assert(profile.metadata.name == "developer-binaries")
-          assert(profile.spec.plan.size == 15)
-          assert(profile.spec.versions.contains("kubectl"))
-          assert(profile.spec.policy.allowSudoSymlinks == AllowSudoSymlinks.Enabled)
-        case Left(error) => abort(s"expected valid example config, got $error")
+      assert(profile.apiVersion == ApiVersion.V1Alpha1)
+      assert(profile.kind == ManifestKind.BinaryDistributionProfile)
+      assert(profile.metadata.name == "developer-binaries")
+      assert(profile.spec.plan.size == 15)
+      assert(profile.spec.versions.contains("kubectl"))
+      assert(profile.spec.policy.allowSudoSymlinks == AllowSudoSymlinks.Enabled)
+
+    test("config example locks binary tool order and version sources"):
+      val profile = exampleProfile
+
+      assert(profile.spec.plan.map(_.name) == exampleToolNames)
+      assert(profile.spec.versions.keySet == exampleToolNames.toSet)
+      assert(pinnedVersions(profile) == expectedPinnedVersions)
+      assert(dynamicLatestUrlNames(profile) == expectedDynamicLatestUrlNames)
+      assert(profile.spec.versions("kubectl") ==
+        VersionSource.Resolver(
+          VersionResolverKind.HttpText,
+          "https://dl.k8s.io/release/stable.txt"
+        ))
+
+    test("config example keeps install directories under appsDir and records checksums"):
+      val profile = exampleProfile
+
+      assert(profile.spec.plan.map(entry => entry.name -> entry.spec.installDir) ==
+        exampleToolNames.map(name => name -> s"$${appsDir}/$name"))
+      assert(checksumFor(profile, "dotbot") ==
+        Some(ChecksumSpec(
+          ChecksumAlgorithm.Sha256,
+          "45d49e064d8684926fed97ad051c6ecebbf796a3c709edaa7a4a166b2978633d"
+        )))
+      assert(checksumFor(profile, "nerd-font-installer") ==
+        Some(ChecksumSpec(
+          ChecksumAlgorithm.Sha256,
+          "25c70bcf327930282823fa6abecc54f14f53fb44b01f988187a07218b711a1a7"
+        )))
+
+    test("config example includes Neovim sudo symlinks gated by policy"):
+      val profile      = exampleProfile
+      val neovim       = toolNamed(profile, "neovim")
+      val sudoSymlinks = neovim.spec.symlinks.filter(_.privilege == SymlinkPrivilege.Sudo)
+
+      assert(sudoSymlinks.map(_.path) == Vector(
+        "/usr/local/bin/neovim",
+        "/usr/local/bin/vim",
+        "/usr/local/bin/nvim",
+        "/usr/bin/nvim",
+        "/usr/bin/neovim"
+      ))
+      assert(sudoSymlinks.map(_.target).distinct == Vector("${appsDir}/neovim/bin/nvim"))
+      assert(exampleWithSudoPolicy(allowSudoSymlinks = true).isRight)
+      val expectedErrorPaths = Vector.range(2, 7)
+        .map(index =>
+          s"spec.plan[${exampleToolNames.indexOf("neovim")}].spec.symlinks[$index].sudo"
+        )
+      val rejectedErrors = exampleWithSudoPolicy(allowSudoSymlinks = false) match
+        case Left(ConfigLoadError.ValidationFailed(errors)) => errors
+        case Left(error)    => abort(s"expected sudo policy validation errors, got $error")
+        case Right(profile) => abort(s"expected sudo policy validation errors, got $profile")
+      assert(rejectedErrors.map(_.path) == expectedErrorPaths)
+      assert(rejectedErrors.forall(_.message.contains("neovim")))
 
     test("invalid manifest values aggregate validation errors with YAML paths"):
       val errors = validationErrors(invalidValuesYaml)
@@ -74,6 +125,38 @@ object ConfigModuleTest extends TestSuite:
       case Left(error)    => abort(s"expected validation errors, got $error")
       case Right(profile) => abort(s"expected validation errors, got $profile")
 
+  private def exampleProfile: BinaryDistributionProfile = ConfigModule.load(exampleConfigPath) match
+    case Right(profile) => profile
+    case Left(error)    => abort(s"expected valid example config, got $error")
+
+  private def pinnedVersions(profile: BinaryDistributionProfile): Vector[(String, String)] =
+    exampleToolNames.flatMap: name =>
+      profile.spec.versions.get(name).collect:
+        case VersionSource.Pinned(value) => name -> value
+
+  private def dynamicLatestUrlNames(profile: BinaryDistributionProfile): Vector[String] =
+    exampleToolNames.filter: name =>
+      profile.spec.versions.get(name).exists:
+        case VersionSource.Dynamic(DynamicVersionKind.LatestUrl, _) => true
+        case _                                                      => false
+
+  private def checksumFor(
+      profile: BinaryDistributionProfile,
+      toolName: String
+  ): Option[ChecksumSpec] = toolNamed(profile, toolName).spec.download.checksum
+
+  private def toolNamed(profile: BinaryDistributionProfile, name: String): PlanEntry =
+    profile.spec.plan.find(_.name == name).getOrElse(abort(s"missing tool $name"))
+
+  private def exampleWithSudoPolicy(
+      allowSudoSymlinks: Boolean
+  ): Either[ConfigLoadError, BinaryDistributionProfile] =
+    val yaml = Files.readString(exampleConfigPath).replace(
+      "allowSudoSymlinks: true",
+      s"allowSudoSymlinks: $allowSudoSymlinks"
+    )
+    ConfigModule.loadString(yaml)
+
   private def errorAt(path: String)(error: ValidationError): Boolean = error.path == path
 
   private def abort(message: String): Nothing = throw java.lang.AssertionError(message)
@@ -85,6 +168,44 @@ object ConfigModuleTest extends TestSuite:
 
   private def upwardPaths(start: Path): Iterator[Path] =
     Iterator.iterate(start)(_.getParent).takeWhile(_ != null)
+
+  private val exampleToolNames: Vector[String] = Vector(
+    "yazi",
+    "zig",
+    "minikube",
+    "xplr",
+    "kind",
+    "zellij",
+    "helm",
+    "kubectl",
+    "kustomize",
+    "neovide",
+    "neovim",
+    "lazygit",
+    "jujutsu",
+    "dotbot",
+    "nerd-font-installer"
+  )
+
+  private val expectedPinnedVersions: Vector[(String, String)] = Vector(
+    "yazi"                -> "v26.5.6",
+    "zig"                 -> "0.15.2",
+    "kind"                -> "0.31.0",
+    "zellij"              -> "0.44.1",
+    "lazygit"             -> "0.61.0",
+    "jujutsu"             -> "0.40.0",
+    "dotbot"              -> "v0.3.0",
+    "nerd-font-installer" -> "v1.0.6"
+  )
+
+  private val expectedDynamicLatestUrlNames: Vector[String] = Vector(
+    "minikube",
+    "xplr",
+    "helm",
+    "kustomize",
+    "neovide",
+    "neovim"
+  )
 
   private val invalidValuesYaml: String = """
                                             |apiVersion: example.invalid/v1

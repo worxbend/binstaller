@@ -69,6 +69,14 @@ object CoreModuleTest extends TestSuite:
       assert(tool.installer.exists(_.args.head ==
         "/home/test/.apps/$(echo should-not-run)/script.sh"))
 
+    test("example config resolves expected install directories under appsDir"):
+      val plan = resolveExampleConfig(FakeHttpTextClient("v1.33.0"))
+
+      assert(plan.policy.appsDir == "/home/test/.apps")
+      assert(plan.tools.map(tool => tool.name -> tool.installDir) ==
+        exampleToolNames.map(name => name -> s"/home/test/.apps/$name"))
+      assert(plan.tools.forall(_.installDir.startsWith(s"${plan.policy.appsDir}/")))
+
     test("direct binary install writes download bytes to first executable path"):
       val tempRoot   = Files.createTempDirectory("binstaller-core-direct")
       val installDir = tempRoot.resolve("alpha")
@@ -443,6 +451,16 @@ object CoreModuleTest extends TestSuite:
       case Left(ResolvePlanError.ValidationFailed(errors)) => errors
       case Right(plan) => abort(s"expected resolution errors, got $plan")
 
+  private def resolveExampleConfig(httpTextClient: HttpTextClient): ResolvedPlan =
+    val profile = ConfigModule.load(exampleConfigPath) match
+      case Right(value) => value
+      case Left(error)  => abort(s"expected valid example config, got $error")
+
+    PlanResolver.resolve(profile, testResolutionOptions, httpTextClient) match
+      case Right(plan)                                     => plan
+      case Left(ResolvePlanError.ValidationFailed(errors)) =>
+        abort(s"expected resolved example config, got ${errors.mkString(", ")}")
+
   private def onlyTool(plan: ResolvedPlan): ResolvedTool = plan.tools match
     case Vector(tool) => tool
     case other        => abort(s"expected one tool, got ${other.size}")
@@ -450,6 +468,14 @@ object CoreModuleTest extends TestSuite:
   private def errorAt(path: String)(error: ValidationError): Boolean = error.path == path
 
   private def abort(message: String): Nothing = throw java.lang.AssertionError(message)
+
+  private def exampleConfigPath: Path = upwardPaths(Path.of("").toAbsolutePath)
+    .map(_.resolve("config.example.yaml"))
+    .find(Files.exists(_))
+    .getOrElse(abort("could not locate config.example.yaml"))
+
+  private def upwardPaths(start: Path): Iterator[Path] =
+    Iterator.iterate(start)(_.getParent).takeWhile(_ != null)
 
   private def directTool(
       installDir: Path,
@@ -608,6 +634,24 @@ object CoreModuleTest extends TestSuite:
 
   private val testResolutionOptions: ResolutionOptions = ResolutionOptions(
     Map("HOME" -> "/home/test")
+  )
+
+  private val exampleToolNames: Vector[String] = Vector(
+    "yazi",
+    "zig",
+    "minikube",
+    "xplr",
+    "kind",
+    "zellij",
+    "helm",
+    "kubectl",
+    "kustomize",
+    "neovide",
+    "neovim",
+    "lazygit",
+    "jujutsu",
+    "dotbot",
+    "nerd-font-installer"
   )
 
   private val validPinnedYaml: String =

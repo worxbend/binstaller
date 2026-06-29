@@ -95,6 +95,12 @@ kind: BinaryDistributionProfile
   `config.example.yaml` all completed successfully with no source fixes
   required. Remaining risk is in future state/resume and reporting work rather
   than the validated executor checkpoint.
+- 2026-06-29: T012 locked `config.example.yaml` as the executable replacement
+  for `binary-dist.sh`. Version keys now match the 15 binary tool names, and
+  regression tests assert the exact tool order, pinned/dynamic/resolver version
+  sources, `${appsDir}` install directories, configured sha256 checksums, live
+  core resolution of example install paths, and Neovim sudo symlink policy
+  gating.
 
 ### User Experience Goals
 
