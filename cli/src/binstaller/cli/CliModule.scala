@@ -2,9 +2,12 @@ package binstaller.cli
 
 import binstaller.core.BinaryInstallerService
 import binstaller.core.CoreModule
+import binstaller.core.DryRunMode
+import binstaller.core.HttpTextClient
 import binstaller.core.InstallerOptions
 import binstaller.core.InstallerResult
 import binstaller.core.ResetState
+import binstaller.core.ToolSelection
 import binstaller.core.VerboseOutput
 import picocli.CommandLine
 import picocli.CommandLine.Option as CliOption
@@ -24,7 +27,7 @@ object CliModule:
   )
 
   def run(args: Vector[String], out: PrintWriter, err: PrintWriter): Int =
-    commandLine(BinaryInstallerService.placeholder, out, err).execute(args*)
+    commandLine(BinaryInstallerService.resolving(HttpTextClient.jdk), out, err).execute(args*)
 
   def commandLine(
       service: BinaryInstallerService,
@@ -123,15 +126,45 @@ private abstract class ConfiguredCommand(
 ) extends Callable[Integer]:
 
   protected def execute(action: InstallerOptions => InstallerResult): Integer =
-    root.installerOptions match
-      case Right(options) => render(action(options))
-      case Left(message)  =>
-        err.println(message)
-        Integer.valueOf(2)
+    executeWithOptions(identity, action)
+
+  protected def executeWithOptions(
+      amend: InstallerOptions => InstallerOptions,
+      action: InstallerOptions => InstallerResult
+  ): Integer = root.installerOptions match
+    case Right(options) => render(action(amend(options)))
+    case Left(message)  =>
+      err.println(message)
+      Integer.valueOf(2)
 
   private def render(result: InstallerResult): Integer =
     result.lines.foreach(out.println)
     Integer.valueOf(result.exitCode)
+
+private abstract class SelectableCommand(
+    root: BinstallerCommand,
+    out: PrintWriter,
+    err: PrintWriter
+) extends ConfiguredCommand(root, out, err):
+
+  private var onlyTools: Vector[String]    = Vector.empty
+  private var skippedTools: Vector[String] = Vector.empty
+
+  @CliOption(
+    names = Array("--only"),
+    paramLabel = "TOOL",
+    description = Array("Render only the named tool. May be repeated.")
+  )
+  def addOnlyTool(value: String): Unit = onlyTools = onlyTools :+ value
+
+  @CliOption(
+    names = Array("--skip"),
+    paramLabel = "TOOL",
+    description = Array("Omit the named tool. May be repeated.")
+  )
+  def addSkippedTool(value: String): Unit = skippedTools = skippedTools :+ value
+
+  protected def selection: ToolSelection = ToolSelection(onlyTools, skippedTools)
 
 @Command(
   name = "plan",
@@ -142,8 +175,10 @@ private final class PlanCommand(
     service: BinaryInstallerService,
     out: PrintWriter,
     err: PrintWriter
-) extends ConfiguredCommand(root, out, err):
-  override def call(): Integer = execute(service.plan)
+) extends SelectableCommand(root, out, err):
+
+  override def call(): Integer =
+    executeWithOptions(_.copy(selection = selection, dryRun = DryRunMode.Enabled), service.plan)
 
 @Command(
   name = "apply",
@@ -154,8 +189,17 @@ private final class ApplyCommand(
     service: BinaryInstallerService,
     out: PrintWriter,
     err: PrintWriter
-) extends ConfiguredCommand(root, out, err):
-  override def call(): Integer = execute(service.apply)
+) extends SelectableCommand(root, out, err):
+  private var dryRun: DryRunMode = DryRunMode.Disabled
+
+  @CliOption(
+    names = Array("--dry-run"),
+    description = Array("Render the apply plan without changing files.")
+  )
+  def setDryRun(value: Boolean): Unit = dryRun = DryRunMode.fromFlag(value)
+
+  override def call(): Integer =
+    executeWithOptions(_.copy(selection = selection, dryRun = dryRun), service.apply)
 
 @Command(
   name = "versions",

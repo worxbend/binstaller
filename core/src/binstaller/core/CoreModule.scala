@@ -47,10 +47,23 @@ final case class InstallerOptions(
     configPath: String,
     statePath: Option[String],
     resetState: ResetState,
-    verboseOutput: VerboseOutput
+    verboseOutput: VerboseOutput,
+    selection: ToolSelection = ToolSelection.all,
+    dryRun: DryRunMode = DryRunMode.Disabled
 )
 
 final case class InstallerResult(lines: Vector[String], exitCode: Int)
+
+final case class ToolSelection(only: Vector[String], skip: Vector[String])
+
+object ToolSelection:
+  def all: ToolSelection = ToolSelection(Vector.empty, Vector.empty)
+
+enum DryRunMode:
+  case Enabled, Disabled
+
+object DryRunMode:
+  def fromFlag(value: Boolean): DryRunMode = if value then Enabled else Disabled
 
 trait BinaryInstallerService:
   def plan(options: InstallerOptions): InstallerResult
@@ -136,6 +149,7 @@ final case class ResolvedSymlink(path: String, target: String, privilege: Symlin
 enum ResolvePlanError:
   case ConfigLoadFailed(error: ConfigLoadError)
   case ValidationFailed(errors: Vector[ValidationError])
+  case SelectionFailed(messages: Vector[String])
 
 object PlanResolver:
 
@@ -167,30 +181,36 @@ private final class ResolvingBinaryInstallerService(
 ) extends BinaryInstallerService:
 
   def plan(options: InstallerOptions): InstallerResult =
-    resolveFromOptions(options).fold(renderError, renderPlan)
+    renderSelectedPlan(options, PlanRenderCommand.Plan)
 
-  def apply(options: InstallerOptions): InstallerResult = resolveFromOptions(options).fold(
-    renderError,
-    plan =>
+  def apply(options: InstallerOptions): InstallerResult =
+    if options.dryRun == DryRunMode.Enabled then
+      renderSelectedPlan(options, PlanRenderCommand.ApplyDryRun)
+    else
       InstallerResult(
-        Vector(s"resolved ${plan.tools.size} tools; apply execution is not implemented yet"),
-        0
+        Vector("apply execution is not implemented yet"),
+        1
       )
-  )
 
   def versions(options: InstallerOptions): InstallerResult =
     resolveFromOptions(options).fold(renderError, renderVersions)
+
+  private def renderSelectedPlan(
+      options: InstallerOptions,
+      command: PlanRenderCommand
+  ): InstallerResult =
+    resolveSelectedPlan(options).fold(renderError, plan => PlanRenderer.render(plan, command))
+
+  private def resolveSelectedPlan(
+      options: InstallerOptions
+  ): Either[ResolvePlanError, ResolvedPlan] =
+    resolveFromOptions(options).flatMap(plan => ToolSelector.select(plan, options.selection))
 
   private def resolveFromOptions(
       options: InstallerOptions
   ): Either[ResolvePlanError, ResolvedPlan] = ConfigModule.load(options.configPath) match
     case Left(error)    => Left(ResolvePlanError.ConfigLoadFailed(error))
     case Right(profile) => PlanResolver.resolve(profile, resolutionOptions, httpTextClient)
-
-  private def renderPlan(plan: ResolvedPlan): InstallerResult = InstallerResult(
-    plan.tools.map(tool => s"${tool.name}: ${ResolvedVersion.render(tool.version)}"),
-    0
-  )
 
   private def renderVersions(plan: ResolvedPlan): InstallerResult = InstallerResult(
     plan.tools.map(tool => s"${tool.name} ${ResolvedVersion.render(tool.version)}"),
@@ -202,6 +222,149 @@ private final class ResolvingBinaryInstallerService(
       InstallerResult(Vector(s"config load failed: $loadError"), 1)
     case ResolvePlanError.ValidationFailed(errors) =>
       InstallerResult(errors.map(error => s"${error.path}: ${error.message}"), 1)
+    case ResolvePlanError.SelectionFailed(messages) =>
+      InstallerResult(messages.map(message => s"selection: $message"), 1)
+
+private object ToolSelector:
+
+  def select(
+      plan: ResolvedPlan,
+      selection: ToolSelection
+  ): Either[ResolvePlanError.SelectionFailed, ResolvedPlan] =
+    val toolNames = plan.tools.map(_.name).toSet
+    val unknown   = (selection.only ++ selection.skip)
+      .distinct
+      .filterNot(toolNames.contains)
+      .map(name => s"unknown tool '$name'")
+
+    if unknown.nonEmpty then Left(ResolvePlanError.SelectionFailed(unknown))
+    else Right(plan.copy(tools = selectedTools(plan.tools, selection)))
+
+  private def selectedTools(
+      tools: Vector[ResolvedTool],
+      selection: ToolSelection
+  ): Vector[ResolvedTool] =
+    val onlyNames = selection.only.toSet
+    val skipNames = selection.skip.toSet
+    val included  =
+      if onlyNames.isEmpty then tools
+      else tools.filter(tool => onlyNames(tool.name))
+
+    included.filterNot(tool => skipNames(tool.name))
+
+private enum PlanRenderCommand:
+  case Plan, ApplyDryRun
+
+private object PlanRenderer:
+
+  def render(plan: ResolvedPlan, command: PlanRenderCommand): InstallerResult =
+    InstallerResult(header(plan, command) ++ plan.tools.zipWithIndex.flatMap(renderTool), 0)
+
+  private def header(plan: ResolvedPlan, command: PlanRenderCommand): Vector[String] =
+    val sudoSymlinkCount =
+      plan.tools.flatMap(_.symlinks).count(_.privilege == SymlinkPrivilege.Sudo)
+    val stateLine = plan.policy.stateFile match
+      case Some(path) => s"state file: $path (not created)"
+      case None       => "state file: not configured"
+    val sudoLine =
+      if sudoSymlinkCount == 0 then "sudo risk: none"
+      else
+        s"sudo risk: YES - $sudoSymlinkCount sudo symlink command(s) require elevated privileges"
+    val title = command match
+      case PlanRenderCommand.Plan        => "binstaller plan (dry-run)"
+      case PlanRenderCommand.ApplyDryRun => "binstaller apply --dry-run"
+
+    Vector(
+      title,
+      s"tools: ${plan.tools.size}",
+      s"apps dir: ${plan.policy.appsDir} (not created)",
+      stateLine,
+      "filesystem: no changes will be made",
+      sudoLine
+    )
+
+  private def renderTool(indexedTool: (ResolvedTool, Int)): Vector[String] =
+    val (tool, index) = indexedTool
+    Vector(
+      "",
+      s"${index + 1}. ${tool.name}",
+      s"   destination: ${tool.installDir}",
+      s"   version: ${renderVersion(tool.version)}",
+      s"   download: ${tool.download.url}",
+      s"   download file: ${joinPath(tool.installDir, tool.download.filename)}",
+      s"   checksum: ${renderChecksum(tool.download.checksum)}"
+    ) ++ renderCreateDirectories(tool) ++ renderStrategy(tool) ++ renderExecutables(tool) ++
+      renderSymlinks(tool)
+
+  private def renderVersion(version: ResolvedVersion): String = version match
+    case ResolvedVersion.Concrete(value)     => s"concrete $value"
+    case ResolvedVersion.DynamicLatestUrl(_) => "dynamic latest-url"
+
+  private def renderChecksum(checksum: Option[ChecksumSpec]): String = checksum match
+    case Some(value) => s"${value.algorithm.value} ${value.value}"
+    case None        => "not configured"
+
+  private def renderCreateDirectories(tool: ResolvedTool): Vector[String] =
+    if tool.createDirectories.isEmpty then Vector.empty
+    else
+      Vector("   create directories:") ++
+        tool.createDirectories.map(path => s"     ${joinPath(tool.installDir, path)}")
+
+  private def renderStrategy(tool: ResolvedTool): Vector[String] =
+    val archiveLines = tool.download.archive match
+      case Some(archive) => renderArchive(archive)
+      case None          => Vector("   archive: none")
+    val installerLines = tool.installer match
+      case Some(installer) => renderInstaller(installer)
+      case None            => Vector("   installer: none")
+    val directLine =
+      if tool.download.archive.isEmpty && tool.installer.isEmpty then
+        Vector("   strategy: direct binary download")
+      else Vector.empty
+
+    directLine ++ archiveLines ++ installerLines
+
+  private def renderArchive(archive: ResolvedArchive): Vector[String] =
+    Vector(s"   archive: ${archive.original.archiveType.value}") ++
+      archive.files.map(mapping => s"     file ${mapping.from} -> ${mapping.to}") ++
+      archive.directories.map(mapping => s"     directory ${mapping.from} -> ${mapping.to}")
+
+  private def renderInstaller(installer: ResolvedInstaller): Vector[String] = Vector(
+    s"   installer: ${installer.shell.value} ${installer.args.map(shellQuote).mkString(" ")}"
+  ) ++
+    installer.env.map(env => s"     env ${env.name}=${shellQuote(env.value)}") :+
+    s"     cleanup: ${installer.cleanup}"
+
+  private def renderExecutables(tool: ResolvedTool): Vector[String] =
+    if tool.executables.isEmpty then Vector("   executables: none")
+    else
+      Vector("   executables:") ++ tool.executables.map: executable =>
+        val mode = executable.mode.map(value => s" mode ${value.value}").getOrElse("")
+        s"     ${joinPath(tool.installDir, executable.path)}$mode"
+
+  private def renderSymlinks(tool: ResolvedTool): Vector[String] =
+    if tool.symlinks.isEmpty then Vector("   symlinks: none")
+    else Vector("   symlinks:") ++ tool.symlinks.map(renderSymlinkCommand(tool, _))
+
+  private def renderSymlinkCommand(tool: ResolvedTool, symlink: ResolvedSymlink): String =
+    val destination = absoluteOrInstallPath(tool.installDir, symlink.path)
+    val command     = symlink.privilege match
+      case SymlinkPrivilege.User =>
+        s"ln -sfn ${shellQuote(symlink.target)} ${shellQuote(destination)}"
+      case SymlinkPrivilege.Sudo =>
+        s"sudo ln -sfn ${shellQuote(symlink.target)} ${shellQuote(destination)}"
+    val risk = symlink.privilege match
+      case SymlinkPrivilege.User => "local"
+      case SymlinkPrivilege.Sudo => "sudo risk"
+    s"     [$risk] $command"
+
+  private def absoluteOrInstallPath(installDir: String, path: String): String =
+    if path.startsWith("/") then path else joinPath(installDir, path)
+
+  private def joinPath(parent: String, child: String): String =
+    if parent.endsWith("/") then s"$parent$child" else s"$parent/$child"
+
+  private def shellQuote(value: String): String = s"'${value.replace("'", "'\"'\"'")}'"
 
 private final case class ResolvedValue[+A](value: A, errors: Vector[ValidationError]):
   def map[B](f: A => B): ResolvedValue[B] = ResolvedValue(f(value), errors)

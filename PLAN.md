@@ -60,6 +60,12 @@ kind: BinaryDistributionProfile
   `dynamic.latest-url` remains explicitly dynamic; and resolution failures
   aggregate `ValidationError`s with YAML-like paths. CLI plan/apply rendering
   is still intentionally deferred to T006.
+- 2026-06-29: T006 completed read-only plan rendering and selection. `plan`
+  now resolves and prints ordered tools from the manifest with destinations,
+  version status, downloads, archive or installer strategy, executables, and
+  local/sudo symlink commands; `--only` and `--skip` are shared by `plan` and
+  `apply --dry-run`; sudo symlink risk is highlighted; and tests cover that
+  plan/dry-run paths do not create install or state paths.
 
 ### User Experience Goals
 
@@ -1177,19 +1183,49 @@ Deliverables:
   resolution, download handling, archive extraction, installer scripts, symlink
   creation, state writes, CLI reporting, tests, and release workflow.
 - Analyze security, reliability, maintainability, and user-experience risks.
+- Perform a shell-injection and command-boundary audit. Every external process
+  should be classified as argv-safe, constrained installer-script execution, or
+  rejected as too broad for the smaller app.
+- Perform a path traversal audit for all manifest-derived paths, archive member
+  names, symlink targets, temp files, state files, and install directories.
+- Perform a supply-chain trust audit for every download and version source:
+  pinned version, dynamic source, checksum availability, checksum enforcement,
+  TLS requirement, redirect behavior, and provenance in plan output.
+- Perform a privilege audit for sudo symlinks and any future privileged
+  boundary. Confirm sudo cannot be reached by ordinary install fields.
+- Perform a logging/redaction audit for CLI output, debug logs, errors, state,
+  and test failures.
 - Prepare a written improvement report before beginning broad follow-up work.
 - Convert accepted suggestions into a prioritized hardening backlog.
 
 Required review questions:
 
+- Can any manifest value become executable shell syntax through interpolation,
+  quoting mistakes, installer args, env vars, or generated commands?
+- Are command args preserved as argv through dry-run and apply, and are the few
+  shell boundaries intentionally modeled?
 - Can a malicious or malformed archive write outside the staging directory?
+- Can a malicious archive create symlinks, hardlinks, special files, duplicate
+  paths, permission bits, or ownership metadata that escape the intended install
+  root?
+- Can a manifest path escape the apps directory, overwrite the state file, write
+  into another tool's install directory, or clobber user files unexpectedly?
 - Are downloads written atomically and verified before replacing an existing
   install?
 - Are checksum fields supported consistently, and where should checksums become
   required?
+- Are examples free of placeholder checksums and unsafe dynamic sources that
+  look reproducible?
+- Are redirects, content length, content type, max download size, and timeout
+  handled predictably enough for a binary installer?
 - Can installer scripts unexpectedly use sudo or inherit unsafe environment
   values?
+- Can installer scripts read sensitive parent env vars that were not declared in
+  the manifest?
+- Do installer scripts have bounded timeout/cancellation and cleanup behavior?
 - Are sudo symlinks impossible unless clearly configured and confirmed?
+- Are sudo operations rendered with exact argv and highlighted as privileged in
+  dry-run and apply?
 - Is state written atomically, and does stale state fail safely?
 - Are error messages actionable without exposing sensitive environment values?
 - Are dry-run and apply paths close enough that dry-run is a trustworthy preview?
@@ -1197,12 +1233,27 @@ Required review questions:
 - Is the manifest schema still understandable after representing all tools?
 - Which old broad-bootstrap modules should be deleted, retained, or split out?
 
+Hardening backlog categories:
+
+- `must fix`: shell injection risks, path traversal, archive escape, unsafe sudo
+  reachability, silent checksum bypass, non-atomic replacement, state corruption,
+  secret leakage, and dry-run/apply divergence.
+- `should fix`: checksum auto-discovery, lock-file generation, max download
+  size, stricter redirect policy, network timeouts/retries, improved provenance
+  rendering, richer security docs, and additional fuzz/property tests.
+- `later`: optional policy profiles such as `strict`, `developer`, and
+  `legacy-compatible`; signed provenance/SLSA verification; SBOM export; and
+  sandboxed installer-script execution.
+
 Acceptance checks:
 
 - A hardening report exists in docs or the plan with concrete findings and
   recommendations.
 - Each recommendation is classified as `must fix`, `should fix`, or `later`.
 - Must-fix findings are implemented or explicitly deferred with rationale.
+- Tests include malicious manifest, archive traversal, shell metacharacter,
+  unsafe symlink, bad checksum, secret redaction, timeout, and stale-state
+  regressions.
 - The final implementation still passes the full verification suite after the
   hardening changes.
 
@@ -1230,8 +1281,11 @@ phases continue.
 | T014 | improvement | moderate | Polish CLI reporting |
 | T015 | validation | simple | Checkpoint apply workflow |
 | T016 | improvement | moderate | Update docs and release workflow |
-| T017 | improvement | complex | Review and harden implementation |
-| T018 | validation | simple | Run final validation |
+| T017 | review | complex | Security threat model and hardening report |
+| T018 | improvement | complex | Harden command boundaries and installer scripts |
+| T019 | improvement | complex | Harden paths archives symlinks and atomic writes |
+| T020 | improvement | moderate | Harden checksums provenance redaction and state |
+| T021 | validation | moderate | Security regression suite and final validation |
 
 Current progress:
 
@@ -1241,6 +1295,10 @@ Current progress:
   configured with `--no-fallback` and `-Os`.
 - Native-image packaging was configured but not built during T001; normal JVM
   compile/test validation passed through the checked-in `./mill` launcher.
+- 2026-06-29: T006 is complete. The CLI now uses the resolving service by
+  default for `plan`, and `apply --dry-run` shares the same selector and
+  renderer without creating install directories, temp install files, or state
+  files.
 
 ## Verification Strategy
 
@@ -1293,6 +1351,8 @@ Manual smoke after first working executor:
 
 - Lock file with resolved versions, URLs, sizes, and checksums.
 - Checksum auto-discovery for upstreams that publish checksum files.
+- Strict policy mode that rejects dynamic URLs, missing checksums, HTTP URLs,
+  parent env inheritance, and sudo symlinks unless explicitly overridden.
 - ARM64 platform support.
 - `binstaller update --write-config` for bumping pinned versions.
 - Optional TUI after the CLI flow is stable.
