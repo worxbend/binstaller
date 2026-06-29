@@ -126,6 +126,18 @@ object ConfigModuleTest extends TestSuite:
       assert(messages.contains("duplicate tool name 'alpha'"))
       assert(messages.contains("duplicate tool name 'beta'"))
 
+    test("tool names must be non-empty and path-safe"):
+      val errors = validationErrors(unsafeToolNamesYaml)
+
+      assert(errors.exists(errorAt("spec.plan[0].name")))
+      assert(errors.exists(errorAt("spec.plan[1].name")))
+      assert(errors.exists(errorAt("spec.plan[2].name")))
+      assert(errors.exists(errorAt("spec.plan[3].name")))
+      assert(errors.exists(_.message.contains("must not be empty")))
+      assert(errors.exists(_.message.contains("traversal")))
+      assert(errors.exists(_.message.contains("control")))
+      assert(errors.exists(_.message.contains("path separators")))
+
     test("unknown version refs report tool name and field path"):
       val errors = validationErrors(unknownVersionYaml)
 
@@ -397,6 +409,60 @@ object ConfigModuleTest extends TestSuite:
                                              |        executables:
                                              |          - path: bin/alpha
                                              |""".stripMargin
+
+  private val unsafeToolNamesYaml: String = """
+                                              |apiVersion: binstaller.io/v1alpha1
+                                              |kind: BinaryDistributionProfile
+                                              |metadata:
+                                              |  name: unsafe-tool-names
+                                              |spec:
+                                              |  policy:
+                                              |    appsDir: "${HOME}/.apps"
+                                              |  vars: {}
+                                              |  versions:
+                                              |    alpha: "1.0.0"
+                                              |  plan:
+                                              |    - name: ""
+                                              |      kind: binary-tool
+                                              |      spec:
+                                              |        versionRef: alpha
+                                              |        installDir: "${appsDir}/empty"
+                                              |        download:
+                                              |          url: https://example.invalid/empty
+                                              |          filename: empty
+                                              |        executables:
+                                              |          - path: bin/empty
+                                              |    - name: ".."
+                                              |      kind: binary-tool
+                                              |      spec:
+                                              |        versionRef: alpha
+                                              |        installDir: "${appsDir}/traversal"
+                                              |        download:
+                                              |          url: https://example.invalid/traversal
+                                              |          filename: traversal
+                                              |        executables:
+                                              |          - path: bin/traversal
+                                              |    - name: "bad\a"
+                                              |      kind: binary-tool
+                                              |      spec:
+                                              |        versionRef: alpha
+                                              |        installDir: "${appsDir}/control"
+                                              |        download:
+                                              |          url: https://example.invalid/control
+                                              |          filename: control
+                                              |        executables:
+                                              |          - path: bin/control
+                                              |    - name: alpha/beta
+                                              |      kind: binary-tool
+                                              |      spec:
+                                              |        versionRef: alpha
+                                              |        installDir: "${appsDir}/separator"
+                                              |        download:
+                                              |          url: https://example.invalid/separator
+                                              |          filename: separator
+                                              |        executables:
+                                              |          - path: bin/separator
+                                              |""".stripMargin
 
   private val unsupportedInstallerYaml: String =
     """

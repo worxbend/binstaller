@@ -299,6 +299,14 @@ kind: BinaryDistributionProfile
   checks. No source fixes were required. Native-image remains locally blocked
   because `native-image` is not on `PATH`; live raw-terminal resize/TUI smoke
   still requires a real interactive terminal.
+- 2026-06-29: T004 of the follow-up hardening queue revalidated interpolated
+  path values. Tool names now reject empty, traversal, control-character, and
+  path-separator values with YAML-like paths. Core resolution now rechecks
+  interpolated state files, install directories, download filenames, archive
+  mappings, executable paths, create-directory paths, and symlink paths/targets
+  according to each field's safety class before execution. Focused config and
+  core tests cover malicious variables resolving into absolute, traversal, and
+  control-character path values.
 
 ## Current Agent Loop State
 

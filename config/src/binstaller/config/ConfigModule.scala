@@ -711,8 +711,23 @@ private object ManifestDecoder:
 private object ProfileValidator:
 
   def validate(profile: BinaryDistributionProfile): Vector[ValidationError] =
-    duplicateToolNameErrors(profile) ++ unknownVersionRefErrors(profile) ++
+    toolNameErrors(profile) ++ duplicateToolNameErrors(profile) ++
+      unknownVersionRefErrors(profile) ++
       sudoSymlinkErrors(profile)
+
+  private def toolNameErrors(profile: BinaryDistributionProfile): Vector[ValidationError] =
+    profile.spec.plan.zipWithIndex.flatMap:
+      case (entry, index) => unsafeToolNameMessage(entry.name).map: message =>
+          ValidationError(s"spec.plan[$index].name", message)
+
+  private def unsafeToolNameMessage(value: String): Option[String] =
+    if value.trim.isEmpty then Some("tool name must not be empty")
+    else if value.exists(Character.isISOControl) then
+      Some("tool name must not contain control characters")
+    else if value.contains('/') || value.contains('\\') then
+      Some("tool name must not contain path separators")
+    else if value == "." || value == ".." then Some("tool name must not be a traversal segment")
+    else None
 
   private def duplicateToolNameErrors(
       profile: BinaryDistributionProfile

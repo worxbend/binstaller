@@ -168,6 +168,23 @@ object CoreModuleTest extends TestSuite:
           error.message.contains("nested inside tool 'beta'")
       ))
 
+    test("interpolated path fields are revalidated after variables resolve"):
+      val errors = resolveErrors(unsafeInterpolatedPathsYaml)
+
+      assert(errors.exists(errorAt("spec.policy.stateFile")))
+      assert(errors.exists(errorAt("spec.plan[0].spec.createDirectories[0]")))
+      assert(errors.exists(errorAt("spec.plan[0].spec.download.filename")))
+      assert(errors.exists(errorAt("spec.plan[0].spec.download.archive.extract.files[0].to")))
+      assert(errors.exists(errorAt("spec.plan[0].spec.executables[0].path")))
+      assert(errors.exists(errorAt("spec.plan[0].spec.symlinks[0].path")))
+      assert(errors.exists(errorAt("spec.plan[0].spec.symlinks[0].target")))
+      assert(errors.exists(errorAt("spec.plan[1].spec.installDir")))
+      assert(errors.exists(errorAt("spec.plan[2].spec.installDir")))
+      assert(errors.exists(_.message.contains("control")))
+      assert(errors.exists(_.message.contains("traversal")))
+      assert(errors.exists(_.message.contains("relative")))
+      assert(errors.exists(_.message.contains("inside spec.policy.appsDir")))
+
     test("example config resolves expected install directories under appsDir"):
       val plan = resolveExampleConfig(FakeHttpTextClient("v1.33.0"))
 
@@ -1805,6 +1822,67 @@ object CoreModuleTest extends TestSuite:
                                                |        executables:
                                                |          - path: bin/gamma
                                                |""".stripMargin
+
+  private val unsafeInterpolatedPathsYaml: String =
+    """
+      |apiVersion: binstaller.io/v1alpha1
+      |kind: BinaryDistributionProfile
+      |metadata:
+      |  name: unsafe-interpolated-paths
+      |spec:
+      |  policy:
+      |    appsDir: "${HOME}/.apps"
+      |    stateFile: "${badTraversal}"
+      |    allowSudoSymlinks: true
+      |  vars:
+      |    badAbsolute: /tmp/binstaller-escape
+      |    badTraversal: "../escape"
+      |    badControl: "alpha\a"
+      |  versions:
+      |    alpha: "1.0.0"
+      |  plan:
+      |    - name: alpha
+      |      kind: binary-tool
+      |      spec:
+      |        versionRef: alpha
+      |        installDir: "${appsDir}/alpha"
+      |        createDirectories:
+      |          - "bin/${badTraversal}"
+      |        download:
+      |          url: https://example.invalid/alpha
+      |          filename: "${badControl}"
+      |          archive:
+      |            type: tar.gz
+      |            extract:
+      |              files:
+      |                - from: alpha
+      |                  to: "bin/${badTraversal}"
+      |        executables:
+      |          - path: "${badAbsolute}"
+      |        symlinks:
+      |          - path: "bin/${badTraversal}"
+      |            target: "${badAbsolute}/alpha"
+      |    - name: beta
+      |      kind: binary-tool
+      |      spec:
+      |        versionRef: alpha
+      |        installDir: "${appsDir}/${badTraversal}"
+      |        download:
+      |          url: https://example.invalid/beta
+      |          filename: beta
+      |        executables:
+      |          - path: bin/beta
+      |    - name: gamma
+      |      kind: binary-tool
+      |      spec:
+      |        versionRef: alpha
+      |        installDir: "${badAbsolute}/gamma"
+      |        download:
+      |          url: https://example.invalid/gamma
+      |          filename: gamma
+      |        executables:
+      |          - path: bin/gamma
+      |""".stripMargin
 
 private final class FakeHttpTextClient(text: String) extends HttpTextClient:
 

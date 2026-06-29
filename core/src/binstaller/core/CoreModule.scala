@@ -2340,6 +2340,8 @@ private final class ResolutionBuilder(
     val stateFile = profile.spec.policy.stateFile match
       case Some(value) => interpolate(value, "spec.policy.stateFile", vars).map(Some(_))
       case None        => ResolvedValue.valid(None)
+    val stateFilePathErrors = stateFile.value.toVector.flatMap: value =>
+      ResolvedPathValidator.stateFile(value, "spec.policy.stateFile")
 
     ResolvedValue(
       ResolvedPolicy(
@@ -2349,7 +2351,7 @@ private final class ResolutionBuilder(
         RequireConfirmation.fromBoolean(profile.spec.policy.requireConfirmation),
         ContinueOnError.fromBoolean(profile.spec.policy.continueOnError)
       ),
-      appsDir.errors ++ stateFile.errors
+      appsDir.errors ++ stateFile.errors ++ stateFilePathErrors
     )
 
   private def resolveVersions(
@@ -2448,7 +2450,7 @@ private final class ResolutionBuilder(
       version
     )
     val executables = resolveExecutables(spec, specPath, localVars, version)
-    val symlinks    = resolveSymlinks(spec, specPath, localVars, version)
+    val symlinks    = resolveSymlinks(spec, specPath, localVars, version, installDir.value)
 
     ResolvedValue(
       ResolvedTool(
@@ -2488,7 +2490,9 @@ private final class ResolutionBuilder(
       ResolvedDownload(url.value, filename.value, download.checksum, archive.value),
       url.errors ++ versionTemplateErrors(download.url, s"$path.url", version) ++
         httpsUrlErrors(url.value, s"$path.url") ++
-        filename.errors ++ versionTemplateErrors(download.filename, s"$path.filename", version) ++
+        filename.errors ++
+        versionTemplateErrors(download.filename, s"$path.filename", version) ++
+        ResolvedPathValidator.downloadFilename(filename.value, s"$path.filename") ++
         archive.errors
     )
 
@@ -2532,7 +2536,9 @@ private final class ResolutionBuilder(
         ResolvedValue(
           ResolvedExtractMapping(from.value, to.value),
           from.errors ++ versionTemplateErrors(mapping.from, fromPath, version) ++
-            to.errors ++ versionTemplateErrors(mapping.to, toPath, version)
+            ResolvedPathValidator.archivePath(from.value, fromPath, "archive source") ++
+            to.errors ++ versionTemplateErrors(mapping.to, toPath, version) ++
+            ResolvedPathValidator.archivePath(to.value, toPath, "archive target")
         )
     ResolvedValue(resolved.map(_.value), resolved.flatMap(_.errors))
 
@@ -2548,7 +2554,8 @@ private final class ResolutionBuilder(
         val value = interpolate(executable.path, path, vars)
         ResolvedValue(
           ResolvedExecutable(value.value, executable.mode),
-          value.errors ++ versionTemplateErrors(executable.path, path, version)
+          value.errors ++ versionTemplateErrors(executable.path, path, version) ++
+            ResolvedPathValidator.installRelativePath(value.value, path, "executable path")
         )
     ResolvedValue(resolved.map(_.value), resolved.flatMap(_.errors))
 
@@ -2556,7 +2563,8 @@ private final class ResolutionBuilder(
       spec: BinaryToolSpec,
       specPath: String,
       vars: Map[String, String],
-      version: ResolvedVersion
+      version: ResolvedVersion,
+      installDir: String
   ): ResolvedValue[Vector[ResolvedSymlink]] =
     val resolved = spec.symlinks.zipWithIndex.map:
       case (symlink, index) =>
@@ -2564,10 +2572,17 @@ private final class ResolutionBuilder(
         val targetPath = s"$specPath.symlinks[$index].target"
         val path       = interpolate(symlink.path, pathPath, vars)
         val target     = interpolate(symlink.target, targetPath, vars)
+        val pathErrors = symlink.privilege match
+          case SymlinkPrivilege.User =>
+            ResolvedPathValidator.installRelativePath(path.value, pathPath, "local symlink path")
+          case SymlinkPrivilege.Sudo =>
+            ResolvedPathValidator.externalPath(path.value, pathPath, "sudo symlink path")
         ResolvedValue(
           ResolvedSymlink(path.value, target.value, symlink.privilege),
           path.errors ++ versionTemplateErrors(symlink.path, pathPath, version) ++
-            target.errors ++ versionTemplateErrors(symlink.target, targetPath, version)
+            pathErrors ++
+            target.errors ++ versionTemplateErrors(symlink.target, targetPath, version) ++
+            ResolvedPathValidator.symlinkTarget(target.value, targetPath, installDir)
         )
     ResolvedValue(resolved.map(_.value), resolved.flatMap(_.errors))
 
@@ -2581,7 +2596,15 @@ private final class ResolutionBuilder(
       case (value, index) =>
         val itemPath = s"$path[$index]"
         val item     = interpolate(value, itemPath, vars)
-        ResolvedValue(item.value, item.errors ++ versionTemplateErrors(value, itemPath, version))
+        ResolvedValue(
+          item.value,
+          item.errors ++ versionTemplateErrors(value, itemPath, version) ++
+            ResolvedPathValidator.installRelativePath(
+              item.value,
+              itemPath,
+              "create directory path"
+            )
+        )
     ResolvedValue(resolved.map(_.value), resolved.flatMap(_.errors))
 
   private def versionTemplateErrors(
@@ -2606,25 +2629,40 @@ private final class ResolutionBuilder(
       policy: ResolvedPolicy,
       tools: Vector[ResolvedTool]
   ): Vector[ValidationError] =
-    val appsDir = Path.of(policy.appsDir).toAbsolutePath.normalize()
-    // Install roots must stay under appsDir and must not nest inside another tool. This keeps a
-    // bad manifest from replacing the apps root or another tool's install directory.
-    val containmentErrors = tools.zipWithIndex.flatMap:
-      case (tool, index) =>
-        val path = s"spec.plan[$index].spec.installDir"
-        Try(Path.of(tool.installDir).toAbsolutePath.normalize()) match
-          case Failure(error) =>
-            Vector(ValidationError(path, s"invalid installDir: ${error.getMessage}"))
-          case Success(installDir) if installDir == appsDir =>
-            Vector(ValidationError(
-              path,
-              "installDir must be a child of appsDir, not appsDir itself"
-            ))
-          case Success(installDir) if !installDir.startsWith(appsDir) =>
-            Vector(ValidationError(path, "installDir must resolve inside spec.policy.appsDir"))
-          case Success(_) => Vector.empty
+    val appsDirPath         = "spec.policy.appsDir"
+    val appsDirSyntaxErrors =
+      ResolvedPathValidator.pathSyntax(policy.appsDir, appsDirPath, "appsDir")
+    if appsDirSyntaxErrors.nonEmpty then appsDirSyntaxErrors
+    else
+      Try(Path.of(policy.appsDir).toAbsolutePath.normalize()) match
+        case Failure(error) =>
+          Vector(ValidationError(appsDirPath, s"invalid appsDir: ${error.getMessage}"))
+        case Success(appsDir) =>
+          // Install roots must stay under appsDir and must not nest inside another tool. This keeps a
+          // bad manifest from replacing the apps root or another tool's install directory.
+          val containmentErrors = tools.zipWithIndex.flatMap:
+            case (tool, index) =>
+              val path         = s"spec.plan[$index].spec.installDir"
+              val syntaxErrors =
+                ResolvedPathValidator.pathSyntax(tool.installDir, path, "installDir")
+              if syntaxErrors.nonEmpty then syntaxErrors
+              else
+                Try(Path.of(tool.installDir).toAbsolutePath.normalize()) match
+                  case Failure(error) =>
+                    Vector(ValidationError(path, s"invalid installDir: ${error.getMessage}"))
+                  case Success(installDir) if installDir == appsDir =>
+                    Vector(ValidationError(
+                      path,
+                      "installDir must be a child of appsDir, not appsDir itself"
+                    ))
+                  case Success(installDir) if !installDir.startsWith(appsDir) =>
+                    Vector(ValidationError(
+                      path,
+                      "installDir must resolve inside spec.policy.appsDir"
+                    ))
+                  case Success(_) => Vector.empty
 
-    containmentErrors ++ nestedInstallDirectoryErrors(tools)
+          containmentErrors ++ nestedInstallDirectoryErrors(tools)
 
   private def nestedInstallDirectoryErrors(tools: Vector[ResolvedTool]): Vector[ValidationError] =
     val indexed = tools.zipWithIndex.flatMap:
@@ -2644,6 +2682,91 @@ private final class ResolutionBuilder(
     RuntimeUrl.httpsUri(value) match
       case Right(_)      => Vector.empty
       case Left(message) => Vector(ValidationError(path, message))
+
+private object ResolvedPathValidator:
+
+  def stateFile(value: String, path: String): Vector[ValidationError] =
+    filename(value, path, "state filename")
+
+  def downloadFilename(value: String, path: String): Vector[ValidationError] =
+    filename(value, path, "download filename")
+
+  def archivePath(value: String, path: String, label: String): Vector[ValidationError] =
+    relativePath(value, path, label, allowCurrentDirectory = true)
+
+  def installRelativePath(value: String, path: String, label: String): Vector[ValidationError] =
+    relativePath(value, path, label, allowCurrentDirectory = false)
+
+  def externalPath(value: String, path: String, label: String): Vector[ValidationError] =
+    pathSyntax(value, path, label)
+
+  def symlinkTarget(
+      value: String,
+      path: String,
+      installDir: String
+  ): Vector[ValidationError] =
+    val syntaxErrors = pathSyntax(value, path, "symlink target")
+    if syntaxErrors.nonEmpty then syntaxErrors
+    else
+      Try:
+        val installRoot = Path.of(installDir).toAbsolutePath.normalize()
+        val rawTarget   = Path.of(value)
+        val target      =
+          if rawTarget.isAbsolute then rawTarget.toAbsolutePath.normalize()
+          else installRoot.resolve(rawTarget).normalize()
+        installRoot -> target
+      match
+        case Failure(error) =>
+          Vector(ValidationError(path, s"invalid symlink target: ${error.getMessage}"))
+        case Success((installRoot, target)) if !target.startsWith(installRoot) =>
+          Vector(ValidationError(path, "symlink target must resolve inside installDir"))
+        case Success(_) => Vector.empty
+
+  def pathSyntax(value: String, path: String, label: String): Vector[ValidationError] =
+    if value.trim.isEmpty then Vector(ValidationError(path, s"$label must not be empty"))
+    else if value.exists(Character.isISOControl) then
+      Vector(ValidationError(path, s"$label must not contain control characters"))
+    else if value.contains('\\') then
+      Vector(ValidationError(path, s"$label must not contain backslashes"))
+    else if value.matches("^[A-Za-z]:.*") then
+      Vector(ValidationError(path, s"$label must not be drive-prefixed"))
+    else if hasTraversalSegment(value) then
+      Vector(ValidationError(path, s"$label must not contain traversal segments"))
+    else Vector.empty
+
+  private def filename(value: String, path: String, label: String): Vector[ValidationError] =
+    val syntaxErrors = pathSyntax(value, path, label)
+    if syntaxErrors.nonEmpty then syntaxErrors
+    else if value.contains('/') then
+      Vector(ValidationError(path, s"$label must be a filename, not a path"))
+    else if value == "." || value == ".." then
+      Vector(ValidationError(path, s"$label must not be a traversal segment"))
+    else
+      Try(Path.of(value)) match
+        case Failure(error) => Vector(ValidationError(path, s"invalid $label: ${error.getMessage}"))
+        case Success(file) if file.isAbsolute || file.getNameCount != 1 =>
+          Vector(ValidationError(path, s"$label must be a filename in the current directory"))
+        case Success(_) => Vector.empty
+
+  private def relativePath(
+      value: String,
+      path: String,
+      label: String,
+      allowCurrentDirectory: Boolean
+  ): Vector[ValidationError] =
+    val syntaxErrors = pathSyntax(value, path, label)
+    if syntaxErrors.nonEmpty then syntaxErrors
+    else if value == "." && allowCurrentDirectory then Vector.empty
+    else if value == "." then Vector(ValidationError(path, s"$label must not be current directory"))
+    else
+      Try(Path.of(value)) match
+        case Failure(error) => Vector(ValidationError(path, s"invalid $label: ${error.getMessage}"))
+        case Success(relative) if relative.isAbsolute =>
+          Vector(ValidationError(path, s"$label must be relative"))
+        case Success(_) => Vector.empty
+
+  private def hasTraversalSegment(value: String): Boolean =
+    Try(Path.of(value).iterator().asScala.exists(_.toString == "..")).getOrElse(false)
 
 private object TemplateInterpolator:
   private val Variable: Regex = "\\$\\{([A-Za-z_][A-Za-z0-9_]*)\\}".r
