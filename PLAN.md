@@ -337,6 +337,16 @@ kind: BinaryDistributionProfile
   replacement rollback. `./mill core.test`, `./mill cli.test`, `./mill
   __.compile`, scalafmt check, task JSON validation, and git whitespace checks
   passed.
+- 2026-06-29: VALIDATION-12 checkpoint passed for the completed maintainability
+  split chunk. Config, core, CLI, and TUI focused tests passed, along with
+  recursive compile/test, scalafmt, Mill module resolution, task JSON
+  validation, app-level `--help`, `plan`, `apply --dry-run`, `versions`,
+  static non-interactive `plan --tui` and `apply --dry-run --tui` smokes
+  against `config.example.yaml`, and git whitespace checks. No source fixes
+  were required. Native-image remains locally blocked because `native-image`
+  is not on `PATH`; `java -version` reports OpenJDK 25.0.3. Live raw-terminal
+  TUI behavior remains covered by deterministic tests and still needs a real
+  interactive terminal for manual smoke.
 
 ## Current Agent Loop State
 
