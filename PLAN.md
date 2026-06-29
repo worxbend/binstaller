@@ -1869,6 +1869,10 @@ Current progress:
   bug appears first. T024-T027 are the TUI implementation phase. T028-T030 are
   the mandatory post-TUI review, refactoring, and security phase. T031 writes
   developer docs. T032 updates README last.
+- 2026-06-29: T014 of the current TUI/production-readiness loop added
+  maintainer documentation under `docs/`: architecture, manifest reference,
+  security model, TUI guide, testing guide, and release guide. README remains
+  intentionally unchanged until the final README task.
 
 ## Verification Strategy
 

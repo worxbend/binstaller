@@ -1,0 +1,221 @@
+# Manifest Reference
+
+Date: 2026-06-29
+
+Supported identity:
+
+```yaml
+apiVersion: binstaller.io/v1alpha1
+kind: BinaryDistributionProfile
+```
+
+The manifest is a single profile with metadata, policy, variables, version
+sources, and an ordered `spec.plan`.
+
+## Top-Level Shape
+
+```yaml
+metadata:
+  name: developer-binaries
+  labels:
+    role: development
+  annotations:
+    binstaller.io/description: Example profile.
+
+spec:
+  policy:
+    appsDir: "${HOME}/.apps"
+    continueOnError: false
+    requireConfirmation: true
+    allowSudoSymlinks: true
+    stateFile: developer-binaries.state.json
+  vars:
+    arch: amd64
+  versions:
+    kubectl:
+      resolver:
+        type: http-text
+        url: https://dl.k8s.io/release/stable.txt
+  plan: []
+```
+
+`metadata.name` participates in state compatibility. The ordered `plan` order is
+the default render and apply order.
+
+## Policy
+
+- `appsDir`: root directory that resolved install directories must stay under.
+- `continueOnError`: when `true`, apply continues after a failed tool and still
+  exits nonzero if any tool failed.
+- `requireConfirmation`: when `true`, non-dry-run apply requires `--yes`.
+- `allowSudoSymlinks`: must be `true` before any plan entry may declare
+  `sudo: true` symlinks.
+- `stateFile`: optional current-directory filename used by apply resume.
+- `dryRun` and `cleanInstall` are decoded for compatibility with the profile
+  shape; command-line `apply --dry-run` controls dry-run execution.
+
+State files are not written by `plan` or `apply --dry-run`. Non-dry-run apply
+rejects absolute, nested, or empty state paths.
+
+## Variables And Versions
+
+Interpolation supports literal `${name}` references. Shell forms such as
+`$(cmd)` are not executed.
+
+Available variables include runtime variables such as `HOME`, manifest
+`spec.vars`, policy-derived `appsDir`, tool-local `version`, `installDir`, and
+`downloadPath`.
+
+Version sources:
+
+```yaml
+versions:
+  yazi: v26.5.6
+
+  kubectl:
+    resolver:
+      type: http-text
+      url: https://dl.k8s.io/release/stable.txt
+
+  neovim:
+    dynamic:
+      type: latest-url
+      note: GitHub latest Neovim Linux archive endpoint.
+```
+
+- A string value is a pinned version.
+- `resolver.type: http-text` fetches HTTPS text and uses it as the concrete
+  version.
+- `dynamic.type: latest-url` intentionally keeps the version displayed as
+  `dynamic latest-url`.
+
+## Direct Binary
+
+A direct binary has no `archive` block. The downloaded bytes are written to the
+first executable path under the install directory, mode is applied, executables
+are verified, then the staged install replaces the previous install.
+
+```yaml
+plan:
+  - name: kubectl
+    kind: binary-tool
+    description: Kubernetes command-line client.
+    spec:
+      versionRef: kubectl
+      installDir: "${appsDir}/kubectl"
+      download:
+        url: "https://dl.k8s.io/release/${version}/bin/linux/amd64/kubectl"
+        filename: kubectl
+      executables:
+        - path: bin/kubectl
+          mode: "0755"
+```
+
+## Archives
+
+Supported archive types are `zip`, `tar.gz`, and `tar.xz`.
+
+`zip` and `tar.gz` use native extraction paths. `tar.xz` uses a structured
+system `tar` fallback into private staging, then copies only declared mapped
+members.
+
+File mapping example:
+
+```yaml
+download:
+  url: "https://get.helm.sh/helm-${version}-linux-amd64.tar.gz"
+  filename: helm-linux-amd64.tar.gz
+  checksum:
+    algorithm: sha256
+    value: 0a745198de24545d0055cd8414bc8d2ba10363ef5f5d38369ea1b399671cc083
+  archive:
+    type: tar.gz
+    extract:
+      files:
+        - from: linux-amd64/helm
+          to: bin/helm
+executables:
+  - path: bin/helm
+```
+
+Directory mapping example:
+
+```yaml
+download:
+  url: https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz
+  filename: neovim.tar.gz
+  archive:
+    type: tar.gz
+    extract:
+      directories:
+        - from: nvim-linux-x86_64
+          to: "."
+executables:
+  - path: bin/nvim
+```
+
+Archive `from` paths identify archive members. `to` paths are relative install
+targets. Absolute paths, traversal, backslashes, control characters, duplicate
+sources, and duplicate targets are rejected.
+
+## Checksums
+
+Only SHA-256 is supported:
+
+```yaml
+checksum:
+  algorithm: sha256
+  value: 45d49e064d8684926fed97ad051c6ecebbf796a3c709edaa7a4a166b2978633d
+```
+
+Configured SHA-256 values must be exactly 64 hexadecimal characters. Apply
+verifies checksums before staging replacement. Missing checksums remain allowed
+for developer convenience, but plan/TUI surfaces mark them as risk.
+
+## Symlinks
+
+Local symlinks stay within the install directory:
+
+```yaml
+symlinks:
+  - path: bin/lzg
+    target: bin/lazygit
+```
+
+Sudo symlinks require `policy.allowSudoSymlinks: true` and non-dry-run
+`apply --yes`:
+
+```yaml
+symlinks:
+  - path: /usr/local/bin/nvim
+    target: "${appsDir}/neovim/bin/nvim"
+    sudo: true
+```
+
+Apply executes privileged symlinks as structured argv equivalent to
+`sudo ln -sfn <target> <path>`.
+
+## Selection
+
+Selection is a command option, not a manifest field.
+
+```bash
+binstaller plan --config config.example.yaml --only yazi
+binstaller apply --config config.example.yaml --skip neovim --dry-run
+```
+
+`--only` and `--skip` may be repeated. `--only` is applied first, `--skip` is
+applied second, and manifest order is preserved. Unknown names are selection
+errors.
+
+## Unsupported Fields
+
+Installer script blocks are not supported:
+
+```yaml
+installer:
+  shell: bash
+```
+
+The loader rejects installer blocks with a validation error. Use a direct binary
+or archive-backed download instead.
