@@ -213,6 +213,12 @@ kind: BinaryDistributionProfile
   passed. Live raw-terminal smoke coverage for Ctrl+C, `q`, resize, mouse, and
   narrow-terminal behavior remains blocked in this agent shell because stdin is
   not an interactive TTY.
+- 2026-06-29: T009 documented the manual TUI smoke workflow in
+  `docs/tui-smoke.md`. The guide includes a disposable no-network profile,
+  static fallback checks, normal and narrow terminal steps, focus movement,
+  filter/help behavior, detail/log scrolling expectations, dry-run execution
+  view checks, terminal cleanup checks, and known limitations for live resize,
+  mouse support, non-interactive shells, and synchronous apply cancellation.
 
 ## Current Agent Loop State
 
@@ -235,6 +241,10 @@ is:
   and `apply --tui` entrypoints and includes keyboard navigation, filtering,
   focusable scrollable details/logs, help, resize-aware layout sizing, and
   terminal cleanup on quit.
+- Durable manual TUI smoke instructions are stored in `docs/tui-smoke.md`.
+  The no-network smoke uses a temporary profile and dry-run apply; any real
+  apply smoke must use an isolated temporary `appsDir` and disposable
+  current-directory state filename.
 - After the TUI lands, the repository should enter a codebase-hardening and
   documentation phase before README is treated as final.
 
@@ -250,7 +260,7 @@ The next agent loop should execute this ordered pending queue:
 - T006: Add TUI navigation - completed focus cycling, selection movement, log/detail scrolling, filtering, help, resize handling, and clean quit.
 - T007: Render execution TUI - completed the active apply screen with spinner/progress, recent logs, completed/failed rows, dry-run operation fidelity, and terminal cleanup tests.
 - T008: Checkpoint TUI experience - automated validation passed; live raw-terminal smoke remains blocked until a real interactive TTY is available.
-- T009: Document TUI smoke workflow - write durable no-network, narrow-terminal, resize, focus, scroll, execution, and cleanup smoke instructions.
+- T009: Document TUI smoke workflow - completed durable no-network, narrow-terminal, resize, focus, scroll, execution, and cleanup smoke instructions in `docs/tui-smoke.md`.
 - T010: Review post-TUI readiness - perform the mandatory architecture, security, maintainability, test, and native-image review under `docs/`.
 - T011: Fix must-fix readiness issues - implement or explicitly defer every must-fix review finding with regression tests.
 - T012: Document public contracts - add ScalaDoc and intent/risk comments for public and security-sensitive contracts.
