@@ -155,6 +155,16 @@ object ConfigModuleTest extends TestSuite:
         )
       ))
 
+    test("sha256 checksums must be 64 hex characters"):
+      val errors = validationErrors(invalidChecksumYaml)
+
+      assert(errors.contains(
+        ValidationError(
+          "spec.plan[0].spec.download.checksum.value",
+          "sha256 checksum must be 64 hexadecimal characters"
+        )
+      ))
+
   private def validationErrors(yaml: String): Vector[ValidationError] =
     ConfigModule.loadString(yaml) match
       case Left(ConfigLoadError.ValidationFailed(errors)) => errors
@@ -277,6 +287,33 @@ object ConfigModuleTest extends TestSuite:
                                             |          - path: bin/alpha
                                             |            mode: "755"
                                             |""".stripMargin
+
+  private val invalidChecksumYaml: String = """
+                                              |apiVersion: binstaller.io/v1alpha1
+                                              |kind: BinaryDistributionProfile
+                                              |metadata:
+                                              |  name: invalid-checksum
+                                              |spec:
+                                              |  policy:
+                                              |    appsDir: "${HOME}/.apps"
+                                              |  vars: {}
+                                              |  versions:
+                                              |    alpha: "1.0.0"
+                                              |  plan:
+                                              |    - name: alpha
+                                              |      kind: binary-tool
+                                              |      spec:
+                                              |        versionRef: alpha
+                                              |        installDir: "${appsDir}/alpha"
+                                              |        download:
+                                              |          url: https://example.invalid/alpha
+                                              |          filename: alpha
+                                              |          checksum:
+                                              |            algorithm: sha256
+                                              |            value: not-a-sha
+                                              |        executables:
+                                              |          - path: bin/alpha
+                                              |""".stripMargin
 
   private val duplicateNamesYaml: String = """
                                              |apiVersion: binstaller.io/v1alpha1

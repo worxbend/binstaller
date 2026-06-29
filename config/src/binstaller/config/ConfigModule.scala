@@ -444,11 +444,21 @@ private object ManifestDecoder:
           ChecksumAlgorithm.Sha256,
           _.value
         )
-        val checksum = requiredString(checksumMap.value, s"$path.value")
+        val checksum    = requiredString(checksumMap.value, s"$path.value")
+        val valueErrors = checksumValueErrors(algorithm.value, checksum.value, s"$path.value")
         DecodeResult(
           Some(ChecksumSpec(algorithm.value, checksum.value)),
-          checksumMap.errors ++ algorithm.errors ++ checksum.errors
+          checksumMap.errors ++ algorithm.errors ++ checksum.errors ++ valueErrors
         )
+
+  private def checksumValueErrors(
+      algorithm: ChecksumAlgorithm,
+      value: String,
+      path: String
+  ): Vector[ValidationError] = algorithm match
+    case ChecksumAlgorithm.Sha256 =>
+      if value.matches("(?i)^[0-9a-f]{64}$") then Vector.empty
+      else Vector(ValidationError(path, "sha256 checksum must be 64 hexadecimal characters"))
 
   private def optionalArchive(map: YamlMap, path: String): DecodeResult[Option[ArchiveSpec]] =
     map.get("archive") match

@@ -84,43 +84,51 @@ rationale.
 
 ## Must Fix
 
-- MUST-001 - Bound download size and body time. Implement in T011. Add a runtime
-  max download size policy, reject oversized `Content-Length` before buffering,
-  stop reads that exceed the limit when no length is present, and cover this
-  with core tests. Also add a body-read deadline or equivalent cancellation so a
-  stalled response body cannot hang after headers arrive.
-- MUST-002 - Close archive metadata gaps. Implement in T011 for zip metadata
-  tests/rejection where the JVM API exposes enough information, and strengthen
-  malformed archive coverage for symlink, hardlink, device/special, duplicate,
-  and permission metadata. Explicit deferral rationale for `tar.xz`: native
-  pre-extraction inspection remains deferred until the project selects either a
-  native xz/tar dependency or a stronger sandbox. Until then, `tar.xz` must stay
-  documented as a structured fallback that is not production-equivalent for
-  untrusted archives.
-- MUST-003 - Sanitize terminal control output. Implement in T011. Add a shared
-  renderer-safe text scrubber for CLI/TUI display of manifest names, paths,
-  URLs, command output, failure strings, and logs. Preserve tabs/newlines only
-  where the renderer intentionally handles them, and test ANSI/OSC/control
-  sequence injection attempts.
-- MUST-004 - Make interactive apply TUI cancellation honest. Implement in T011.
-  Either add a nonblocking input/cancellation boundary for long-running
-  `apply --tui`, including terminal cleanup tests, or remove the misleading
-  `q/Ctrl+C quit` keybar from the live execution view and document the current
-  limitation as explicit deferral.
-- MUST-005 - Centralize redaction for env-derived values. Implement in T011.
-  Identify sensitive runtime variable names and redact their values before plan,
-  versions, apply errors, TUI logs, and state messages are rendered. Command env
-  redaction is already present but too narrow for interpolation-based leaks.
-- MUST-006 - Tighten checksum policy. Implement in T011. Validate configured
-  SHA-256 values as 64 hex characters and add a production-safe policy for
-  concrete downloads without checksums. If missing checksums remain allowed for
-  developer convenience, the review document must mark that as an explicit
-  deferral with rationale and a visible warning path.
-- MUST-007 - Restore or prove install replacement atomicity. Implement in T011.
-  `replaceInstallDirectory` moves an existing install to a backup, then moves
-  staging into place; if the second move fails, the previous install may remain
-  displaced. Add rollback/restore behavior or a documented filesystem-level
-  atomic replacement constraint with tests for replacement failure.
+- MUST-001 - Bound download size and body time. Implemented in T011. The
+  runtime JDK binary download client now uses an explicit
+  `BinaryDownloadLimits` policy, rejects oversized `Content-Length` values
+  before buffering, stops no-length reads when the accumulated body exceeds the
+  limit, and enforces a body-read deadline between chunks. Core tests cover all
+  three paths.
+- MUST-002 - Close archive metadata gaps. Partially implemented in T011 with
+  explicit deferrals. Native archive planning now rejects duplicate archive
+  member sources, and regression tests cover duplicate ZIP local headers and
+  unsafe tar.gz hardlink metadata in addition to existing traversal/link
+  rejection. Zip external-attribute symlink/permission inspection remains
+  deferred because the current JDK `ZipInputStream`/`ZipEntry` path does not
+  expose enough portable metadata for reliable rejection. Native pre-extraction
+  `tar.xz` inspection also remains deferred until the project selects either a
+  native xz/tar dependency or a stronger sandbox. Until then, `tar.xz` remains a
+  structured fallback that is not production-equivalent for untrusted archives.
+- MUST-003 - Sanitize terminal control output. Implemented in T011. Core now
+  has a shared `RenderSafety` scrubber for display text, command output tails,
+  structured errors, plan/versions output, apply result lines, download progress
+  URLs, state messages, and TUI cell rendering. Tests cover ANSI/control
+  injection in apply errors.
+- MUST-004 - Make interactive apply TUI cancellation honest. Implemented in
+  T011 by removing the misleading `q/Ctrl+C quit` keybar from the live
+  execution view. Long-running `apply --tui` still runs synchronously without a
+  nonblocking input/cancellation boundary; that richer cancellation design is
+  deferred to a later terminal-backend task. Existing terminal cleanup tests
+  still cover normal success and failure cleanup.
+- MUST-005 - Centralize redaction for env-derived values. Implemented in T011.
+  `ResolutionOptions` derives `SensitiveValueRedactions` from sensitive runtime
+  variable names, and renderers apply those redactions at display boundaries so
+  raw values are preserved for filesystem/network behavior but hidden from
+  plan, versions, apply errors, progress/log lines, and state messages. Command
+  env redaction now delegates to the same render-safety boundary.
+- MUST-006 - Tighten checksum policy. Partially implemented in T011 with an
+  explicit deferral. Config validation now requires SHA-256 values to be exactly
+  64 hexadecimal characters. Missing checksums remain allowed for developer
+  convenience and for dynamic upstream assets in `config.example.yaml`; this is
+  deferred until strict/developer policy profiles or lock-file provenance are
+  introduced. The visible warning path remains unchanged: CLI/TUI plan surfaces
+  show `not configured`, `missing`, and `no-checksum` risk markers.
+- MUST-007 - Restore or prove install replacement atomicity. Implemented in
+  T011. Failed replacement after an existing install has been moved to backup
+  now attempts to restore the previous install directory, reports rollback
+  failure if restore also fails, and core tests prove the previous install is
+  restored when the staged move fails.
 
 ## Should Fix
 

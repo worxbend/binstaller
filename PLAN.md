@@ -225,6 +225,15 @@ kind: BinaryDistributionProfile
   size/timeout/redaction/terminal-control risks, and assigns must-fix follow-up
   work to T011 with explicit deferral rationale for native `tar.xz`
   pre-inspection.
+- 2026-06-29: T011 implemented the post-TUI must-fix readiness pass. Runtime
+  downloads now have explicit size/body-time limits; archive extraction rejects
+  duplicate members and has stronger malformed metadata tests; render surfaces
+  use centralized terminal-control scrubbing and env-derived secret redaction;
+  SHA-256 checksum values are validated; install replacement attempts rollback
+  restore on staged-move failure; and the live apply TUI no longer advertises
+  `q`/Ctrl+C cancellation while apply runs synchronously. The review document
+  marks remaining deferrals for ZIP external attributes, native `tar.xz`
+  pre-inspection, and strict rejection of missing checksums.
 
 ## Current Agent Loop State
 
@@ -268,7 +277,9 @@ The next agent loop should execute this ordered pending queue:
 - T008: Checkpoint TUI experience - automated validation passed; live raw-terminal smoke remains blocked until a real interactive TTY is available.
 - T009: Document TUI smoke workflow - completed durable no-network, narrow-terminal, resize, focus, scroll, execution, and cleanup smoke instructions in `docs/tui-smoke.md`.
 - T010: Review post-TUI readiness - completed mandatory architecture, security, maintainability, test, and native-image review in `docs/post-tui-readiness-review.md`.
-- T011: Fix must-fix readiness issues - implement or explicitly defer every must-fix review finding with regression tests.
+- T011: Fix must-fix readiness issues - completed bounded downloads, archive
+  metadata hardening/deferrals, render scrubbing/redaction, checksum value
+  validation, honest apply TUI keybar behavior, and replacement rollback tests.
 - T012: Document public contracts - add ScalaDoc and intent/risk comments for public and security-sensitive contracts.
 - T013: Checkpoint production readiness - validate after hardening and public contract documentation.
 - T014: Write maintainer docs - add architecture, manifest, security, TUI, testing, and release guides.

@@ -11,6 +11,7 @@ import binstaller.core.InstallerResult
 import binstaller.core.InstallerRunStatus
 import binstaller.core.ApplyConfirmation
 import binstaller.core.ResetState
+import binstaller.core.RenderSafety
 import binstaller.core.ToolSelection
 import binstaller.core.VerboseOutput
 import binstaller.tui.TuiMode
@@ -396,6 +397,7 @@ private final class CliApplyEventRenderer(
       .toOption
       .flatMap(path => Option(path).map(_.split('/').toVector.filter(_.nonEmpty).lastOption))
       .flatten
+      .map(RenderSafety.terminalLine(_))
       .getOrElse(fallback)
 
 private final case class ProgressLine(plain: String, styled: String):

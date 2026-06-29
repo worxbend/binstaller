@@ -13,12 +13,14 @@ import binstaller.config.ValidationError
 import binstaller.config.SymlinkPrivilege
 import utest.*
 
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
 import java.util.zip.GZIPOutputStream
+import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import scala.jdk.CollectionConverters.*
@@ -178,6 +180,43 @@ object CoreModuleTest extends TestSuite:
           )
         ))
       assert(Files.readString(existingFile) == "existing")
+
+    test("bounded body reader rejects oversized content length before buffering"):
+      val result = BoundedBinaryBodyReader.read(
+        "https://example.invalid/alpha",
+        ByteArrayInputStream("abc".getBytes(StandardCharsets.UTF_8)),
+        Some(11L),
+        BinaryDownloadLimits(maxBytes = 10L, bodyTimeout = Duration.ofSeconds(5)),
+        BinaryDownloadProgressObserver.none
+      )
+
+      assert(result.left.exists(_.message.contains("exceeds max allowed 10 bytes")))
+
+    test("bounded body reader stops downloads that exceed max size without content length"):
+      val result = BoundedBinaryBodyReader.read(
+        "https://example.invalid/alpha",
+        ByteArrayInputStream("oversized-body".getBytes(StandardCharsets.UTF_8)),
+        None,
+        BinaryDownloadLimits(maxBytes = 4L, bodyTimeout = Duration.ofSeconds(5)),
+        BinaryDownloadProgressObserver.none
+      )
+
+      assert(result.left.exists(_.message.contains("exceeds max allowed 4 bytes")))
+
+    test("bounded body reader fails when body read exceeds deadline"):
+      var now    = 0L
+      val result = BoundedBinaryBodyReader.read(
+        "https://example.invalid/alpha",
+        ByteArrayInputStream("abcdef".getBytes(StandardCharsets.UTF_8)),
+        None,
+        BinaryDownloadLimits(maxBytes = 1024L, bodyTimeout = Duration.ofNanos(1)),
+        BinaryDownloadProgressObserver.none,
+        nowNanos = () =>
+          now = now + 2L
+          now
+      )
+
+      assert(result.left.exists(_.message.contains("download body timed out")))
 
     test("staging failure preserves existing install and does not replace"):
       val tempRoot     = Files.createTempDirectory("binstaller-core-staging")
@@ -436,6 +475,57 @@ object CoreModuleTest extends TestSuite:
       assert(result.left.exists(_.isInstanceOf[ToolInstallError.ArchiveExtractionFailed]))
       assert(Files.readString(existingFile) == "existing")
 
+    test("duplicate zip archive members are rejected before replacement"):
+      val tempRoot     = Files.createTempDirectory("binstaller-core-zip-duplicate")
+      val installDir   = tempRoot.resolve("alpha")
+      val existingFile = installDir.resolve("bin/alpha")
+      Files.createDirectories(existingFile.getParent)
+      Files.writeString(existingFile, "existing")
+      val installer = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success(zipArchiveWithDuplicateLocalEntries(Vector(
+          "pkg/alpha" -> "first",
+          "pkg/alpha" -> "second"
+        ))),
+        InstallFileSystem.nio
+      )
+
+      val result = installer.installTool(archiveTool(
+        installDir,
+        ArchiveType.Zip,
+        files = Vector("pkg/alpha" -> "bin/alpha")
+      ))
+
+      assert(result.left.exists:
+        case ToolInstallError.ArchiveExtractionFailed(_, message) =>
+          message.contains("duplicate archive member")
+        case _ => false)
+      assert(Files.readString(existingFile) == "existing")
+
+    test("tar.gz hardlink metadata is rejected before replacement"):
+      val tempRoot     = Files.createTempDirectory("binstaller-core-targz-hardlink")
+      val installDir   = tempRoot.resolve("alpha")
+      val existingFile = installDir.resolve("bin/alpha")
+      Files.createDirectories(existingFile.getParent)
+      Files.writeString(existingFile, "existing")
+      val installer = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success(tarGzArchiveWithEntryTypes(Vector(
+          ("pkg/alpha", "", '1')
+        ))),
+        InstallFileSystem.nio
+      )
+
+      val result = installer.installTool(archiveTool(
+        installDir,
+        ArchiveType.TarGz,
+        files = Vector("pkg/alpha" -> "bin/alpha")
+      ))
+
+      assert(result.left.exists:
+        case ToolInstallError.ArchiveExtractionFailed(_, message) =>
+          message.contains("unsafe archive link entry")
+        case _ => false)
+      assert(Files.readString(existingFile) == "existing")
+
     test("tar.xz extraction runs through a structured command spec"):
       val tempRoot        = Files.createTempDirectory("binstaller-core-tarxz")
       val installDir      = tempRoot.resolve("zig")
@@ -486,6 +576,54 @@ object CoreModuleTest extends TestSuite:
           assert(error.output.stdout.contains("stdout-line"))
           assert(error.output.stderr.contains("stderr-line"))
         case Right(()) => abort("expected command failure")
+
+    test("apply errors redact sensitive runtime values and scrub terminal controls"):
+      val secret = "secret-token-value"
+      val plan   = ResolvedPlan(
+        ResolvedPolicy(
+          "/tmp/apps",
+          None,
+          AllowSudoSymlinks.Disabled,
+          RequireConfirmation.Disabled,
+          ContinueOnError.Disabled
+        ),
+        Vector(directTool(Path.of("/tmp/apps/alpha")).copy(download =
+          ResolvedDownload(
+            url = s"https://example.invalid/$secret/alpha",
+            filename = "alpha",
+            checksum = None,
+            archive = None
+          )
+        )),
+        SensitiveValueRedactions(Vector(secret))
+      )
+      val installer = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.failure(s"network \u001b[31m failure for $secret"),
+        InstallFileSystem.nio
+      )
+
+      val result = installer.installPlan(plan, ApplyConfirmation.Enabled)
+      val output = result.lines.mkString("\n")
+
+      assert(result.exitCode == 1)
+      assert(!output.contains(secret))
+      assert(!output.contains("\u001b"))
+      assert(output.contains("<redacted>"))
+
+    test("failed replacement restores previous install directory"):
+      val tempRoot     = Files.createTempDirectory("binstaller-core-rollback")
+      val installDir   = tempRoot.resolve("alpha")
+      val existingFile = installDir.resolve("bin/alpha")
+      Files.createDirectories(existingFile.getParent)
+      Files.writeString(existingFile, "existing")
+      val missingStaging = tempRoot.resolve("missing-stage")
+
+      val result = InstallFileSystem.nio.replaceInstall(StagedInstall(missingStaging, installDir))
+
+      assert(result.isLeft)
+      assert(Files.readString(existingFile) == "existing")
+      assert(!Using.resource(Files.list(tempRoot)): stream =>
+        stream.iterator().asScala.exists(_.getFileName.toString.contains(".backup-")))
 
     test("direct install verifies expected executables"):
       val tempRoot   = Files.createTempDirectory("binstaller-core-direct-missing")
@@ -1028,6 +1166,37 @@ object CoreModuleTest extends TestSuite:
           zip.closeEntry()
     output.toByteArray
 
+  private def zipArchiveWithDuplicateLocalEntries(entries: Vector[(String, String)]): Array[Byte] =
+    val output = ByteArrayOutputStream()
+    entries.foreach:
+      case (name, content) =>
+        val nameBytes    = name.getBytes(StandardCharsets.UTF_8)
+        val contentBytes = content.getBytes(StandardCharsets.UTF_8)
+        val crc          = CRC32()
+        crc.update(contentBytes)
+        writeLittleInt(output, 0x04034b50)
+        writeLittleShort(output, 20)
+        writeLittleShort(output, 0)
+        writeLittleShort(output, 0)
+        writeLittleShort(output, 0)
+        writeLittleShort(output, 0)
+        writeLittleInt(output, crc.getValue.toInt)
+        writeLittleInt(output, contentBytes.length)
+        writeLittleInt(output, contentBytes.length)
+        writeLittleShort(output, nameBytes.length)
+        writeLittleShort(output, 0)
+        output.write(nameBytes)
+        output.write(contentBytes)
+    output.toByteArray
+
+  private def writeLittleShort(output: ByteArrayOutputStream, value: Int): Unit =
+    output.write(value & 0xff)
+    output.write((value >>> 8) & 0xff)
+
+  private def writeLittleInt(output: ByteArrayOutputStream, value: Int): Unit =
+    writeLittleShort(output, value & 0xffff)
+    writeLittleShort(output, (value >>> 16) & 0xffff)
+
   private def tarGzArchive(entries: Vector[(String, String)]): Array[Byte] =
     val output = ByteArrayOutputStream()
     val gzip   = GZIPOutputStream(output)
@@ -1057,6 +1226,21 @@ object CoreModuleTest extends TestSuite:
         gzip.write(bytes)
         val padding = (512 - (bytes.length % 512)) % 512
         gzip.write(Array.fill[Byte](padding)(0))
+    gzip.write(Array.fill[Byte](1024)(0))
+    gzip.close()
+    output.toByteArray
+
+  private def tarGzArchiveWithEntryTypes(entries: Vector[(String, String, Char)]): Array[Byte] =
+    val output = ByteArrayOutputStream()
+    val gzip   = GZIPOutputStream(output)
+    entries.foreach:
+      case (name, content, entryType) =>
+        val bytes = content.getBytes(StandardCharsets.UTF_8)
+        gzip.write(tarHeader(name, bytes.length, entryType))
+        if entryType == '0' then
+          gzip.write(bytes)
+          val padding = (512 - (bytes.length % 512)) % 512
+          gzip.write(Array.fill[Byte](padding)(0))
     gzip.write(Array.fill[Byte](1024)(0))
     gzip.close()
     output.toByteArray

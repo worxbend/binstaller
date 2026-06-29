@@ -18,6 +18,7 @@ import binstaller.core.ResolvedPlanSnapshot
 import binstaller.core.ResolvedSymlink
 import binstaller.core.ResolvedTool
 import binstaller.core.ResolvedVersion
+import binstaller.core.RenderSafety
 import binstaller.core.ResolvePlanError
 import binstaller.core.ToolResultStatus
 
@@ -499,7 +500,7 @@ final case class ExecutionTuiState(
       dryRunLines = dryRunLines,
       summary = summaryLine,
       spinnerFrame = spinnerFrame,
-      keybar = "q/Ctrl+C quit | terminal restored on exit"
+      keybar = "terminal restored after apply completes"
     )
 
   def onEvent(event: InstallerEvent): ExecutionTuiState =
@@ -766,7 +767,7 @@ object ExecutionTuiRenderer:
   ): Vector[String] =
     if lines.isEmpty then Vector.empty
     else
-      val body = lines
+      val body = lines.map(line => fit(line, width))
       Vector(paneTitle("Dry-run operations", active = false, width)) ++ body ++
         Vector(separator(width))
 
@@ -819,7 +820,7 @@ object ExecutionTuiRenderer:
   private def separator(width: Int): String = "-" * width
 
   private def cell(value: String, width: Int): String =
-    val clipped = truncate(value, width)
+    val clipped = truncate(RenderSafety.terminalLine(value), width)
     clipped + (" " * (width - clipped.length).max(0))
 
   private def fit(value: String, width: Int): String = cell(value, width)
@@ -1373,7 +1374,7 @@ object PlanningTuiRenderer:
     (selectedIndex - height + 1).max(0).min(maxStart)
 
   private def cell(value: String, width: Int): String =
-    val clipped = truncate(value, width)
+    val clipped = truncate(RenderSafety.terminalLine(value), width)
     clipped + (" " * (width - clipped.length).max(0))
 
   private def fit(value: String, width: Int): String = cell(value, width)

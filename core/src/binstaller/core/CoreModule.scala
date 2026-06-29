@@ -146,10 +146,79 @@ object BinaryInstallerService:
     stateStore
   )
 
-final case class ResolutionOptions(runtimeVariables: Map[String, String])
+final case class ResolutionOptions(
+    runtimeVariables: Map[String, String],
+    redactions: SensitiveValueRedactions
+)
 
 object ResolutionOptions:
+
+  def apply(runtimeVariables: Map[String, String]): ResolutionOptions = ResolutionOptions(
+    runtimeVariables,
+    SensitiveValueRedactions.fromRuntimeVariables(runtimeVariables)
+  )
+
   def fromEnvironment(): ResolutionOptions = ResolutionOptions(sys.env.toMap)
+
+final case class SensitiveValueRedactions(values: Vector[String]):
+
+  def redact(value: String): String = values.foldLeft(value): (current, secret) =>
+    current.replace(secret, "<redacted>")
+
+object SensitiveValueRedactions:
+  val empty: SensitiveValueRedactions = SensitiveValueRedactions(Vector.empty)
+
+  def fromRuntimeVariables(values: Map[String, String]): SensitiveValueRedactions =
+    val redactedValues = values.toVector.collect:
+      case (name, value) if isSensitiveName(name) && value.length >= 4 => value
+    SensitiveValueRedactions(redactedValues.distinct.sortBy(value => -value.length))
+
+  private def isSensitiveName(name: String): Boolean =
+    val upper = name.toUpperCase(java.util.Locale.ROOT)
+    Vector(
+      "TOKEN",
+      "SECRET",
+      "PASSWORD",
+      "PASS",
+      "API_KEY",
+      "ACCESS_KEY",
+      "PRIVATE_KEY",
+      "CREDENTIAL",
+      "AUTHORIZATION",
+      "BEARER",
+      "SESSION",
+      "COOKIE"
+    ).exists(upper.contains)
+
+object RenderSafety:
+
+  def display(
+      value: String,
+      redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
+  ): String = scrubControls(redactions.redact(value))
+
+  def displayLines(
+      lines: Vector[String],
+      redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
+  ): Vector[String] = lines.map(display(_, redactions))
+
+  def terminalLine(
+      value: String,
+      redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
+  ): String = display(value, redactions)
+    .replace('\n', ' ')
+    .replace('\t', ' ')
+
+  def envValue(name: String, value: String): String =
+    val safeNames = Set("PATH", "HOME", "LANG", "LC_ALL", "SHELL", "TERM", "TMPDIR", "USER")
+    if safeNames(name) || name.startsWith("LC_") then display(value)
+    else "<redacted>"
+
+  private def scrubControls(value: String): String = value.map:
+    case '\n'                                => '\n'
+    case '\t'                                => ' '
+    case ch if ch < ' ' || ch == 0x7f.toChar => '?'
+    case ch                                  => ch
 
 final case class HttpTextError(url: String, message: String)
 
@@ -183,6 +252,15 @@ trait BinaryDownloadClient:
 
 object BinaryDownloadClient:
   def jdk: BinaryDownloadClient = JdkBinaryDownloadClient(RuntimeHttpClient.create())
+
+final case class BinaryDownloadLimits(maxBytes: Long, bodyTimeout: Duration)
+
+object BinaryDownloadLimits:
+
+  val default: BinaryDownloadLimits = BinaryDownloadLimits(
+    maxBytes = 512L * 1024L * 1024L,
+    bodyTimeout = Duration.ofMinutes(30)
+  )
 
 enum InstallerPhase:
   case Resolving
@@ -328,9 +406,7 @@ private object CommandFailureDetails:
       Vector(s"  env: $rendered")
 
   private def renderEnvValue(name: String, value: String): String =
-    val safeNames = Set("PATH", "HOME", "LANG", "LC_ALL", "SHELL", "TERM", "TMPDIR", "USER")
-    if safeNames(name) || name.startsWith("LC_") then value
-    else "<redacted>"
+    RenderSafety.envValue(name, value)
 
   private def renderOutputTail(label: String, text: String): Vector[String] =
     val maxRenderedLines = 40
@@ -339,7 +415,8 @@ private object CommandFailureDetails:
       if lines.length > maxRenderedLines then
         Vector(s"  $label: ... omitted ${lines.length - maxRenderedLines} earlier line(s)")
       else Vector.empty
-    omitted ++ lines.takeRight(maxRenderedLines).map(line => s"  $label: $line")
+    omitted ++
+      lines.takeRight(maxRenderedLines).map(line => s"  $label: ${RenderSafety.display(line)}")
 
 trait CommandExecutor:
   def run(spec: CommandSpec): Either[CommandExecutionError, Unit]
@@ -351,7 +428,8 @@ object CommandExecutor:
 
 final case class ResolvedPlan(
     policy: ResolvedPolicy,
-    tools: Vector[ResolvedTool]
+    tools: Vector[ResolvedTool],
+    redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
 )
 
 final case class ResolvedPolicy(
@@ -424,16 +502,17 @@ object ResolvePlanError:
   def renderLines(error: ResolvePlanError): Vector[String] = error match
     case ResolvePlanError.ConfigLoadFailed(loadError) => renderConfigLoadError(loadError)
     case ResolvePlanError.ValidationFailed(errors)    =>
-      errors.map(error => s"${error.path}: ${error.message}")
+      errors.map(error => RenderSafety.display(s"${error.path}: ${error.message}"))
     case ResolvePlanError.SelectionFailed(messages) =>
-      messages.map(message => s"selection: $message")
+      messages.map(message => RenderSafety.display(s"selection: $message"))
 
   private def renderConfigLoadError(error: ConfigLoadError): Vector[String] = error match
     case ConfigLoadError.ValidationFailed(errors) =>
-      errors.map(error => s"${error.path}: ${error.message}")
+      errors.map(error => RenderSafety.display(s"${error.path}: ${error.message}"))
     case ConfigLoadError.ReadFailed(path, message) =>
-      Vector(s"config read failed for $path: $message")
-    case ConfigLoadError.ParseFailed(message) => Vector(s"config parse failed: $message")
+      Vector(RenderSafety.display(s"config read failed for $path: $message"))
+    case ConfigLoadError.ParseFailed(message) =>
+      Vector(RenderSafety.display(s"config parse failed: $message"))
 
 final case class ResolvedPlanSnapshot(
     profileName: String,
@@ -532,9 +611,14 @@ enum TerminalToolResult:
 
 object TerminalToolResult:
 
-  def line(result: TerminalToolResult): String = result match
-    case TerminalToolResult.Completed(toolName, installDir) => s"installed $toolName to $installDir"
-    case TerminalToolResult.Failed(toolName, message)       => s"failed $toolName: $message"
+  def line(
+      result: TerminalToolResult,
+      redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
+  ): String = result match
+    case TerminalToolResult.Completed(toolName, installDir) =>
+      RenderSafety.display(s"installed $toolName to $installDir", redactions)
+    case TerminalToolResult.Failed(toolName, message) =>
+      RenderSafety.display(s"failed $toolName: $message", redactions)
 
 private final case class ObservedInstallResults(
     lines: Vector[String],
@@ -683,6 +767,7 @@ final class DirectBinaryInstaller(
       val observed = installTools(
         plan.policy,
         plan.tools,
+        plan.redactions,
         verboseOutput,
         terminalObserver,
         eventContext
@@ -723,30 +808,31 @@ final class DirectBinaryInstaller(
   private def installTools(
       policy: ResolvedPolicy,
       tools: Vector[ResolvedTool],
+      redactions: SensitiveValueRedactions,
       verboseOutput: VerboseOutput,
       terminalObserver: TerminalToolResult => Either[String, Unit],
       eventContext: InstallerEventContext
   ): ObservedInstallResults = tools.headOption match
     case None       => ObservedInstallResults(Vector.empty, Vector.empty, None)
     case Some(tool) =>
-      val verbose = verboseLines(tool, verboseOutput)
+      val verbose = verboseLines(tool, verboseOutput, redactions)
       verbose.foreach(line =>
         eventContext.emit(InstallerEvent.LogLine(Some(tool.name), line, _))
       )
       eventContext.emit(InstallerEvent.ToolStarted(tool.name, InstallerPhase.Downloading, _))
-      val result   = installTool(policy, tool, eventContext)
-      val terminal = terminalResult(result)
+      val result   = installTool(policy, tool, eventContext, redactions)
+      val terminal = terminalResult(result, redactions)
       eventContext.emit(toolResultEvent(terminal))
       terminalObserver(terminal) match
         case Left(message) => ObservedInstallResults(
-            verbose :+ TerminalToolResult.line(terminal),
+            verbose :+ TerminalToolResult.line(terminal, redactions),
             Vector(terminal),
-            Some(message)
+            Some(RenderSafety.display(message, redactions))
           )
         case Right(()) => result match
             case Left(_) if policy.continueOnError == ContinueOnError.Disabled =>
               ObservedInstallResults(
-                verbose :+ TerminalToolResult.line(terminal),
+                verbose :+ TerminalToolResult.line(terminal, redactions),
                 Vector(terminal),
                 None
               )
@@ -754,26 +840,28 @@ final class DirectBinaryInstaller(
               val rest = installTools(
                 policy,
                 tools.tail,
+                redactions,
                 verboseOutput,
                 terminalObserver,
                 eventContext
               )
               rest.copy(
                 lines = verbose ++
-                  (TerminalToolResult.line(terminal) +: rest.lines),
+                  (TerminalToolResult.line(terminal, redactions) +: rest.lines),
                 results = terminal +: rest.results
               )
             case Right(_) =>
               val rest = installTools(
                 policy,
                 tools.tail,
+                redactions,
                 verboseOutput,
                 terminalObserver,
                 eventContext
               )
               rest.copy(
                 lines = verbose ++
-                  (TerminalToolResult.line(terminal) +: rest.lines),
+                  (TerminalToolResult.line(terminal, redactions) +: rest.lines),
                 results = terminal +: rest.results
               )
 
@@ -787,20 +875,31 @@ final class DirectBinaryInstaller(
     )
     if tool.symlinks.exists(_.privilege == SymlinkPrivilege.Sudo) then
       Left(ToolInstallError.SudoSymlinkNotAllowed(tool.name))
-    else installTool(policy, tool, InstallerEventContext.start(InstallerEventObserver.none))
+    else
+      installTool(
+        policy,
+        tool,
+        InstallerEventContext.start(InstallerEventObserver.none),
+        SensitiveValueRedactions.empty
+      )
 
   private def installTool(
       policy: ResolvedPolicy,
       tool: ResolvedTool,
-      eventContext: InstallerEventContext
+      eventContext: InstallerEventContext,
+      redactions: SensitiveValueRedactions
   ): Either[ToolInstallError, ToolInstallSuccess] =
-    installWithoutPreflight(policy, tool, eventContext)
+    installWithoutPreflight(policy, tool, eventContext, redactions)
 
   private def terminalResult(
-      result: Either[ToolInstallError, ToolInstallSuccess]
+      result: Either[ToolInstallError, ToolInstallSuccess],
+      redactions: SensitiveValueRedactions
   ): TerminalToolResult = result match
     case Right(success) => TerminalToolResult.Completed(success.toolName, success.installDir)
-    case Left(error)    => TerminalToolResult.Failed(toolName(error), renderInstallError(error))
+    case Left(error)    => TerminalToolResult.Failed(
+        toolName(error),
+        renderInstallError(error, redactions)
+      )
 
   private def toolResultEvent(
       result: TerminalToolResult
@@ -823,32 +922,37 @@ final class DirectBinaryInstaller(
   private def rootCauseSummary(message: String): String =
     message.linesIterator.nextOption.getOrElse(message)
 
-  private def verboseLines(tool: ResolvedTool, verboseOutput: VerboseOutput): Vector[String] =
-    verboseOutput match
-      case VerboseOutput.Disabled => Vector.empty
-      case VerboseOutput.Enabled  =>
-        val downloadLine   = s"verbose ${tool.name}: download ${tool.download.url}"
-        val extractionLine = tool.download.archive match
-          case Some(archive) => Some(
-              s"verbose ${tool.name}: extract ${archive.original.archiveType.value} ${tool.download.filename}"
-            )
-          case None => None
-        Vector(downloadLine) ++ extractionLine.toVector
+  private def verboseLines(
+      tool: ResolvedTool,
+      verboseOutput: VerboseOutput,
+      redactions: SensitiveValueRedactions
+  ): Vector[String] = verboseOutput match
+    case VerboseOutput.Disabled => Vector.empty
+    case VerboseOutput.Enabled  =>
+      val downloadLine   = s"verbose ${tool.name}: download ${tool.download.url}"
+      val extractionLine = tool.download.archive match
+        case Some(archive) => Some(
+            s"verbose ${tool.name}: extract ${archive.original.archiveType.value} ${tool.download.filename}"
+          )
+        case None => None
+      RenderSafety.displayLines(Vector(downloadLine) ++ extractionLine.toVector, redactions)
 
   private def installWithoutPreflight(
       policy: ResolvedPolicy,
       tool: ResolvedTool,
-      eventContext: InstallerEventContext
+      eventContext: InstallerEventContext,
+      redactions: SensitiveValueRedactions
   ): Either[ToolInstallError, ToolInstallSuccess] =
-    installDownloadedBinaryOrArchive(policy, tool, eventContext)
+    installDownloadedBinaryOrArchive(policy, tool, eventContext, redactions)
 
   private def installDownloadedBinaryOrArchive(
       policy: ResolvedPolicy,
       tool: ResolvedTool,
-      eventContext: InstallerEventContext
+      eventContext: InstallerEventContext,
+      redactions: SensitiveValueRedactions
   ): Either[ToolInstallError, ToolInstallSuccess] =
     for
-      bytes <- download(tool, eventContext)
+      bytes <- download(tool, eventContext, redactions)
       _     <-
         withPhase(tool, InstallerPhase.VerifyingChecksum, eventContext)(verifyChecksum(tool, bytes))
       staged <- withPhase(tool, InstallerPhase.Staging, eventContext)(stage(tool, bytes))
@@ -867,22 +971,28 @@ final class DirectBinaryInstaller(
 
   private def download(
       tool: ResolvedTool,
-      eventContext: InstallerEventContext
+      eventContext: InstallerEventContext,
+      redactions: SensitiveValueRedactions
   ): Either[ToolInstallError, Array[Byte]] = downloadClient.download(
     tool.download.url,
-    downloadProgressObserver(tool, eventContext)
+    downloadProgressObserver(tool, eventContext, redactions)
   ).left.map: error =>
-    ToolInstallError.DownloadFailed(tool.name, error.url, error.message)
+    ToolInstallError.DownloadFailed(
+      tool.name,
+      RenderSafety.display(error.url, redactions),
+      RenderSafety.display(error.message, redactions)
+    )
 
   private def downloadProgressObserver(
       tool: ResolvedTool,
-      eventContext: InstallerEventContext
+      eventContext: InstallerEventContext,
+      redactions: SensitiveValueRedactions
   ): BinaryDownloadProgressObserver = new BinaryDownloadProgressObserver:
     def onProgress(progress: BinaryDownloadProgress): Unit = progress match
       case BinaryDownloadProgress.Started(url, totalBytes) =>
         eventContext.emit(InstallerEvent.DownloadProgress(
           tool.name,
-          url,
+          RenderSafety.display(url, redactions),
           0L,
           totalBytes,
           DownloadProgressStatus.Started,
@@ -891,7 +1001,7 @@ final class DirectBinaryInstaller(
       case BinaryDownloadProgress.Advanced(url, downloadedBytes, totalBytes) =>
         eventContext.emit(InstallerEvent.DownloadProgress(
           tool.name,
-          url,
+          RenderSafety.display(url, redactions),
           downloadedBytes,
           totalBytes,
           DownloadProgressStatus.Advanced,
@@ -900,7 +1010,7 @@ final class DirectBinaryInstaller(
       case BinaryDownloadProgress.Finished(url, downloadedBytes, totalBytes) =>
         eventContext.emit(InstallerEvent.DownloadProgress(
           tool.name,
-          url,
+          RenderSafety.display(url, redactions),
           downloadedBytes,
           totalBytes,
           DownloadProgressStatus.Finished,
@@ -1119,10 +1229,14 @@ final class DirectBinaryInstaller(
     case ToolInstallError.SudoSymlinkNotAllowed(toolName)           => toolName
     case ToolInstallError.SudoSymlinkConfirmationRequired(toolName) => toolName
 
-  private def renderInstallError(error: ToolInstallError): String = error match
+  private def renderInstallError(
+      error: ToolInstallError,
+      redactions: SensitiveValueRedactions
+  ): String = error match
     case ToolInstallError.DownloadFailed(toolName, url, message) => detailBlock(
         s"download: $url: $message",
-        Vector("tool" -> toolName, "url" -> url, "message" -> message)
+        Vector("tool" -> toolName, "url" -> url, "message" -> message),
+        redactions
       )
     case ToolInstallError.ChecksumMismatch(toolName, expected, actual) => detailBlock(
         s"checksum: sha256 expected $expected, got $actual",
@@ -1131,35 +1245,51 @@ final class DirectBinaryInstaller(
           "expected sha256" -> expected,
           "actual sha256"   -> actual,
           "suggestion" -> "verify the downloaded artifact before updating the manifest checksum"
-        )
+        ),
+        redactions
       )
-    case ToolInstallError.StagingFailed(toolName, message) =>
-      detailBlock(s"staging: $message", Vector("tool" -> toolName, "message" -> message))
+    case ToolInstallError.StagingFailed(toolName, message) => detailBlock(
+        s"staging: $message",
+        Vector("tool" -> toolName, "message" -> message),
+        redactions
+      )
     case ToolInstallError.ModeApplicationFailed(toolName, path, mode, message) => detailBlock(
         s"mode: $mode for $path: $message",
-        Vector("tool" -> toolName, "path" -> path, "mode" -> mode, "message" -> message)
+        Vector("tool" -> toolName, "path" -> path, "mode" -> mode, "message" -> message),
+        redactions
       )
-    case ToolInstallError.ReplacementFailed(toolName, message) =>
-      detailBlock(s"replacement: $message", Vector("tool" -> toolName, "message" -> message))
+    case ToolInstallError.ReplacementFailed(toolName, message) => detailBlock(
+        s"replacement: $message",
+        Vector("tool" -> toolName, "message" -> message),
+        redactions
+      )
     case ToolInstallError.ArchiveExtractionFailed(toolName, message) => detailBlock(
         s"archive extraction: $message",
-        Vector("tool" -> toolName, "message" -> message)
+        Vector("tool" -> toolName, "message" -> message),
+        redactions
       )
     case ToolInstallError.MissingExecutable(toolName, path) => detailBlock(
         s"verify executable: missing $path",
-        Vector("tool" -> toolName, "expected path" -> path)
+        Vector("tool" -> toolName, "expected path" -> path),
+        redactions
       )
     case ToolInstallError.SymlinkFailed(toolName, path, target, message) => detailBlock(
         s"symlink: $target -> $path: $message",
-        Vector("tool" -> toolName, "path" -> path, "target" -> target, "message" -> message)
+        Vector("tool" -> toolName, "path" -> path, "target" -> target, "message" -> message),
+        redactions
       )
     case ToolInstallError.SudoSymlinkNotAllowed(_) =>
       "sudo symlinks are not allowed by policy.allowSudoSymlinks"
     case ToolInstallError.SudoSymlinkConfirmationRequired(_) =>
       "sudo symlinks require apply confirmation; rerun apply with --yes"
 
-  private def detailBlock(summary: String, details: Vector[(String, String)]): String =
-    (summary +: details.map((name, value) => s"  $name: $value")).mkString("\n")
+  private def detailBlock(
+      summary: String,
+      details: Vector[(String, String)],
+      redactions: SensitiveValueRedactions
+  ): String =
+    val lines = summary +: details.map((name, value) => s"  $name: $value")
+    RenderSafety.displayLines(lines, redactions).mkString("\n")
 
   private def renderPreflightError(error: ApplyPreflightError): String = error match
     case ApplyPreflightError.ConfirmationRequired =>
@@ -1233,10 +1363,20 @@ private object StatefulApplyRunner:
         eventContext
       )
     case Some(path) =>
-      eventContext.emit(InstallerEvent.LogLine(None, s"state file: $path", _))
+      eventContext.emit(InstallerEvent.LogLine(
+        None,
+        RenderSafety.display(s"state file: $path", prepared.plan.redactions),
+        _
+      ))
       eventContext.emit(InstallerEvent.ToolPhaseChanged("state", InstallerPhase.LoadingState, _))
       loadInitialState(path, options.resetState, prepared, stateStore) match
-        case Left(error)               => InstallerResult(Vector(renderStateError(error)), 1)
+        case Left(error) => InstallerResult(
+            Vector(RenderSafety.display(
+              renderStateError(error),
+              prepared.plan.redactions
+            )),
+            1
+          )
         case Right((statePath, state)) =>
           runWithState(statePath, state, prepared, options, installer, stateStore, eventContext)
 
@@ -1309,7 +1449,9 @@ private object StatefulApplyRunner:
         _
       ))
       currentState = updateState(currentState, terminal)
-      stateStore.save(path, currentState).left.map(renderStateError)
+      stateStore.save(path, currentState).left.map(error =>
+        RenderSafety.display(renderStateError(error), prepared.plan.redactions)
+      )
     val result = installer.installPlanWithObserver(
       pendingPlan,
       options.applyConfirmation,
@@ -1672,7 +1814,10 @@ private final class ResolvingBinaryInstallerService(
       case (name, source) =>
         val tools = references.getOrElse(name, Vector.empty)
         renderVersionSource(name, source, resolved.get(name), tools)
-    InstallerResult("binstaller versions" +: lines, 0)
+    InstallerResult(
+      RenderSafety.displayLines("binstaller versions" +: lines, prepared.plan.redactions),
+      0
+    )
 
   private def versionReferences(
       profile: BinaryDistributionProfile
@@ -1733,8 +1878,13 @@ private enum PlanRenderCommand:
 
 private object PlanRenderer:
 
-  def render(plan: ResolvedPlan, command: PlanRenderCommand): InstallerResult =
-    InstallerResult(header(plan, command) ++ plan.tools.zipWithIndex.flatMap(renderTool), 0)
+  def render(plan: ResolvedPlan, command: PlanRenderCommand): InstallerResult = InstallerResult(
+    RenderSafety.displayLines(
+      header(plan, command) ++ plan.tools.zipWithIndex.flatMap(renderTool),
+      plan.redactions
+    ),
+    0
+  )
 
   private def header(plan: ResolvedPlan, command: PlanRenderCommand): Vector[String] =
     val sudoSymlinkCount =
@@ -1857,7 +2007,7 @@ private final class ResolutionBuilder(
     val installDirectoryErrors = validateInstallDirectories(policy.value, tools.value)
 
     ResolvedValue(
-      ResolvedPlan(policy.value, tools.value),
+      ResolvedPlan(policy.value, tools.value, options.redactions),
       manifestVars.errors ++ policy.errors ++ versions.errors ++ tools.errors
         ++ installDirectoryErrors
     )
@@ -2207,7 +2357,10 @@ private final class JdkHttpTextClient(client: HttpClient) extends HttpTextClient
         case Success(response) => Left(HttpTextError(url, s"HTTP ${response.statusCode()}"))
         case Failure(error)    => Left(HttpTextError(url, error.getMessage))
 
-private final class JdkBinaryDownloadClient(client: HttpClient) extends BinaryDownloadClient:
+private[core] final class JdkBinaryDownloadClient(
+    client: HttpClient,
+    limits: BinaryDownloadLimits = BinaryDownloadLimits.default
+) extends BinaryDownloadClient:
 
   def download(url: String): Either[BinaryDownloadError, Array[Byte]] =
     download(url, BinaryDownloadProgressObserver.none)
@@ -2230,29 +2383,71 @@ private final class JdkBinaryDownloadClient(client: HttpClient) extends BinaryDo
       url: String,
       response: HttpResponse[InputStream],
       progressObserver: BinaryDownloadProgressObserver
-  ): Either[BinaryDownloadError, Array[Byte]] = Try:
+  ): Either[BinaryDownloadError, Array[Byte]] =
     val totalBytes = response.headers().firstValueAsLong("Content-Length") match
       case value if value.isPresent && value.getAsLong >= 0L => Some(value.getAsLong)
       case _                                                 => None
 
+    Try:
+      Using.resource(response.body()): input =>
+        BoundedBinaryBodyReader.read(url, input, totalBytes, limits, progressObserver)
+    match
+      case Success(result) => result
+      case Failure(error)  => Left(BinaryDownloadError(url, error.getMessage))
+
+private[core] object BoundedBinaryBodyReader:
+
+  def read(
+      url: String,
+      input: InputStream,
+      totalBytes: Option[Long],
+      limits: BinaryDownloadLimits,
+      progressObserver: BinaryDownloadProgressObserver,
+      nowNanos: () => Long = () => System.nanoTime()
+  ): Either[BinaryDownloadError, Array[Byte]] = totalBytes match
+    case Some(length) if length > limits.maxBytes =>
+      Left(BinaryDownloadError(url, maxSizeMessage(length, limits.maxBytes)))
+    case _ => readBounded(url, input, totalBytes, limits, progressObserver, nowNanos)
+
+  private def readBounded(
+      url: String,
+      input: InputStream,
+      totalBytes: Option[Long],
+      limits: BinaryDownloadLimits,
+      progressObserver: BinaryDownloadProgressObserver,
+      nowNanos: () => Long
+  ): Either[BinaryDownloadError, Array[Byte]] = Try:
+    val deadline = nowNanos() + limits.bodyTimeout.toNanos
     progressObserver.onProgress(BinaryDownloadProgress.Started(url, totalBytes))
-    Using.resource(response.body()): input =>
-      val output = ByteArrayOutputStream()
-      val buffer = Array.ofDim[Byte](64 * 1024)
-      var read   = input.read(buffer)
-      var total  = 0L
+    val output = ByteArrayOutputStream()
+    val buffer = Array.ofDim[Byte](64 * 1024)
+    var read   = input.read(buffer)
+    var total  = 0L
 
-      while read != -1 do
-        output.write(buffer, 0, read)
-        total += read.toLong
-        progressObserver.onProgress(BinaryDownloadProgress.Advanced(url, total, totalBytes))
-        read = input.read(buffer)
+    while read != -1 do
+      rejectAfterDeadline(nowNanos(), deadline, limits.bodyTimeout)
+      total += read.toLong
+      if total > limits.maxBytes then
+        throw IllegalArgumentException(
+          maxSizeMessage(total, limits.maxBytes)
+        )
+      output.write(buffer, 0, read)
+      progressObserver.onProgress(BinaryDownloadProgress.Advanced(url, total, totalBytes))
+      read = input.read(buffer)
 
-      progressObserver.onProgress(BinaryDownloadProgress.Finished(url, total, totalBytes))
-      output.toByteArray
+    rejectAfterDeadline(nowNanos(), deadline, limits.bodyTimeout)
+    progressObserver.onProgress(BinaryDownloadProgress.Finished(url, total, totalBytes))
+    output.toByteArray
   match
     case Success(bytes) => Right(bytes)
     case Failure(error) => Left(BinaryDownloadError(url, error.getMessage))
+
+  private def rejectAfterDeadline(now: Long, deadline: Long, timeout: Duration): Unit =
+    if now > deadline then
+      throw IllegalArgumentException(s"download body timed out after ${timeout.toSeconds}s")
+
+  private def maxSizeMessage(actual: Long, maxBytes: Long): String =
+    s"download size $actual exceeds max allowed $maxBytes bytes"
 
 private object RuntimeUrl:
 
@@ -2458,17 +2653,27 @@ private object ArchiveExtractor:
       archive: ResolvedArchive,
       stagingDir: Path
   ): Either[String, Vector[PlannedArchiveFile]] =
-    val fileMappings      = archive.files.map(planFileMapping(entries, stagingDir, _))
-    val directoryMappings = archive.directories.map(planDirectoryMapping(entries, stagingDir, _))
-    val planned           = (fileMappings ++ directoryMappings).foldLeft(
-      Right(Vector.empty): Either[String, Vector[PlannedArchiveFile]]
-    ): (acc, next) =>
-      for
-        current <- acc
-        files   <- next
-      yield current ++ files
+    rejectDuplicateArchiveSources(entries).flatMap: _ =>
+      val fileMappings      = archive.files.map(planFileMapping(entries, stagingDir, _))
+      val directoryMappings = archive.directories.map(planDirectoryMapping(entries, stagingDir, _))
+      val planned           = (fileMappings ++ directoryMappings).foldLeft(
+        Right(Vector.empty): Either[String, Vector[PlannedArchiveFile]]
+      ): (acc, next) =>
+        for
+          current <- acc
+          files   <- next
+        yield current ++ files
 
-    planned.flatMap(rejectDuplicateTargets)
+      planned.flatMap(rejectDuplicateTargets)
+
+  private def rejectDuplicateArchiveSources(entries: Vector[ArchiveEntry]): Either[String, Unit] =
+    val duplicate = entries
+      .groupBy(_.name)
+      .collectFirst:
+        case (source, values) if values.size > 1 => source
+    duplicate match
+      case Some(source) => Left(s"duplicate archive member: $source")
+      case None         => Right(())
 
   private def planFileMapping(
       entries: Vector[ArchiveEntry],
@@ -2825,16 +3030,50 @@ private object NioInstallFileSystem extends InstallFileSystem:
     val backupPrefix =
       s".${Option(installDir.getFileName).map(_.toString).getOrElse("install")}.backup-"
 
-    Try:
+    val prepared = Try:
       val backupDir = Files.createTempDirectory(parent, backupPrefix)
       Files.delete(backupDir)
-      if Files.exists(installDir) then
+      backupDir
+
+    prepared match
+      case Failure(error)     => Left(InstallFileSystemError.ReplacementFailed(error.getMessage))
+      case Success(backupDir) => replaceWithBackup(stagedInstall, installDir, backupDir)
+
+  private def replaceWithBackup(
+      stagedInstall: StagedInstall,
+      installDir: Path,
+      backupDir: Path
+  ): Either[InstallFileSystemError.ReplacementFailed, Unit] =
+    val hadExisting = Files.exists(installDir)
+    val result      = Try:
+      if hadExisting then
         val _ = Files.move(installDir, backupDir, StandardCopyOption.REPLACE_EXISTING)
       val _ = Files.move(stagedInstall.stagingDir, installDir, StandardCopyOption.REPLACE_EXISTING)
-      deleteRecursively(backupDir)
-    match
-      case Success(_)     => Right(())
-      case Failure(error) => Left(InstallFileSystemError.ReplacementFailed(error.getMessage))
+
+    result match
+      case Success(_) =>
+        deleteRecursively(backupDir)
+        Right(())
+      case Failure(error) =>
+        val restoreError = restoreBackup(installDir, backupDir, hadExisting)
+        val message      = restoreError match
+          case Some(restore) => s"${error.getMessage}; rollback failed: $restore"
+          case None          => error.getMessage
+        Left(InstallFileSystemError.ReplacementFailed(message))
+
+  private def restoreBackup(
+      installDir: Path,
+      backupDir: Path,
+      hadExisting: Boolean
+  ): Option[String] =
+    if !hadExisting || !Files.exists(backupDir) then None
+    else
+      Try:
+        if Files.exists(installDir) then deleteRecursively(installDir)
+        val _ = Files.move(backupDir, installDir, StandardCopyOption.REPLACE_EXISTING)
+      match
+        case Success(_)     => None
+        case Failure(error) => Some(error.getMessage)
 
   private def deleteRecursively(path: Path): Unit = if Files.exists(path) then
     Using.resource(Files.walk(path)): stream =>

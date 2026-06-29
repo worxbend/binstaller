@@ -97,6 +97,8 @@ object TuiModuleTest extends TestSuite:
       assert(plain.contains("elapsed 300ms"))
       assert(plain.contains("512 B/1.0 KiB"))
       assert(plain.contains("alpha: extracting selected archive paths"))
+      assert(plain.contains("terminal restored after apply completes"))
+      assert(!plain.contains("q/Ctrl+C quit"))
       assert(!plain.contains("Plan ["))
 
     test("execution rows show completed and failed tools with root cause styling"):
