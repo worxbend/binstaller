@@ -24,11 +24,17 @@ import binstaller.core.SensitiveValueRedactions
 import binstaller.core.ToolResultStatus
 import binstaller.core.UrlProvenance
 
+import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
 import java.io.PrintWriter
+import java.nio.charset.StandardCharsets
 import java.time.Duration
-import scala.sys.process.Process
+import java.util.concurrent.TimeUnit
+import scala.jdk.CollectionConverters.*
+import scala.util.Try
+import scala.util.control.NonFatal
 
 /** Explicit terminal UI entrypoints for plan and apply workflows. */
 object TuiModule:
@@ -121,8 +127,8 @@ object TuiModule:
       )
     else
       val observer = RenderingExecutionTuiObserver(request, settings, terminal)
-      terminal.open()
       try
+        terminal.open()
         observer.renderCurrent()
         val result = service.applyWithEvents(request.options, observer)
         observer.finish(result)
@@ -1151,8 +1157,8 @@ object PlanningTuiSession:
   /** Run against a terminal boundary, restoring terminal state on exit or failure. */
   def run(initial: PlanningTuiState, terminal: TuiTerminal): InstallerResult =
     var state = initial.copy(viewport = terminal.viewport).clampScrolls
-    terminal.open()
     try
+      terminal.open()
       while !state.exitRequested do
         terminal.render(PlanningTuiRenderer.render(state.toModel))
         terminal.readInput() match
@@ -1181,25 +1187,39 @@ trait TuiTerminal:
   /** Restore terminal state. Must be idempotent for defensive cleanup. */
   def close(): Unit
 
-private final class SystemTuiTerminal extends TuiTerminal:
-  private val out                  = PrintWriter(System.out, true)
-  private var input: InputStream   = InputStream.nullInputStream()
-  private var previousStty: String = ""
-  private var terminalOpened       = false
+private[tui] final class SystemTuiTerminal(
+    backend: TuiTerminalBackend = SystemTuiTerminalBackend(),
+    out: PrintWriter = PrintWriter(System.out, true)
+) extends TuiTerminal:
+  private var input: InputStream              = InputStream.nullInputStream()
+  private var previousTerminalState: String   = ""
+  private var terminalOpened: Boolean         = false
+  private var rawTerminalStateActive: Boolean = false
+  private var inputOpened: Boolean            = false
 
   def isInteractive: Boolean = System.console() != null
 
-  def viewport: TuiViewport = readSize().getOrElse(TuiViewport.default)
+  def viewport: TuiViewport = backend.readSize().getOrElse(TuiViewport.default)
 
-  def open(): Unit =
-    previousStty = runStty(Vector("-g")).getOrElse("")
-    val _ = runStty(Vector("raw", "-echo"))
-    input = FileInputStream("/dev/tty")
-    terminalOpened = true
-    // Enter alternate screen, hide the cursor, and enable mouse reporting as one terminal
-    // boundary; close() reverses these sequences in a finally block.
-    out.print("\u001b[?1049h\u001b[?25l\u001b[?1000h\u001b[?1006h")
-    out.flush()
+  def open(): Unit = if !terminalOpened && !rawTerminalStateActive then
+    previousTerminalState = backend.readTerminalState().getOrElse("")
+    if backend.enterRawMode() then
+      rawTerminalStateActive = true
+      try
+        input = backend.openInput()
+        inputOpened = true
+        terminalOpened = true
+        // Enter alternate screen, hide the cursor, and enable mouse reporting as one
+        // terminal boundary; close() reverses these sequences in a finally block.
+        out.print("\u001b[?1049h\u001b[?25l\u001b[?1000h\u001b[?1006h")
+        out.flush()
+      catch
+        case NonFatal(error) =>
+          close()
+          throw error
+    else
+      restoreTerminalState()
+      throw IllegalStateException("failed to enter raw terminal mode")
 
   def render(lines: Vector[String]): Unit =
     out.print("\u001b[H\u001b[2J")
@@ -1210,15 +1230,69 @@ private final class SystemTuiTerminal extends TuiTerminal:
     val first = input.read()
     if first < 0 then None else Some(TuiInputParser.parse(first, input))
 
-  def close(): Unit = if terminalOpened then
-    out.print("\u001b[?1006l\u001b[?1000l\u001b[?25h\u001b[?1049l")
-    out.flush()
-    if previousStty.nonEmpty then
-      val _ = runStty(Vector(previousStty))
-    input.close()
-    terminalOpened = false
+  def close(): Unit =
+    if terminalOpened then
+      val _ = Try:
+        out.print("\u001b[?1006l\u001b[?1000l\u001b[?25h\u001b[?1049l")
+        out.flush()
+      terminalOpened = false
+    closeInput()
+    restoreTerminalState()
 
-  private def readSize(): Option[TuiViewport] = runStty(Vector("size")).flatMap: value =>
+  private def closeInput(): Unit = if inputOpened then
+    val _ = Try(input.close())
+    input = InputStream.nullInputStream()
+    inputOpened = false
+
+  private def restoreTerminalState(): Unit = if rawTerminalStateActive then
+    if previousTerminalState.nonEmpty then
+      val _ = backend.restoreTerminalState(previousTerminalState)
+    rawTerminalStateActive = false
+    previousTerminalState = ""
+
+private[tui] trait TuiTerminalBackend:
+  def readSize(): Option[TuiViewport]
+
+  def readTerminalState(): Option[String]
+
+  def enterRawMode(): Boolean
+
+  def restoreTerminalState(state: String): Boolean
+
+  def openInput(): InputStream
+
+private[tui] final case class TuiProcessSpec(argv: Vector[String], inputFile: File)
+
+private[tui] trait TuiProcessRunner:
+  def run(spec: TuiProcessSpec): Option[String]
+
+private[tui] final class SystemTuiProcessRunner(timeout: Duration = Duration.ofSeconds(2))
+    extends TuiProcessRunner:
+
+  def run(spec: TuiProcessSpec): Option[String] = Try:
+    val builder = ProcessBuilder(spec.argv.asJava)
+    builder.redirectInput(spec.inputFile)
+    builder.redirectError(ProcessBuilder.Redirect.DISCARD)
+    val process = builder.start()
+    if process.waitFor(timeout.toMillis, TimeUnit.MILLISECONDS) then
+      val output = readProcessOutput(process)
+      if process.exitValue() == 0 then Some(output) else None
+    else
+      process.destroyForcibly()
+      None
+  .toOption.flatten
+
+  private def readProcessOutput(process: Process): String =
+    val buffer = ByteArrayOutputStream()
+    process.getInputStream.transferTo(buffer)
+    buffer.toString(StandardCharsets.UTF_8)
+
+private[tui] final class SystemTuiTerminalBackend(
+    processRunner: TuiProcessRunner = SystemTuiProcessRunner(),
+    tty: File = File("/dev/tty")
+) extends TuiTerminalBackend:
+
+  def readSize(): Option[TuiViewport] = runStty(Vector("size")).flatMap: value =>
     value.trim.split("\\s+").toVector match
       case Vector(rows, columns) =>
         for
@@ -1227,13 +1301,16 @@ private final class SystemTuiTerminal extends TuiTerminal:
         yield TuiViewport(width, height)
       case _ => None
 
-  private def runStty(args: Vector[String]): Option[String] =
-    // stty needs redirection to /dev/tty, so this is the one shell boundary in the TUI backend.
-    // Args are locally fixed or restored from `stty -g` and shell-quoted before invocation.
-    val command = (Vector("stty") ++ args).map(shellQuote).mkString(" ") + " < /dev/tty"
-    scala.util.Try(Process(Vector("sh", "-c", command)).!!).toOption
+  def readTerminalState(): Option[String] = runStty(Vector("-g")).map(_.trim).filter(_.nonEmpty)
 
-  private def shellQuote(value: String): String = "'" + value.replace("'", "'\"'\"'") + "'"
+  def enterRawMode(): Boolean = runStty(Vector("raw", "-echo")).isDefined
+
+  def restoreTerminalState(state: String): Boolean = runStty(Vector(state)).isDefined
+
+  def openInput(): InputStream = FileInputStream(tty)
+
+  private def runStty(args: Vector[String]): Option[String] =
+    processRunner.run(TuiProcessSpec(Vector("stty") ++ args, tty))
 
 private object TuiInputParser:
 

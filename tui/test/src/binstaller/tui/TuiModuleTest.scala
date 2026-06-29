@@ -21,6 +21,12 @@ import binstaller.core.UrlRedirectHop
 import binstaller.core.VerboseOutput
 import utest.*
 
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.IOException
+import java.io.InputStream
+import java.io.PrintWriter
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
@@ -177,6 +183,28 @@ object TuiModuleTest extends TestSuite:
       assert(terminal.opened)
       assert(terminal.closed)
       assert(rendered.contains("failed"))
+
+    test("planning TUI closes terminal when open fails"):
+      val fixture  = writeFixture()
+      val terminal = FakeTuiTerminal(
+        interactive = true,
+        TuiViewport(100, 38),
+        openFailure = Some(IOException("cannot open terminal"))
+      )
+
+      var threw = false
+      try
+        TuiModule.startInteractive(
+          TuiRequest(TuiMode.Plan, fixture.options),
+          FakeHttpTextClient(""),
+          testSettings(height = 38),
+          terminal
+        )
+      catch case _: IOException => threw = true
+
+      assert(threw)
+      assert(terminal.opened)
+      assert(terminal.closed)
 
     test("non-interactive execution frame avoids alternate-screen terminal sequences"):
       val fixture  = writeFixture()
@@ -392,6 +420,58 @@ object TuiModuleTest extends TestSuite:
       assert(quitState.exitRequested)
       assert(ctrlCState.exitRequested)
 
+    test("stty backend uses direct argv and redirects input to tty"):
+      val tty     = File("/dev/tty")
+      val runner  = RecordingProcessRunner(Vector(Some("saved-state\n"), Some(""), Some("")))
+      val backend = SystemTuiTerminalBackend(runner, tty)
+
+      val saved    = backend.readTerminalState()
+      val raw      = backend.enterRawMode()
+      val restored = backend.restoreTerminalState("saved; touch /tmp/owned")
+
+      assert(saved.contains("saved-state"))
+      assert(raw)
+      assert(restored)
+      assert(runner.specs.map(_.argv) == Vector(
+        Vector("stty", "-g"),
+        Vector("stty", "raw", "-echo"),
+        Vector("stty", "saved; touch /tmp/owned")
+      ))
+      assert(runner.specs.forall(_.inputFile == tty))
+
+    test("system terminal restores raw mode and closes tty input after normal close"):
+      val backend = RecordingTerminalBackend(
+        state = Some("saved-state"),
+        rawModeResult = true,
+        openedInput = RecordingInputStream()
+      )
+      val terminal = SystemTuiTerminal(backend, silentOutput())
+
+      terminal.open()
+      terminal.close()
+      terminal.close()
+
+      assert(backend.actions == Vector("read-state", "raw", "open-input", "restore:saved-state"))
+      assert(backend.openedInput.closed)
+
+    test("system terminal restores raw mode when tty input open fails"):
+      val backend = RecordingTerminalBackend(
+        state = Some("saved-state"),
+        rawModeResult = true,
+        inputFailure = Some(IOException("missing tty"))
+      )
+      val terminal = SystemTuiTerminal(backend, silentOutput())
+
+      var threw = false
+      try
+        terminal.open()
+      catch case _: IOException => threw = true
+
+      terminal.close()
+
+      assert(threw)
+      assert(backend.actions == Vector("read-state", "raw", "open-input", "restore:saved-state"))
+
   private def modelFor(
       fixture: TuiFixture,
       selectedIndex: Int,
@@ -585,6 +665,8 @@ object TuiModuleTest extends TestSuite:
 
   private def stripAnsi(output: String): String = output.replaceAll("\u001b\\[[;\\d]*m", "")
 
+  private def silentOutput(): PrintWriter = PrintWriter(ByteArrayOutputStream(), true)
+
 private final case class TuiFixture(
     root: Path,
     config: Path,
@@ -601,7 +683,8 @@ private final class FakeHttpTextClient(text: String) extends HttpTextClient:
 
 private final class FakeTuiTerminal(
     interactive: Boolean,
-    initialViewport: TuiViewport
+    initialViewport: TuiViewport,
+    openFailure: Option[Throwable] = None
 ) extends TuiTerminal:
   var opened: Boolean                  = false
   var closed: Boolean                  = false
@@ -611,10 +694,55 @@ private final class FakeTuiTerminal(
 
   def viewport: TuiViewport = initialViewport
 
-  def open(): Unit = opened = true
+  def open(): Unit =
+    opened = true
+    openFailure.foreach(error => throw error)
 
   def render(lines: Vector[String]): Unit = rendered = rendered :+ lines
 
   def readInput(): Option[TuiInput] = None
 
   def close(): Unit = closed = true
+
+private final class RecordingProcessRunner(responses: Vector[Option[String]])
+    extends TuiProcessRunner:
+  var specs: Vector[TuiProcessSpec] = Vector.empty
+
+  def run(spec: TuiProcessSpec): Option[String] =
+    val response = responses.lift(specs.size).flatten
+    specs = specs :+ spec
+    response
+
+private final class RecordingTerminalBackend(
+    state: Option[String],
+    rawModeResult: Boolean,
+    val openedInput: RecordingInputStream = RecordingInputStream(),
+    inputFailure: Option[Throwable] = None
+) extends TuiTerminalBackend:
+  var actions: Vector[String] = Vector.empty
+
+  def readSize(): Option[TuiViewport] = Some(TuiViewport(100, 38))
+
+  def readTerminalState(): Option[String] =
+    actions = actions :+ "read-state"
+    state
+
+  def enterRawMode(): Boolean =
+    actions = actions :+ "raw"
+    rawModeResult
+
+  def restoreTerminalState(state: String): Boolean =
+    actions = actions :+ s"restore:$state"
+    true
+
+  def openInput(): InputStream =
+    actions = actions :+ "open-input"
+    inputFailure.foreach(error => throw error)
+    openedInput
+
+private final class RecordingInputStream() extends ByteArrayInputStream(Array.empty[Byte]):
+  var closed: Boolean = false
+
+  override def close(): Unit =
+    closed = true
+    super.close()

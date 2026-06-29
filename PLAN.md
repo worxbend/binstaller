@@ -274,6 +274,14 @@ kind: BinaryDistributionProfile
   details render final URL provenance only when redirects occur, with terminal
   scrubbing and sensitive-value redaction applied. Apply state now stores
   successful download provenance for future lock-ready data use.
+- 2026-06-29: T002 of the follow-up hardening queue replaced the TUI `stty`
+  shell wrapper with an injectable terminal backend that invokes `stty` through
+  direct argv using `ProcessBuilder` and redirects process input from
+  `/dev/tty`. Interactive plan/apply runners now place `open()` inside
+  cleanup `finally` paths, and the system terminal restores saved raw-mode
+  state when normal close, quit, service failure, or `/dev/tty` input-open
+  failure occurs. Focused TUI tests cover argv boundaries, tty targeting,
+  idempotent close, and open-failure cleanup.
 
 ## Current Agent Loop State
 
@@ -292,6 +300,9 @@ is:
   fail manifest validation and suggest direct binary or archive download.
 - The remaining command execution boundaries are structured and narrow: sudo
   symlink operations, the current `tar.xz` fallback, and test/fake executors.
+- The TUI terminal backend no longer constructs shell command strings for
+  `stty`; terminal sizing and raw-mode save/restore use direct process argv
+  with `/dev/tty` as redirected input.
 - The planning TUI now renders deterministically behind explicit `plan --tui`
   and `apply --tui` entrypoints and includes keyboard navigation, filtering,
   focusable scrollable details/logs, help, resize-aware layout sizing, and
