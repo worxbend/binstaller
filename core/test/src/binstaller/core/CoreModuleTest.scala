@@ -18,6 +18,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
 import java.util.zip.GZIPOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -69,6 +70,30 @@ object CoreModuleTest extends TestSuite:
       assert(tool.installDir == "/home/test/.apps/$(echo should-not-run)")
       assert(tool.installer.exists(_.args.head ==
         "/home/test/.apps/$(echo should-not-run)/script.sh"))
+
+    test("non-https version and download URLs fail resolution"):
+      val errors = resolveErrors(insecureUrlYaml)
+
+      assert(errors.exists(error =>
+        error.path == "spec.versions.alpha.resolver.url" &&
+          error.message.contains("URL must use https")
+      ))
+      assert(errors.exists(error =>
+        error.path == "spec.plan[0].spec.download.url" &&
+          error.message.contains("URL must use https")
+      ))
+
+    test("install directories must stay inside appsDir and not overlap"):
+      val errors = resolveErrors(unsafeInstallDirYaml)
+
+      assert(errors.exists(error =>
+        error.path == "spec.plan[0].spec.installDir" &&
+          error.message.contains("inside spec.policy.appsDir")
+      ))
+      assert(errors.exists(error =>
+        error.path == "spec.plan[2].spec.installDir" &&
+          error.message.contains("nested inside tool 'beta'")
+      ))
 
     test("example config resolves expected install directories under appsDir"):
       val plan = resolveExampleConfig(FakeHttpTextClient("v1.33.0"))
@@ -261,6 +286,17 @@ object CoreModuleTest extends TestSuite:
           line.contains("(tools: minikube)")
       ))
 
+    test("plan output redacts installer environment values"):
+      val tempRoot = Files.createTempDirectory("binstaller-core-redaction")
+      val config   = writeConfig(tempRoot, installerEnvYaml(tempRoot, "super-secret-token"))
+      val service  = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
+
+      val result = service.plan(applyOptions(config))
+
+      assert(result.exitCode == 0)
+      assert(result.lines.exists(_.contains("env TOKEN=<redacted>")))
+      assert(!result.lines.exists(_.contains("super-secret-token")))
+
     test("non dry-run apply requires yes when policy requireConfirmation is true"):
       val tempRoot   = Files.createTempDirectory("binstaller-core-confirm")
       val installDir = tempRoot.resolve("alpha")
@@ -441,6 +477,18 @@ object CoreModuleTest extends TestSuite:
       assert(commandExecutor.commands.head.env.keySet == Set("PATH", "CUSTOM"))
       assert(!Files.exists(scriptPath))
       assert(Files.isRegularFile(installDir.resolve("bin/script-tool")))
+
+    test("process command executor times out long-running commands"):
+      val tempRoot = Files.createTempDirectory("binstaller-core-process-timeout")
+      val executor = CommandExecutor.processWithTimeout(Duration.ofMillis(100))
+
+      val result = executor.run(CommandSpec(
+        Vector("sh", "-c", "sleep 2"),
+        tempRoot,
+        Map("PATH" -> sys.env.getOrElse("PATH", "/usr/bin:/bin"))
+      ))
+
+      assert(result.left.exists(_.message.contains("timed out")))
 
     test("installer success verifies expected executables"):
       val tempRoot        = Files.createTempDirectory("binstaller-core-installer-missing")
@@ -918,6 +966,39 @@ object CoreModuleTest extends TestSuite:
        |          - path: bin/beta
        |""".stripMargin
 
+  private def installerEnvYaml(tempRoot: Path, token: String): String =
+    val appsDir = tempRoot.resolve("apps")
+    s"""
+       |apiVersion: binstaller.io/v1alpha1
+       |kind: BinaryDistributionProfile
+       |metadata:
+       |  name: redaction
+       |spec:
+       |  policy:
+       |    appsDir: "$appsDir"
+       |  vars: {}
+       |  versions:
+       |    alpha: "1.0.0"
+       |  plan:
+       |    - name: alpha
+       |      kind: binary-tool
+       |      spec:
+       |        versionRef: alpha
+       |        installDir: "$appsDir/alpha"
+       |        download:
+       |          url: https://example.invalid/alpha
+       |          filename: alpha
+       |        installer:
+       |          shell: sh
+       |          args:
+       |            - "$appsDir/alpha/alpha"
+       |          env:
+       |            - name: TOKEN
+       |              value: "$token"
+       |        executables:
+       |          - path: bin/alpha
+       |""".stripMargin
+
   private def invalidConfigYaml(tempRoot: Path): String =
     s"""
        |apiVersion: wrong.example/v1
@@ -1127,6 +1208,79 @@ object CoreModuleTest extends TestSuite:
                                           |        executables:
                                           |          - path: bin/script
                                           |""".stripMargin
+
+  private val insecureUrlYaml: String = """
+                                          |apiVersion: binstaller.io/v1alpha1
+                                          |kind: BinaryDistributionProfile
+                                          |metadata:
+                                          |  name: insecure
+                                          |spec:
+                                          |  policy:
+                                          |    appsDir: "${HOME}/.apps"
+                                          |  vars: {}
+                                          |  versions:
+                                          |    alpha:
+                                          |      resolver:
+                                          |        type: http-text
+                                          |        url: http://example.invalid/stable.txt
+                                          |  plan:
+                                          |    - name: alpha
+                                          |      kind: binary-tool
+                                          |      spec:
+                                          |        versionRef: alpha
+                                          |        installDir: "${appsDir}/alpha"
+                                          |        download:
+                                          |          url: http://example.invalid/alpha
+                                          |          filename: alpha
+                                          |        executables:
+                                          |          - path: bin/alpha
+                                          |""".stripMargin
+
+  private val unsafeInstallDirYaml: String = """
+                                               |apiVersion: binstaller.io/v1alpha1
+                                               |kind: BinaryDistributionProfile
+                                               |metadata:
+                                               |  name: unsafe-install-dir
+                                               |spec:
+                                               |  policy:
+                                               |    appsDir: "${HOME}/.apps"
+                                               |  vars: {}
+                                               |  versions:
+                                               |    alpha: "1.0.0"
+                                               |    beta: "1.0.0"
+                                               |    gamma: "1.0.0"
+                                               |  plan:
+                                               |    - name: alpha
+                                               |      kind: binary-tool
+                                               |      spec:
+                                               |        versionRef: alpha
+                                               |        installDir: /tmp/alpha
+                                               |        download:
+                                               |          url: https://example.invalid/alpha
+                                               |          filename: alpha
+                                               |        executables:
+                                               |          - path: bin/alpha
+                                               |    - name: beta
+                                               |      kind: binary-tool
+                                               |      spec:
+                                               |        versionRef: beta
+                                               |        installDir: "${appsDir}/beta"
+                                               |        download:
+                                               |          url: https://example.invalid/beta
+                                               |          filename: beta
+                                               |        executables:
+                                               |          - path: bin/beta
+                                               |    - name: gamma
+                                               |      kind: binary-tool
+                                               |      spec:
+                                               |        versionRef: gamma
+                                               |        installDir: "${appsDir}/beta/nested"
+                                               |        download:
+                                               |          url: https://example.invalid/gamma
+                                               |          filename: gamma
+                                               |        executables:
+                                               |          - path: bin/gamma
+                                               |""".stripMargin
 
 private final class FakeHttpTextClient(text: String) extends HttpTextClient:
 

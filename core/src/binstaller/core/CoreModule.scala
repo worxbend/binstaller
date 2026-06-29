@@ -34,7 +34,9 @@ import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermission
 import java.security.MessageDigest
+import java.time.Duration
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPInputStream
 import java.util.zip.ZipInputStream
 import scala.jdk.CollectionConverters.*
@@ -143,8 +145,10 @@ object BinaryDownloadClient:
   def jdk: BinaryDownloadClient = JdkBinaryDownloadClient(RuntimeHttpClient.create())
 
 private object RuntimeHttpClient:
+  val requestTimeout: Duration = Duration.ofSeconds(30)
 
   def create(): HttpClient = HttpClient.newBuilder()
+    .connectTimeout(requestTimeout)
     .followRedirects(HttpClient.Redirect.NORMAL)
     .build()
 
@@ -156,7 +160,9 @@ trait CommandExecutor:
   def run(spec: CommandSpec): Either[CommandExecutionError, Unit]
 
 object CommandExecutor:
-  def process: CommandExecutor = ProcessCommandExecutor
+  def process: CommandExecutor = processWithTimeout(Duration.ofMinutes(15))
+
+  def processWithTimeout(timeout: Duration): CommandExecutor = ProcessCommandExecutor(timeout)
 
 final case class ResolvedPlan(
     policy: ResolvedPolicy,
@@ -851,7 +857,7 @@ final class DirectBinaryInstaller(
     case ToolInstallError.ReplacementFailed(_, message)       => s"replacement: $message"
     case ToolInstallError.ArchiveExtractionFailed(_, message) => s"archive extraction: $message"
     case ToolInstallError.InstallerExecutionFailed(_, argv, message) =>
-      s"installer command: ${argv.mkString(" ")}: $message"
+      s"installer command: ${renderArgv(argv)}: $message"
     case ToolInstallError.InstallerCleanupFailed(_, path, message) =>
       s"installer cleanup: $path: $message"
     case ToolInstallError.MissingExecutable(_, path) => s"verify executable: missing $path"
@@ -869,6 +875,10 @@ final class DirectBinaryInstaller(
       s"failed $toolName: sudo symlinks are not allowed by policy.allowSudoSymlinks"
     case ApplyPreflightError.SudoSymlinkConfirmationRequired(toolName) =>
       s"failed $toolName: sudo symlinks require apply confirmation; rerun apply with --yes"
+
+  private def renderArgv(argv: Vector[String]): String = argv.map(shellQuote).mkString(" ")
+
+  private def shellQuote(value: String): String = s"'${value.replace("'", "'\"'\"'")}'"
 
 object DirectBinaryInstaller:
 
@@ -1437,7 +1447,7 @@ private object PlanRenderer:
   private def renderInstaller(installer: ResolvedInstaller): Vector[String] = Vector(
     s"   installer: ${installer.shell.value} ${installer.args.map(shellQuote).mkString(" ")}"
   ) ++
-    installer.env.map(env => s"     env ${env.name}=${shellQuote(env.value)}") :+
+    installer.env.map(env => s"     env ${env.name}=<redacted>") :+
     s"     cleanup: ${installer.cleanup}"
 
   private def renderExecutables(tool: ResolvedTool): Vector[String] =
@@ -1490,12 +1500,14 @@ private final class ResolutionBuilder(
     val policy       = resolvePolicy(options.runtimeVariables ++ manifestVars.value)
     val baseVars     = options.runtimeVariables ++ manifestVars.value +
       ("appsDir" -> policy.value.appsDir)
-    val versions = resolveVersions(baseVars)
-    val tools    = resolveTools(baseVars, versions.value)
+    val versions               = resolveVersions(baseVars)
+    val tools                  = resolveTools(baseVars, versions.value)
+    val installDirectoryErrors = validateInstallDirectories(policy.value, tools.value)
 
     ResolvedValue(
       ResolvedPlan(policy.value, tools.value),
       manifestVars.errors ++ policy.errors ++ versions.errors ++ tools.errors
+        ++ installDirectoryErrors
     )
 
   private def resolveManifestVars(): ResolvedValue[Map[String, String]] =
@@ -1560,6 +1572,7 @@ private final class ResolutionBuilder(
     val resolvedUrl = interpolate(url, path, vars)
     val fetched     =
       if resolvedUrl.errors.nonEmpty then ResolvedValue.valid("")
+      else if httpsUrlErrors(resolvedUrl.value, path).nonEmpty then ResolvedValue.valid("")
       else
         httpTextClient.getText(resolvedUrl.value) match
           case Right(text) => ResolvedValue.valid(text.trim)
@@ -1568,7 +1581,7 @@ private final class ResolutionBuilder(
 
     ResolvedValue(
       ResolvedVersion.Concrete(fetched.value),
-      resolvedUrl.errors ++ fetched.errors ++
+      resolvedUrl.errors ++ httpsUrlErrors(resolvedUrl.value, path) ++ fetched.errors ++
         missingConcreteVersionErrors(fetched.value, path, name)
     )
 
@@ -1657,6 +1670,7 @@ private final class ResolutionBuilder(
     ResolvedValue(
       ResolvedDownload(url.value, filename.value, download.checksum, archive.value),
       url.errors ++ versionTemplateErrors(download.url, s"$path.url", version) ++
+        httpsUrlErrors(url.value, s"$path.url") ++
         filename.errors ++ versionTemplateErrors(download.filename, s"$path.filename", version) ++
         archive.errors
     )
@@ -1803,6 +1817,47 @@ private final class ResolutionBuilder(
       vars: Map[String, String]
   ): ResolvedValue[String] = TemplateInterpolator.interpolate(value, path, vars)
 
+  private def validateInstallDirectories(
+      policy: ResolvedPolicy,
+      tools: Vector[ResolvedTool]
+  ): Vector[ValidationError] =
+    val appsDir           = Path.of(policy.appsDir).toAbsolutePath.normalize()
+    val containmentErrors = tools.zipWithIndex.flatMap:
+      case (tool, index) =>
+        val path = s"spec.plan[$index].spec.installDir"
+        Try(Path.of(tool.installDir).toAbsolutePath.normalize()) match
+          case Failure(error) =>
+            Vector(ValidationError(path, s"invalid installDir: ${error.getMessage}"))
+          case Success(installDir) if installDir == appsDir =>
+            Vector(ValidationError(
+              path,
+              "installDir must be a child of appsDir, not appsDir itself"
+            ))
+          case Success(installDir) if !installDir.startsWith(appsDir) =>
+            Vector(ValidationError(path, "installDir must resolve inside spec.policy.appsDir"))
+          case Success(_) => Vector.empty
+
+    containmentErrors ++ nestedInstallDirectoryErrors(tools)
+
+  private def nestedInstallDirectoryErrors(tools: Vector[ResolvedTool]): Vector[ValidationError] =
+    val indexed = tools.zipWithIndex.flatMap:
+      case (tool, index) => Try(Path.of(tool.installDir).toAbsolutePath.normalize()).toOption.map:
+          path => (tool, index, path)
+
+    indexed.flatMap:
+      case (tool, index, installDir) => indexed.collect:
+          case (otherTool, _, otherInstallDir)
+              if tool.name != otherTool.name && installDir.startsWith(otherInstallDir) =>
+            ValidationError(
+              s"spec.plan[$index].spec.installDir",
+              s"installDir must not be nested inside tool '${otherTool.name}' installDir"
+            )
+
+  private def httpsUrlErrors(value: String, path: String): Vector[ValidationError] =
+    RuntimeUrl.httpsUri(value) match
+      case Right(_)      => Vector.empty
+      case Left(message) => Vector(ValidationError(path, message))
+
   private def joinPath(parent: String, child: String): String =
     if parent.endsWith("/") then s"$parent$child" else s"$parent/$child"
 
@@ -1829,28 +1884,43 @@ private object TemplateInterpolator:
 
 private final class JdkHttpTextClient(client: HttpClient) extends HttpTextClient:
 
-  def getText(url: String): Either[HttpTextError, String] =
-    val request = HttpRequest.newBuilder(URI.create(url)).GET().build()
-    Try(client.send(request, HttpResponse.BodyHandlers.ofString())) match
-      case Success(response) if response.statusCode() >= 200 && response.statusCode() < 300 =>
-        Right(response.body())
-      case Success(response) => Left(HttpTextError(url, s"HTTP ${response.statusCode()}"))
-      case Failure(error)    => Left(HttpTextError(url, error.getMessage))
+  def getText(url: String): Either[HttpTextError, String] = RuntimeUrl.httpsUri(url) match
+    case Left(message) => Left(HttpTextError(url, message))
+    case Right(uri)    =>
+      val request = HttpRequest.newBuilder(uri).timeout(RuntimeHttpClient.requestTimeout).GET()
+        .build()
+      Try(client.send(request, HttpResponse.BodyHandlers.ofString())) match
+        case Success(response) if response.statusCode() >= 200 && response.statusCode() < 300 =>
+          Right(response.body())
+        case Success(response) => Left(HttpTextError(url, s"HTTP ${response.statusCode()}"))
+        case Failure(error)    => Left(HttpTextError(url, error.getMessage))
 
 private final class JdkBinaryDownloadClient(client: HttpClient) extends BinaryDownloadClient:
 
   def download(url: String): Either[BinaryDownloadError, Array[Byte]] =
-    val request = HttpRequest.newBuilder(URI.create(url)).GET().build()
-    Try(client.send(request, HttpResponse.BodyHandlers.ofByteArray())) match
-      case Success(response) if response.statusCode() >= 200 && response.statusCode() < 300 =>
-        Right(response.body())
-      case Success(response) => Left(BinaryDownloadError(url, s"HTTP ${response.statusCode()}"))
-      case Failure(error)    => Left(BinaryDownloadError(url, error.getMessage))
+    RuntimeUrl.httpsUri(url) match
+      case Left(message) => Left(BinaryDownloadError(url, message))
+      case Right(uri)    =>
+        val request = HttpRequest.newBuilder(uri).timeout(RuntimeHttpClient.requestTimeout).GET()
+          .build()
+        Try(client.send(request, HttpResponse.BodyHandlers.ofByteArray())) match
+          case Success(response) if response.statusCode() >= 200 && response.statusCode() < 300 =>
+            Right(response.body())
+          case Success(response) => Left(BinaryDownloadError(url, s"HTTP ${response.statusCode()}"))
+          case Failure(error)    => Left(BinaryDownloadError(url, error.getMessage))
+
+private object RuntimeUrl:
+
+  def httpsUri(url: String): Either[String, URI] = Try(URI.create(url)) match
+    case Failure(error)                           => Left(s"invalid URL: ${error.getMessage}")
+    case Success(uri) if uri.getScheme != "https" => Left("URL must use https")
+    case Success(uri) if Option(uri.getHost).forall(_.isEmpty) => Left("URL must include a host")
+    case Success(uri)                                          => Right(uri)
 
 private object CommandEnvironment:
   val baseline: Map[String, String] = Map("PATH" -> sys.env.getOrElse("PATH", "/usr/bin:/bin"))
 
-private object ProcessCommandExecutor extends CommandExecutor:
+private final class ProcessCommandExecutor(timeout: Duration) extends CommandExecutor:
 
   def run(spec: CommandSpec): Either[CommandExecutionError, Unit] = Try:
     val builder = ProcessBuilder(spec.argv.asJava)
@@ -1860,9 +1930,13 @@ private object ProcessCommandExecutor extends CommandExecutor:
     spec.env.foreach:
       case (name, value) => val _ = env.put(name, value)
     val process = builder.start()
-    val exit    = process.waitFor()
-    if exit == 0 then Right(())
-    else Left(CommandExecutionError(spec, s"command exited with status $exit", Some(exit)))
+    if process.waitFor(timeout.toMillis, TimeUnit.MILLISECONDS) then
+      val exit = process.exitValue()
+      if exit == 0 then Right(())
+      else Left(CommandExecutionError(spec, s"command exited with status $exit", Some(exit)))
+    else
+      process.destroyForcibly()
+      Left(CommandExecutionError(spec, s"command timed out after ${timeout.toSeconds}s", None))
   match
     case Success(result) => result
     case Failure(error)  => Left(CommandExecutionError(spec, error.getMessage, None))

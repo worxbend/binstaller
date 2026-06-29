@@ -133,6 +133,13 @@ kind: BinaryDistributionProfile
   now packages `binstaller-linux-amd64` and smoke-tests native `--help`, `plan`,
   and `apply --dry-run`. Recursive tests, app help smoke, and git whitespace
   checks passed.
+- 2026-06-29: T017 completed the post-implementation hardening review. Findings
+  and P010 question answers are documented in `docs/hardening-review.md`. The
+  implemented hardening changes enforce HTTPS version/download URLs, add runtime
+  HTTP and process timeouts, constrain install directories under `appsDir`,
+  redact installer env values in plan output, and quote argv in installer
+  command errors. Remaining must-fix risks for native `tar.xz` inspection and
+  installer-script atomicity are explicitly deferred with rationale.
 
 ### User Experience Goals
 
