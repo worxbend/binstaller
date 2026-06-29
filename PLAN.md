@@ -82,6 +82,124 @@ kind: BinaryDistributionProfile
 - Multi-OS package naming. The first target is Linux amd64, matching the
   existing script.
 
+## Technical Foundation
+
+Even if the smaller app is implemented from scratch, keep the existing JVM and
+Scala foundation. The product scope is smaller; the engineering stack should
+remain explicit and production-oriented.
+
+### Language And Runtime
+
+- Scala 3, currently `3.8.2` in `build.mill`.
+- JDK 21 or newer.
+- Linux as the primary runtime target.
+- GraalVM 21+ only when building native images locally.
+- Native release target: Linux amd64.
+
+### Build Tooling
+
+- Use the checked-in `./mill` launcher.
+- Keep Mill as the only build tool; do not introduce sbt, Maven, Gradle, npm,
+  or Make unless a later plan explicitly adds them.
+- Keep a multi-module Mill build with explicit, acyclic dependencies.
+- Use Mill `ScalaModule`.
+- Keep source layout on Mill ScalaModule defaults:
+  - production: `<module>/src`
+  - tests: `<module>/test/src`
+- Keep module responsibilities narrow so each module can compile independently.
+- Use programmable `build.mill` only where needed for current repo simplicity,
+  native-image settings, reusable test traits, or dependency centralization.
+
+### Required Modules
+
+```text
+app -> cli -> core -> config
+```
+
+Required module roles:
+
+- `app`: tiny entry point, native-image target, no business logic.
+- `cli`: picocli commands, terminal rendering, exit codes, user-facing errors.
+- `core`: variable resolution, version resolution, planning, state, execution,
+  filesystem/download/command boundaries.
+- `config`: YAML loading, raw YAML preservation if needed, typed models,
+  validation, validation error aggregation.
+
+Optional module:
+
+- `host`: only if simple `when` matching needs host facts such as OS family or
+  architecture.
+
+Not required for the first smaller app:
+
+- `tui`: keep out of the required app dependency graph until the CLI path is
+  stable.
+- broad package/source/dotfiles/font modules and executors.
+
+### Libraries
+
+Use the existing dependency choices unless an implementation checkpoint
+deliberately upgrades them:
+
+- `info.picocli:picocli:4.7.7` for CLI parsing.
+- `org.snakeyaml:snakeyaml-engine:3.0.1` for YAML loading.
+- `com.softwaremill.sttp.client4::core:4.0.25` for HTTP downloads and version
+  resolver requests.
+- `com.softwaremill.ox::core:1.0.5` for structured concurrency if bounded
+  parallelism or cancellation is added.
+- `com.lihaoyi::upickle:4.4.3` for state JSON.
+- `com.lihaoyi::os-lib:0.11.8` where filesystem/process helpers are useful.
+- `com.lihaoyi::fansi:0.5.1` for colored terminal rendering.
+- `com.lihaoyi::utest:0.9.5` for tests.
+
+Before implementation begins, re-check dependency versions if the goal is to
+use latest stable releases. If versions are upgraded, record the reason in the
+plan or a dedicated change note.
+
+### Formatting And Quality
+
+- Keep `.scalafmt.conf`.
+- Use the Scala 3 dialect.
+- Run Mill scalafmt checks during validation.
+- Prefer typed ADTs and small case classes over stringly typed execution logic.
+- Preserve argv boundaries for external commands whenever possible.
+- Use shell text only for explicitly modeled installer-script behavior.
+- Model expected failures as typed errors instead of throwing through the CLI.
+- Keep public contracts documented where behavior is security-sensitive,
+  stateful, or externally observable.
+- Add focused tests alongside each implementation phase.
+
+### Native Image
+
+- Keep `app extends NativeImageModule`.
+- Keep `mainClass` on the app entry point.
+- Keep native options conservative, currently:
+
+```text
+--no-fallback
+-Os
+```
+
+- Native-image packaging is a release concern; normal development should work
+  with JVM `./mill app.run ...` commands.
+
+### Validation Commands
+
+The implementation should keep these project-native checks working:
+
+```bash
+./mill config.test
+./mill core.test
+./mill cli.test
+./mill __.compile
+./mill __.test
+./mill mill.scalalib.scalafmt/checkFormatAll
+git diff --check
+```
+
+Use focused module tests while developing, then recursive compile/test before
+closing a task.
+
 ## Existing Script Inventory
 
 The initial config should faithfully replace these script entries:
@@ -772,31 +890,14 @@ State rules:
 
 ## Module Plan
 
-### Keep
+The authoritative build and dependency guidance is in the Technical Foundation
+section. During the pivot, apply that guidance this way:
 
-- `app`: main entry point and native image target.
-- `cli`: picocli commands and rendering.
-- `config`: YAML loading, typed models, validation.
-- `core`: resolution, planning, state, execution.
-
-### Minimize Or Remove From Active Flow
-
-- `host`: keep only if simple `when` support uses it.
-- `tui`: remove from required module dependencies for the first smaller app.
-- broad package/source/dotfiles/font executors: delete, quarantine, or leave
-  unused during the pivot, but do not keep them on the active user-facing path.
-
-Recommended dependency direction:
-
-```text
-app -> cli -> core -> config
-```
-
-Optional:
-
-```text
-core -> host
-```
+- Keep `app`, `cli`, `core`, and `config` as the required active modules.
+- Keep `host` only if the first implementation supports `when` conditions.
+- Remove `tui` from the app dependency graph until the CLI path is stable.
+- Delete, quarantine, or leave unused the broad package/source/dotfiles/font
+  executors, but do not keep them on the active user-facing path.
 
 ## Implementation Tasks
 
