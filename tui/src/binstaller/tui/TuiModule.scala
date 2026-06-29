@@ -28,12 +28,16 @@ import java.io.PrintWriter
 import java.time.Duration
 import scala.sys.process.Process
 
+/** Explicit terminal UI entrypoints for plan and apply workflows. */
 object TuiModule:
+  /** Module path used by CLI and tests to identify the TUI layer. */
   def modulePath: Vector[String] = CoreModule.modulePath :+ "tui"
 
+  /** Start a TUI workflow with production HTTP and terminal dependencies. */
   def start(request: TuiRequest): InstallerResult =
     startInteractive(request, HttpTextClient.jdk, PlanningTuiSettings.default, SystemTuiTerminal())
 
+  /** Render a deterministic non-interactive TUI frame with injected HTTP/settings. */
   def start(
       request: TuiRequest,
       httpTextClient: HttpTextClient,
@@ -46,6 +50,7 @@ object TuiModule:
         ExecutionTuiSettings.fromPlanning(settings)
       )
 
+  /** Start a TUI workflow through an injectable terminal boundary. */
   def startInteractive(
       request: TuiRequest,
       httpTextClient: HttpTextClient,
@@ -122,20 +127,27 @@ object TuiModule:
         result.copy(lines = Vector.empty)
       finally terminal.close()
 
+/** TUI workflow mode selected by the CLI. */
 enum TuiMode:
   case Plan, Apply
 
+  /** Matching non-interactive command name. */
   def commandName: String = this match
     case Plan  => "plan"
     case Apply => "apply"
 
+/** Request passed from CLI to the TUI layer. */
 final case class TuiRequest(mode: TuiMode, options: InstallerOptions)
 
+/** Terminal viewport used by deterministic renderers. */
 final case class TuiViewport(width: Int, height: Int)
 
+/** Viewport constructors. */
 object TuiViewport:
+  /** Default viewport used when terminal size cannot be detected. */
   val default: TuiViewport = TuiViewport(120, 36)
 
+/** Pure planning-renderer settings used by static and interactive TUI paths. */
 final case class PlanningTuiSettings(
     viewport: TuiViewport,
     appVersion: String,
@@ -150,8 +162,10 @@ final case class PlanningTuiSettings(
     logs: Vector[String]
 )
 
+/** Planning settings constructors. */
 object PlanningTuiSettings:
 
+  /** Default planning TUI settings for the production entrypoint. */
   def default: PlanningTuiSettings = PlanningTuiSettings(
     viewport = TuiViewport.default,
     appVersion = "dev",
@@ -166,6 +180,7 @@ object PlanningTuiSettings:
     logs = Vector.empty
   )
 
+/** Header data for the planning TUI frame. */
 final case class PlanningTuiHeader(
     appName: String,
     appVersion: String,
@@ -179,6 +194,7 @@ final case class PlanningTuiHeader(
     filterText: String
 )
 
+/** One rendered row in the planning TUI table. */
 final case class PlanningTuiRow(
     index: Int,
     selected: Boolean,
@@ -191,11 +207,13 @@ final case class PlanningTuiRow(
     riskMarkers: Vector[String]
 )
 
+/** Detail pane content for the selected planning row. */
 final case class PlanningTuiDetail(
     name: String,
     lines: Vector[String]
 )
 
+/** Complete deterministic model consumed by [[PlanningTuiRenderer]]. */
 final case class PlanningTuiModel(
     viewport: TuiViewport,
     header: PlanningTuiHeader,
@@ -210,8 +228,10 @@ final case class PlanningTuiModel(
     keybar: String
 )
 
+/** Planning TUI model derivation helpers. */
 object PlanningTuiModel:
 
+  /** Build a render model from a resolved plan snapshot and current UI settings. */
   def fromSnapshot(
       snapshot: ResolvedPlanSnapshot,
       request: TuiRequest,
@@ -254,6 +274,7 @@ object PlanningTuiModel:
       keybar = "tab focus | shift-tab/b back | arrows select/scroll | / filter | ? help | q quit"
     )
 
+  /** Filter resolved tools by name or description using a case-insensitive contains match. */
   def filterTools(
       tools: Vector[ResolvedTool],
       filter: Option[String]
@@ -406,6 +427,7 @@ object PlanningTuiModel:
   private def joinPath(parent: String, child: String): String =
     if parent.endsWith("/") then s"$parent$child" else s"$parent/$child"
 
+/** Pure execution-renderer settings derived from planning settings. */
 final case class ExecutionTuiSettings(
     viewport: TuiViewport,
     appVersion: String,
@@ -414,8 +436,10 @@ final case class ExecutionTuiSettings(
     logs: Vector[String]
 )
 
+/** Execution settings constructors. */
 object ExecutionTuiSettings:
 
+  /** Derive execution settings from planning settings so CLI flags configure both views. */
   def fromPlanning(settings: PlanningTuiSettings): ExecutionTuiSettings = ExecutionTuiSettings(
     viewport = settings.viewport,
     appVersion = settings.appVersion,
@@ -424,6 +448,7 @@ object ExecutionTuiSettings:
     logs = settings.logs
   )
 
+/** Header data for the apply execution TUI frame. */
 final case class ExecutionTuiHeader(
     appName: String,
     appVersion: String,
@@ -434,6 +459,7 @@ final case class ExecutionTuiHeader(
     elapsedText: String
 )
 
+/** Current active tool shown in the execution TUI. */
 final case class ExecutionActiveTool(
     name: String,
     phase: InstallerPhase,
@@ -442,6 +468,7 @@ final case class ExecutionActiveTool(
     elapsedTime: Duration
 )
 
+/** Completed, failed, or skipped tool row in the execution TUI. */
 final case class ExecutionToolRow(
     name: String,
     status: PlanningTuiStatus,
@@ -449,6 +476,7 @@ final case class ExecutionToolRow(
     elapsedTime: Duration
 )
 
+/** Complete deterministic model consumed by [[ExecutionTuiRenderer]]. */
 final case class ExecutionTuiModel(
     viewport: TuiViewport,
     header: ExecutionTuiHeader,
@@ -461,6 +489,7 @@ final case class ExecutionTuiModel(
     keybar: String
 )
 
+/** Event-accumulating execution state for live and static apply TUI rendering. */
 final case class ExecutionTuiState(
     request: TuiRequest,
     viewport: TuiViewport,
@@ -476,6 +505,7 @@ final case class ExecutionTuiState(
     elapsedTime: Duration
 ):
 
+  /** Convert accumulated execution state into a deterministic render model. */
   def toModel: ExecutionTuiModel =
     val summaryLine = summary.map: value =>
       val status = value.status match
@@ -503,6 +533,7 @@ final case class ExecutionTuiState(
       keybar = "terminal restored after apply completes"
     )
 
+  /** Incorporate one renderer-agnostic core event into execution UI state. */
   def onEvent(event: InstallerEvent): ExecutionTuiState =
     val nextFrame = spinnerFrame + 1
     event match
@@ -599,6 +630,7 @@ final case class ExecutionTuiState(
           elapsedTime = elapsed
         )
 
+  /** Attach final command output, preserving dry-run lines and pre-tool failures. */
   def withResult(result: InstallerResult): ExecutionTuiState =
     val dryRunResultLines =
       if request.options.dryRun == binstaller.core.DryRunMode.Enabled then result.lines
@@ -623,8 +655,10 @@ final case class ExecutionTuiState(
 
   private def phaseText(phase: InstallerPhase): String = phase.toString
 
+/** Execution state constructors. */
 object ExecutionTuiState:
 
+  /** Initial execution state before any core events arrive. */
   def initial(request: TuiRequest, settings: ExecutionTuiSettings): ExecutionTuiState =
     ExecutionTuiState(
       request = request,
@@ -676,8 +710,10 @@ private final class RenderingExecutionTuiObserver(
     currentState = currentState.withResult(result)
     renderCurrent()
 
+/** Deterministic renderer for apply execution TUI frames. */
 object ExecutionTuiRenderer:
 
+  /** Render an execution model into terminal rows. */
   def render(model: ExecutionTuiModel): Vector[String] =
     val width  = model.viewport.width.max(48)
     val layout = ExecutionTuiLayout.forViewport(model.viewport)
@@ -688,11 +724,13 @@ object ExecutionTuiRenderer:
       logs(model.logs, layout, width) ++
       footer(model, width)
 
+  /** Format elapsed time for compact terminal display. */
   def formatDuration(duration: Duration): String =
     val millis = duration.toMillis.max(0L)
     if millis < 1000L then s"${millis}ms"
     else f"${millis.toDouble / 1000.0}%.1fs"
 
+  /** Format downloaded/total byte progress for display. */
   def byteText(downloadedBytes: Long, totalBytes: Option[Long]): String = totalBytes match
     case Some(total) => s"${formatBytes(downloadedBytes)}/${formatBytes(total)}"
     case None        => formatBytes(downloadedBytes)
@@ -831,14 +869,17 @@ object ExecutionTuiRenderer:
     else if width == 1 then "…"
     else s"${value.take(width - 1)}…"
 
+/** Viewport-derived body heights for execution panes. */
 final case class ExecutionTuiLayout(
     rowBodyHeight: Int,
     dryRunBodyHeight: Int,
     logBodyHeight: Int
 )
 
+/** Execution layout constructors. */
 object ExecutionTuiLayout:
 
+  /** Calculate execution pane heights from the current viewport. */
   def forViewport(viewport: TuiViewport): ExecutionTuiLayout =
     val usable = (viewport.height.max(18) - 15).max(6)
     val rows   = usable.min(6).max(2)
@@ -846,21 +887,25 @@ object ExecutionTuiLayout:
     val logs   = (usable - rows - dryRun).max(3)
     ExecutionTuiLayout(rows, dryRun, logs)
 
+/** Focusable panes in the planning TUI. */
 enum TuiPane(val label: String):
   case Plan    extends TuiPane("plan")
   case Details extends TuiPane("details")
   case Logs    extends TuiPane("logs")
 
+  /** Next pane in forward focus order. */
   def next: TuiPane = this match
     case Plan    => Details
     case Details => Logs
     case Logs    => Plan
 
+  /** Previous pane in backward focus order. */
   def previous: TuiPane = this match
     case Plan    => Logs
     case Details => Plan
     case Logs    => Details
 
+/** Parsed keyboard, resize, and mouse-wheel inputs consumed by the planning state machine. */
 enum TuiInput:
   case Tab, BackTab, Up, Down, Left, Right, PageUp, PageDown, Home, End
   case Slash, Question, Enter, Escape, Backspace, Quit, CtrlC
@@ -869,6 +914,7 @@ enum TuiInput:
   case MouseWheelUp, MouseWheelDown
   case Unknown
 
+/** Pure state machine for planning TUI navigation, filtering, scrolling, and exit. */
 final case class PlanningTuiState(
     snapshot: ResolvedPlanSnapshot,
     request: TuiRequest,
@@ -886,6 +932,7 @@ final case class PlanningTuiState(
     exitRequested: Boolean
 ):
 
+  /** Convert interaction state into a deterministic render model. */
   def toModel: PlanningTuiModel = PlanningTuiModel.fromSnapshot(
     snapshot,
     request,
@@ -904,6 +951,7 @@ final case class PlanningTuiState(
     )
   )
 
+  /** Handle one parsed input event. */
   def handle(input: TuiInput): PlanningTuiState =
     if exitRequested then this
     else
@@ -998,6 +1046,7 @@ final case class PlanningTuiState(
   private def clampSelection: PlanningTuiState =
     copy(selectedIndex = selectedIndex.max(0).min((visibleToolCount - 1).max(0))).clampScrolls
 
+  /** Clamp scroll offsets to the currently visible detail/log windows. */
   def clampScrolls: PlanningTuiState =
     val layout = PlanningTuiLayout.forViewport(viewport)
     copy(
@@ -1020,8 +1069,10 @@ final case class PlanningTuiState(
   private def maxLogScroll(layout: PlanningTuiLayout): Int =
     (visibleLogLines - layout.logBodyHeight).max(0)
 
+/** Planning interaction-state constructors. */
 object PlanningTuiState:
 
+  /** Build initial state from a resolved snapshot and renderer settings. */
   def initial(
       snapshot: ResolvedPlanSnapshot,
       request: TuiRequest,
@@ -1043,14 +1094,17 @@ object PlanningTuiState:
     exitRequested = false
   ).clampSelection
 
+/** Viewport-derived body heights for planning panes. */
 final case class PlanningTuiLayout(
     tableBodyHeight: Int,
     detailBodyHeight: Int,
     logBodyHeight: Int
 )
 
+/** Planning layout constructors. */
 object PlanningTuiLayout:
 
+  /** Calculate planning pane heights from the current viewport. */
   def forViewport(viewport: TuiViewport): PlanningTuiLayout =
     val usable = (viewport.height.max(18) - 14).max(4)
     val table  = usable.min(7).max(3)
@@ -1058,12 +1112,15 @@ object PlanningTuiLayout:
     val logs   = (usable - table - detail).max(3)
     PlanningTuiLayout(table, detail, logs)
 
+/** Interactive planning TUI session runner. */
 object PlanningTuiSession:
 
+  /** Run a deterministic input sequence without touching the terminal. */
   def run(initial: PlanningTuiState, inputs: Vector[TuiInput]): PlanningTuiState =
     inputs.foldLeft(initial): (state, input) =>
       if state.exitRequested then state else state.handle(input)
 
+  /** Run against a terminal boundary, restoring terminal state on exit or failure. */
   def run(initial: PlanningTuiState, terminal: TuiTerminal): InstallerResult =
     var state = initial.copy(viewport = terminal.viewport).clampScrolls
     terminal.open()
@@ -1076,12 +1133,24 @@ object PlanningTuiSession:
       InstallerResult(Vector.empty, 0)
     finally terminal.close()
 
+/** Terminal boundary used by the interactive TUI session. */
 trait TuiTerminal:
+  /** Whether this terminal can safely enter an interactive alternate-screen session. */
   def isInteractive: Boolean
+
+  /** Current terminal viewport. */
   def viewport: TuiViewport
+
+  /** Enter raw/alternate-screen mode. */
   def open(): Unit
+
+  /** Render one frame. */
   def render(lines: Vector[String]): Unit
+
+  /** Read one input event, or `None` when the session should exit. */
   def readInput(): Option[TuiInput]
+
+  /** Restore terminal state. Must be idempotent for defensive cleanup. */
   def close(): Unit
 
 private final class SystemTuiTerminal extends TuiTerminal:
@@ -1099,6 +1168,8 @@ private final class SystemTuiTerminal extends TuiTerminal:
     val _ = runStty(Vector("raw", "-echo"))
     input = FileInputStream("/dev/tty")
     terminalOpened = true
+    // Enter alternate screen, hide the cursor, and enable mouse reporting as one terminal
+    // boundary; close() reverses these sequences in a finally block.
     out.print("\u001b[?1049h\u001b[?25l\u001b[?1000h\u001b[?1006h")
     out.flush()
 
@@ -1129,6 +1200,8 @@ private final class SystemTuiTerminal extends TuiTerminal:
       case _ => None
 
   private def runStty(args: Vector[String]): Option[String] =
+    // stty needs redirection to /dev/tty, so this is the one shell boundary in the TUI backend.
+    // Args are locally fixed or restored from `stty -g` and shell-quoted before invocation.
     val command = (Vector("stty") ++ args).map(shellQuote).mkString(" ") + " < /dev/tty"
     scala.util.Try(Process(Vector("sh", "-c", command)).!!).toOption
 
@@ -1178,6 +1251,7 @@ private object TuiInputParser:
       case Some(65) => TuiInput.MouseWheelDown
       case _        => TuiInput.Unknown
 
+/** Status labels and color categories shared by planning and execution TUI rows. */
 enum PlanningTuiStatus(val label: String):
   case Completed extends PlanningTuiStatus("completed")
   case Failed    extends PlanningTuiStatus("failed")
@@ -1186,8 +1260,10 @@ enum PlanningTuiStatus(val label: String):
   case Skipped   extends PlanningTuiStatus("skipped")
   case Inactive  extends PlanningTuiStatus("inactive")
 
+/** Status ordering and styling helpers. */
 object PlanningTuiStatus:
 
+  /** Stable legend ordering used by the planning renderer. */
   val legendOrder: Vector[PlanningTuiStatus] = Vector(
     Completed,
     Failed,
@@ -1197,6 +1273,7 @@ object PlanningTuiStatus:
     Inactive
   )
 
+  /** Apply ANSI color styling for one status category. */
   def style(status: PlanningTuiStatus, value: String): String = status match
     case Completed => fansi.Color.Green(value).toString
     case Failed    => fansi.Color.Red(value).toString
@@ -1205,8 +1282,10 @@ object PlanningTuiStatus:
     case Skipped   => fansi.Color.LightGray(value).toString
     case Inactive  => value
 
+/** Deterministic renderer for planning TUI frames. */
 object PlanningTuiRenderer:
 
+  /** Render a planning model into terminal rows. */
   def render(model: PlanningTuiModel): Vector[String] =
     val width  = model.viewport.width.max(48)
     val layout = PlanningTuiLayout.forViewport(model.viewport)

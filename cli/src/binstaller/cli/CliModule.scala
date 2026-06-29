@@ -26,18 +26,23 @@ import java.io.PrintWriter
 import java.net.URI
 import java.util.concurrent.Callable
 
+/** Picocli-backed command boundary for the `binstaller` process. */
 object CliModule:
+  /** Module path used by app and tests to identify the CLI layer. */
   def modulePath: Vector[String] = TuiModule.modulePath :+ "cli"
 
+  /** Run the CLI with process stdout/stderr. */
   def run(args: Vector[String]): Int = run(
     args,
     PrintWriter(System.out, true),
     PrintWriter(System.err, true)
   )
 
+  /** Run the CLI with injectable writers for tests or alternate launchers. */
   def run(args: Vector[String], out: PrintWriter, err: PrintWriter): Int =
     commandLine(BinaryInstallerService.resolving(HttpTextClient.jdk), out, err).execute(args*)
 
+  /** Build the root command with an injectable core service. */
   def commandLine(
       service: BinaryInstallerService,
       out: PrintWriter,
@@ -319,9 +324,11 @@ private final class CliApplyEventRenderer(
       downloadedBytes: Long,
       totalBytes: Option[Long]
   ): ProgressLine =
-    val label  = fileName(url)
-    val bar    = progressBar(downloadedBytes, totalBytes)
-    val bytes  = byteText(downloadedBytes, totalBytes)
+    val label = fileName(url)
+    val bar   = progressBar(downloadedBytes, totalBytes)
+    val bytes = byteText(downloadedBytes, totalBytes)
+    // Progress text is rendered in-place only for the CLI surface; URL-derived labels are scrubbed
+    // before they reach the terminal row.
     val plain  = s"⬇ downloading $label ${bar.plain} $bytes"
     val styled = s"${fansi.Color.Cyan("⬇ downloading").toString} " +
       s"${fansi.Color.Yellow(label).toString} ${bar.styled} " +

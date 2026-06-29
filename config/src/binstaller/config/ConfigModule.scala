@@ -11,24 +11,32 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 
+/** Public entrypoint for loading binstaller YAML profiles into typed manifest models. */
 object ConfigModule:
+  /** Stable module name used by downstream module path reporting. */
   val moduleName: String = "config"
 
+  /** Load and validate a profile from a filesystem path string. */
   def load(path: String): Either[ConfigLoadError, BinaryDistributionProfile] =
     ConfigLoader.load(Path.of(path))
 
+  /** Load and validate a profile from a filesystem path. */
   def load(path: Path): Either[ConfigLoadError, BinaryDistributionProfile] = ConfigLoader.load(path)
 
+  /** Load and validate a profile from raw YAML text. */
   def loadString(yaml: String): Either[ConfigLoadError, BinaryDistributionProfile] =
     ConfigLoader.loadString(yaml)
 
+/** Expected failures while reading, parsing, or validating a binstaller profile. */
 enum ConfigLoadError:
   case ReadFailed(path: Path, message: String)
   case ParseFailed(message: String)
   case ValidationFailed(errors: Vector[ValidationError])
 
+/** A manifest validation error with a YAML-like path suitable for CLI/TUI display. */
 final case class ValidationError(path: String, message: String)
 
+/** Root manifest for the supported binary-distribution profile schema. */
 final case class BinaryDistributionProfile(
     apiVersion: ApiVersion,
     kind: ManifestKind,
@@ -36,18 +44,22 @@ final case class BinaryDistributionProfile(
     spec: ProfileSpec
 )
 
+/** Supported manifest API versions. */
 enum ApiVersion(val value: String):
   case V1Alpha1 extends ApiVersion("binstaller.io/v1alpha1")
 
+/** Supported manifest kinds. */
 enum ManifestKind(val value: String):
   case BinaryDistributionProfile extends ManifestKind("BinaryDistributionProfile")
 
+/** Human and machine metadata attached to a profile. */
 final case class ManifestMetadata(
     name: String,
     labels: Map[String, String],
     annotations: Map[String, String]
 )
 
+/** Install policy, variables, version sources, and ordered plan entries. */
 final case class ProfileSpec(
     policy: InstallPolicy,
     vars: Map[String, String],
@@ -55,6 +67,7 @@ final case class ProfileSpec(
     plan: Vector[PlanEntry]
 )
 
+/** Profile-wide execution policy decoded from `spec.policy`. */
 final case class InstallPolicy(
     dryRun: Boolean,
     continueOnError: Boolean,
@@ -65,23 +78,30 @@ final case class InstallPolicy(
     stateFile: Option[String]
 )
 
+/** Whether profile validation permits privileged symlink declarations. */
 enum AllowSudoSymlinks:
   case Enabled, Disabled
 
+/** Helpers for converting YAML booleans into the explicit sudo-symlink policy. */
 object AllowSudoSymlinks:
+  /** Convert `true` to [[Enabled]] and `false` to [[Disabled]]. */
   def fromBoolean(value: Boolean): AllowSudoSymlinks = if value then Enabled else Disabled
 
+/** A declared source for a tool version. */
 enum VersionSource:
   case Pinned(value: String)
   case Dynamic(kind: DynamicVersionKind, note: Option[String])
   case Resolver(kind: VersionResolverKind, url: String)
 
+/** Dynamic version source kinds that cannot be reduced to a concrete version at plan time. */
 enum DynamicVersionKind(val value: String):
   case LatestUrl extends DynamicVersionKind("latest-url")
 
+/** Network-backed version resolver kinds. */
 enum VersionResolverKind(val value: String):
   case HttpText extends VersionResolverKind("http-text")
 
+/** One ordered item in `spec.plan`. */
 final case class PlanEntry(
     name: String,
     kind: PlanKind,
@@ -90,13 +110,17 @@ final case class PlanEntry(
     spec: BinaryToolSpec
 )
 
+/** Supported plan entry kinds. */
 enum PlanKind(val value: String):
   case BinaryTool extends PlanKind("binary-tool")
 
+/** Optional host selectors for a plan entry. */
 final case class WhenClause(os: Option[OsClause], architecture: Option[String])
 
+/** Optional operating-system selector. */
 final case class OsClause(family: Option[String])
 
+/** Binary tool install specification after schema decoding, before interpolation. */
 final case class BinaryToolSpec(
     versionRef: String,
     installDir: String,
@@ -106,6 +130,7 @@ final case class BinaryToolSpec(
     symlinks: Vector[SymlinkSpec]
 )
 
+/** Download location, local filename, checksum, and optional archive extraction plan. */
 final case class DownloadSpec(
     url: String,
     filename: String,
@@ -113,44 +138,59 @@ final case class DownloadSpec(
     archive: Option[ArchiveSpec]
 )
 
+/** Declared checksum value. Current validation supports SHA-256 only. */
 final case class ChecksumSpec(algorithm: ChecksumAlgorithm, value: String)
 
+/** Supported checksum algorithms. */
 enum ChecksumAlgorithm(val value: String):
   case Sha256 extends ChecksumAlgorithm("sha256")
 
+/** Archive extraction specification for downloaded artifacts. */
 final case class ArchiveSpec(archiveType: ArchiveType, extract: ArchiveExtract)
 
+/** Supported archive formats. */
 enum ArchiveType(val value: String):
   case Zip   extends ArchiveType("zip")
   case TarGz extends ArchiveType("tar.gz")
   case TarXz extends ArchiveType("tar.xz")
 
+/** File and directory mappings selected from an archive. */
 final case class ArchiveExtract(
     files: Vector[ExtractMapping],
     directories: Vector[ExtractMapping]
 )
 
+/** Relative archive source to relative install-target mapping. */
 final case class ExtractMapping(from: String, to: String)
 
+/** Executable path inside an installed tool and its optional POSIX mode. */
 final case class ExecutableSpec(path: String, mode: Option[ExecutableMode])
 
+/** Four-digit octal executable mode accepted from the manifest. */
 final case class ExecutableMode(value: String)
 
+/** Whether a symlink is created by the user process or through the sudo boundary. */
 enum SymlinkPrivilege:
   case User, Sudo
 
+/** Helpers for converting YAML booleans into explicit symlink privilege. */
 object SymlinkPrivilege:
+  /** Convert `true` to [[Sudo]] and `false` to [[User]]. */
   def fromBoolean(value: Boolean): SymlinkPrivilege = if value then Sudo else User
 
+/** Symlink declaration from a resolved executable target to an exposed path. */
 final case class SymlinkSpec(path: String, target: String, privilege: SymlinkPrivilege)
 
+/** YAML loader used by [[ConfigModule]] and tests. */
 object ConfigLoader:
 
+  /** Read, parse, and validate a YAML profile from disk. */
   def load(path: Path): Either[ConfigLoadError, BinaryDistributionProfile] =
     Try(Files.readString(path)) match
       case Success(yaml)  => loadString(yaml)
       case Failure(error) => Left(ConfigLoadError.ReadFailed(path, error.getMessage))
 
+  /** Parse and validate raw YAML profile text. */
   def loadString(yaml: String): Either[ConfigLoadError, BinaryDistributionProfile] =
     parseYaml(yaml).flatMap(loadParsedYaml)
 
@@ -457,6 +497,8 @@ private object ManifestDecoder:
       path: String
   ): Vector[ValidationError] = algorithm match
     case ChecksumAlgorithm.Sha256 =>
+      // The value is format-checked here so checksum mismatches later mean artifact integrity,
+      // not a malformed manifest value being treated as a runtime comparison target.
       if value.matches("(?i)^[0-9a-f]{64}$") then Vector.empty
       else Vector(ValidationError(path, "sha256 checksum must be 64 hexadecimal characters"))
 
@@ -517,6 +559,8 @@ private object ManifestDecoder:
       case Some(_) => DecodeResult.invalid(
           (),
           path,
+          // Installer scripts are deliberately rejected at config load so no later boundary has
+          // to decide whether arbitrary manifest text is executable.
           "installer scripts are not supported; use direct binary or archive download"
         )
 

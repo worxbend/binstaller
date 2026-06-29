@@ -242,6 +242,13 @@ kind: BinaryDistributionProfile
   whitespace checks all passed with no source fixes required. Live
   raw-terminal TUI smoke remains manual because this agent shell is not an
   interactive TTY.
+- 2026-06-29: T012 documented public contracts across `config`, `core`, `cli`,
+  `tui`, and `app`. Public boundary classes, traits, enums, objects, methods,
+  and values now have intentional ScalaDoc where externally observable, and
+  security-sensitive implementation points have concise invariant/risk comments
+  for redaction, bounded downloads, checksums, archive extraction, process and
+  sudo boundaries, state persistence, terminal control, path normalization, and
+  replacement rollback.
 
 ## Current Agent Loop State
 
@@ -288,7 +295,7 @@ The next agent loop should execute this ordered pending queue:
 - T011: Fix must-fix readiness issues - completed bounded downloads, archive
   metadata hardening/deferrals, render scrubbing/redaction, checksum value
   validation, honest apply TUI keybar behavior, and replacement rollback tests.
-- T012: Document public contracts - add ScalaDoc and intent/risk comments for public and security-sensitive contracts.
+- T012: Document public contracts - completed ScalaDoc and intent/risk comments for public and security-sensitive contracts.
 - T013: Checkpoint production readiness - validate after hardening and public contract documentation.
 - T014: Write maintainer docs - add architecture, manifest, security, TUI, testing, and release guides.
 - T015: Finalize README - make README the concise user-facing entry point linking deeper docs.

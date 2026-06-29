@@ -47,21 +47,30 @@ import scala.util.Using
 import scala.util.matching.Regex
 import upickle.default.*
 
+/** Public module metadata for core planning and apply behavior. */
 object CoreModule:
+  /** Module path used by downstream modules to report dependency lineage. */
   def modulePath: Vector[String] = Vector(ConfigModule.moduleName, "core")
 
+/** Whether apply should ignore a saved execution state file. */
 enum ResetState:
   case Enabled, Disabled
 
+/** Helpers for converting CLI flags into reset-state policy. */
 object ResetState:
+  /** Convert a boolean CLI flag into [[ResetState]]. */
   def fromFlag(value: Boolean): ResetState = if value then Enabled else Disabled
 
+/** Whether command diagnostics and detailed operation lines should be emitted. */
 enum VerboseOutput:
   case Enabled, Disabled
 
+/** Helpers for converting CLI flags into verbose-output policy. */
 object VerboseOutput:
+  /** Convert a boolean CLI flag into [[VerboseOutput]]. */
   def fromFlag(value: Boolean): VerboseOutput = if value then Enabled else Disabled
 
+/** Runtime options shared by plan, apply, versions, CLI, and TUI entrypoints. */
 final case class InstallerOptions(
     configPath: String,
     statePath: Option[String],
@@ -72,38 +81,53 @@ final case class InstallerOptions(
     applyConfirmation: ApplyConfirmation = ApplyConfirmation.Disabled
 )
 
+/** Rendered command result and process exit code. */
 final case class InstallerResult(lines: Vector[String], exitCode: Int)
 
+/** Tool selection requested by `--only` and `--skip`. */
 final case class ToolSelection(only: Vector[String], skip: Vector[String])
 
+/** Tool-selection constructors. */
 object ToolSelection:
+  /** Select every resolved tool. */
   def all: ToolSelection = ToolSelection(Vector.empty, Vector.empty)
 
+/** Whether apply should render planned operations instead of changing files. */
 enum DryRunMode:
   case Enabled, Disabled
 
+/** Helpers for converting CLI flags into dry-run mode. */
 object DryRunMode:
+  /** Convert a boolean CLI flag into [[DryRunMode]]. */
   def fromFlag(value: Boolean): DryRunMode = if value then Enabled else Disabled
 
+/** Whether the user confirmed non-dry-run apply side effects. */
 enum ApplyConfirmation:
   case Enabled, Disabled
 
+/** Helpers for converting CLI flags into apply confirmation. */
 object ApplyConfirmation:
+  /** Convert a boolean CLI flag into [[ApplyConfirmation]]. */
   def fromFlag(value: Boolean): ApplyConfirmation = if value then Enabled else Disabled
 
+/** Boundary service consumed by CLI and TUI renderers. */
 trait BinaryInstallerService:
 
+  /** Render a script-friendly install plan without events. */
   def plan(options: InstallerOptions): InstallerResult =
     planWithEvents(options, InstallerEventObserver.none)
 
+  /** Render a plan while emitting renderer-agnostic lifecycle events. */
   def planWithEvents(
       options: InstallerOptions,
       eventObserver: InstallerEventObserver
   ): InstallerResult
 
+  /** Apply a plan without progress or lifecycle observers. */
   def apply(options: InstallerOptions): InstallerResult =
     applyWithEvents(options, InstallerEventObserver.none)
 
+  /** Apply a plan while adapting download-only progress observers. */
   def applyWithProgress(
       options: InstallerOptions,
       progressObserver: BinaryDownloadProgressObserver
@@ -112,19 +136,25 @@ trait BinaryInstallerService:
     InstallerEventObserver.fromDownloadProgress(progressObserver)
   )
 
+  /** Apply a plan while emitting renderer-agnostic lifecycle events. */
   def applyWithEvents(
       options: InstallerOptions,
       eventObserver: InstallerEventObserver
   ): InstallerResult
 
+  /** Resolve and render the configured version sources. */
   def versions(options: InstallerOptions): InstallerResult
 
+/** Constructors for production and test service implementations. */
 object BinaryInstallerService:
+  /** Minimal placeholder used by early wiring tests. */
   def placeholder: BinaryInstallerService = PlaceholderBinaryInstallerService
 
+  /** Create the production resolving service with the default installer and cwd state store. */
   def resolving(httpTextClient: HttpTextClient): BinaryInstallerService =
     resolving(httpTextClient, DirectBinaryInstaller.default)
 
+  /** Create a resolving service with an injected installer and the default cwd state store. */
   def resolving(
       httpTextClient: HttpTextClient,
       installer: DirectBinaryInstaller
@@ -135,6 +165,7 @@ object BinaryInstallerService:
     ApplyStateStore.cwd
   )
 
+  /** Create a resolving service with injectable installer and state storage boundaries. */
   def resolving(
       httpTextClient: HttpTextClient,
       installer: DirectBinaryInstaller,
@@ -146,28 +177,37 @@ object BinaryInstallerService:
     stateStore
   )
 
+/** Variable-resolution inputs and display redaction policy for manifest resolution. */
 final case class ResolutionOptions(
     runtimeVariables: Map[String, String],
     redactions: SensitiveValueRedactions
 )
 
+/** Resolution option constructors. */
 object ResolutionOptions:
 
+  /** Build options from explicit runtime variables and derive sensitive-value redactions. */
   def apply(runtimeVariables: Map[String, String]): ResolutionOptions = ResolutionOptions(
     runtimeVariables,
     SensitiveValueRedactions.fromRuntimeVariables(runtimeVariables)
   )
 
+  /** Build options from the current process environment. */
   def fromEnvironment(): ResolutionOptions = ResolutionOptions(sys.env.toMap)
 
+/** Values that must be redacted when raw runtime data reaches output surfaces. */
 final case class SensitiveValueRedactions(values: Vector[String]):
 
+  /** Replace every configured sensitive value with `<redacted>`. */
   def redact(value: String): String = values.foldLeft(value): (current, secret) =>
     current.replace(secret, "<redacted>")
 
+/** Redaction policy constructors. */
 object SensitiveValueRedactions:
+  /** Redaction policy that does not hide any values. */
   val empty: SensitiveValueRedactions = SensitiveValueRedactions(Vector.empty)
 
+  /** Derive sensitive values from environment-like variables by inspecting variable names. */
   def fromRuntimeVariables(values: Map[String, String]): SensitiveValueRedactions =
     val redactedValues = values.toVector.collect:
       case (name, value) if isSensitiveName(name) && value.length >= 4 => value
@@ -190,18 +230,22 @@ object SensitiveValueRedactions:
       "COOKIE"
     ).exists(upper.contains)
 
+/** Display-safety helpers for terminal text, diagnostics, and env rendering. */
 object RenderSafety:
 
+  /** Redact sensitive values and replace terminal-control characters in a display string. */
   def display(
       value: String,
       redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
   ): String = scrubControls(redactions.redact(value))
 
+  /** Apply [[display]] to each line. */
   def displayLines(
       lines: Vector[String],
       redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
   ): Vector[String] = lines.map(display(_, redactions))
 
+  /** Render a single terminal row by removing embedded line breaks and tabs. */
   def terminalLine(
       value: String,
       redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
@@ -209,6 +253,7 @@ object RenderSafety:
     .replace('\n', ' ')
     .replace('\t', ' ')
 
+  /** Render an environment value for diagnostics without exposing likely secrets. */
   def envValue(name: String, value: String): String =
     val safeNames = Set("PATH", "HOME", "LANG", "LC_ALL", "SHELL", "TERM", "TMPDIR", "USER")
     if safeNames(name) || name.startsWith("LC_") then display(value)
@@ -220,48 +265,68 @@ object RenderSafety:
     case ch if ch < ' ' || ch == 0x7f.toChar => '?'
     case ch                                  => ch
 
+/** Expected failure from a text version resolver. */
 final case class HttpTextError(url: String, message: String)
 
+/** Boundary for fetching small text values such as version resolver endpoints. */
 trait HttpTextClient:
+  /** Fetch text from a URL, returning domain errors rather than throwing expected failures. */
   def getText(url: String): Either[HttpTextError, String]
 
+/** HTTP text client constructors. */
 object HttpTextClient:
+  /** JDK HTTP implementation with HTTPS, timeout, and normal redirect handling. */
   def jdk: HttpTextClient = JdkHttpTextClient(RuntimeHttpClient.create())
 
+/** Expected failure from a binary download. */
 final case class BinaryDownloadError(url: String, message: String)
 
+/** Download progress events emitted by binary download clients. */
 enum BinaryDownloadProgress:
   case Started(url: String, totalBytes: Option[Long])
   case Advanced(url: String, downloadedBytes: Long, totalBytes: Option[Long])
   case Finished(url: String, downloadedBytes: Long, totalBytes: Option[Long])
 
+/** Observer for raw download progress events. */
 trait BinaryDownloadProgressObserver:
+  /** Receive one download progress event. */
   def onProgress(progress: BinaryDownloadProgress): Unit
 
+/** Download progress observer constructors. */
 object BinaryDownloadProgressObserver:
+  /** Observer that ignores all progress events. */
   val none: BinaryDownloadProgressObserver = _ => ()
 
+/** Boundary for fetching binary artifact bytes. */
 trait BinaryDownloadClient:
+  /** Download bytes without progress callbacks. */
   def download(url: String): Either[BinaryDownloadError, Array[Byte]]
 
+  /** Download bytes and optionally emit progress callbacks. */
   def download(
       url: String,
       progressObserver: BinaryDownloadProgressObserver
   ): Either[BinaryDownloadError, Array[Byte]] = progressObserver match
     case _ => download(url)
 
+/** Binary download client constructors. */
 object BinaryDownloadClient:
+  /** JDK HTTP implementation with HTTPS, redirects, timeout, size, and body-time limits. */
   def jdk: BinaryDownloadClient = JdkBinaryDownloadClient(RuntimeHttpClient.create())
 
+/** Runtime limits applied while reading downloaded artifact bodies. */
 final case class BinaryDownloadLimits(maxBytes: Long, bodyTimeout: Duration)
 
+/** Default binary-download limit values. */
 object BinaryDownloadLimits:
 
+  /** Conservative default sized for developer tools while bounding memory and stalled bodies. */
   val default: BinaryDownloadLimits = BinaryDownloadLimits(
     maxBytes = 512L * 1024L * 1024L,
     bodyTimeout = Duration.ofMinutes(30)
   )
 
+/** Coarse lifecycle phases emitted by plan/apply execution. */
 enum InstallerPhase:
   case Resolving
   case Planning
@@ -275,15 +340,19 @@ enum InstallerPhase:
   case CreatingSymlinks
   case SavingState
 
+/** Terminal result state for an individual tool. */
 enum ToolResultStatus:
   case Completed, Failed
 
+/** Aggregate apply run status. */
 enum InstallerRunStatus:
   case Succeeded, Failed
 
+/** Progress state for a single download event. */
 enum DownloadProgressStatus:
   case Started, Advanced, Finished
 
+/** Renderer-agnostic event contract shared by CLI progress and TUI execution views. */
 enum InstallerEvent:
   case ResolvingStarted(configPath: String, elapsedTime: Duration)
   case PlanReady(toolCount: Int, stateFilePath: Option[String], elapsedTime: Duration)
@@ -326,12 +395,17 @@ enum InstallerEvent:
       elapsedTime: Duration
   )
 
+/** Observer for renderer-agnostic installer events. */
 trait InstallerEventObserver:
+  /** Receive one installer lifecycle event. */
   def onEvent(event: InstallerEvent): Unit
 
+/** Installer event observer constructors and adapters. */
 object InstallerEventObserver:
+  /** Observer that ignores all installer events. */
   val none: InstallerEventObserver = _ => ()
 
+  /** Adapt structured installer events to the legacy download-progress observer shape. */
   def fromDownloadProgress(
       progressObserver: BinaryDownloadProgressObserver
   ): InstallerEventObserver = event =>
@@ -356,14 +430,20 @@ private object RuntimeHttpClient:
     .followRedirects(HttpClient.Redirect.NORMAL)
     .build()
 
+/** Structured process invocation. `argv` is passed directly, never through shell text. */
 final case class CommandSpec(argv: Vector[String], cwd: Path, env: Map[String, String])
 
+/** Captured stdout and stderr from a bounded process execution. */
 final case class CommandOutput(stdout: String, stderr: String):
+  /** Whether either stream contained captured output. */
   def hasOutput: Boolean = stdout.nonEmpty || stderr.nonEmpty
 
+/** Command-output constructors. */
 object CommandOutput:
+  /** Empty command output. */
   val empty: CommandOutput = CommandOutput("", "")
 
+/** Expected process execution failure with the structured command that produced it. */
 final case class CommandExecutionError(
     spec: CommandSpec,
     message: String,
@@ -418,20 +498,27 @@ private object CommandFailureDetails:
     omitted ++
       lines.takeRight(maxRenderedLines).map(line => s"  $label: ${RenderSafety.display(line)}")
 
+/** Boundary for the few remaining process executions: sudo symlinks and tar.xz fallback. */
 trait CommandExecutor:
+  /** Run a structured command, returning expected process failures as data. */
   def run(spec: CommandSpec): Either[CommandExecutionError, Unit]
 
+/** Process command executor constructors. */
 object CommandExecutor:
+  /** Process executor with the production timeout. */
   def process: CommandExecutor = processWithTimeout(Duration.ofMinutes(15))
 
+  /** Process executor with an explicit timeout for tests and specialized runtimes. */
   def processWithTimeout(timeout: Duration): CommandExecutor = ProcessCommandExecutor(timeout)
 
+/** Resolved install plan after interpolation, version lookup, and validation. */
 final case class ResolvedPlan(
     policy: ResolvedPolicy,
     tools: Vector[ResolvedTool],
     redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
 )
 
+/** Resolved profile-wide policy used by apply execution. */
 final case class ResolvedPolicy(
     appsDir: String,
     stateFile: Option[String],
@@ -440,18 +527,25 @@ final case class ResolvedPolicy(
     continueOnError: ContinueOnError
 )
 
+/** Whether non-dry-run apply requires explicit confirmation. */
 enum RequireConfirmation:
   case Enabled, Disabled
 
+/** Helpers for converting manifest booleans into confirmation policy. */
 object RequireConfirmation:
+  /** Convert a manifest boolean into [[RequireConfirmation]]. */
   def fromBoolean(value: Boolean): RequireConfirmation = if value then Enabled else Disabled
 
+/** Whether apply should continue after a failed tool. */
 enum ContinueOnError:
   case Enabled, Disabled
 
+/** Helpers for converting manifest booleans into continue-on-error policy. */
 object ContinueOnError:
+  /** Convert a manifest boolean into [[ContinueOnError]]. */
   def fromBoolean(value: Boolean): ContinueOnError = if value then Enabled else Disabled
 
+/** One resolved binary tool ready for rendering or execution. */
 final case class ResolvedTool(
     name: String,
     description: Option[String],
@@ -463,16 +557,20 @@ final case class ResolvedTool(
     symlinks: Vector[ResolvedSymlink]
 )
 
+/** Tool version after resolution. */
 enum ResolvedVersion:
   case Concrete(value: String)
   case DynamicLatestUrl(note: Option[String])
 
+/** Rendering helpers for resolved versions. */
 object ResolvedVersion:
 
+  /** Render a resolved version for CLI/TUI display. */
   def render(version: ResolvedVersion): String = version match
     case ResolvedVersion.Concrete(value)     => value
     case ResolvedVersion.DynamicLatestUrl(_) => "dynamic latest-url"
 
+/** Resolved download fields after interpolation and URL validation. */
 final case class ResolvedDownload(
     url: String,
     filename: String,
@@ -480,25 +578,32 @@ final case class ResolvedDownload(
     archive: Option[ResolvedArchive]
 )
 
+/** Resolved archive mappings paired with the original archive declaration. */
 final case class ResolvedArchive(
     original: ArchiveSpec,
     files: Vector[ResolvedExtractMapping],
     directories: Vector[ResolvedExtractMapping]
 )
 
+/** Resolved archive source to install-target mapping. */
 final case class ResolvedExtractMapping(from: String, to: String)
 
+/** Resolved executable path and optional manifest mode. */
 final case class ResolvedExecutable(path: String, mode: Option[ExecutableMode])
 
+/** Resolved symlink path, target, and privilege boundary. */
 final case class ResolvedSymlink(path: String, target: String, privilege: SymlinkPrivilege)
 
+/** Expected failure while loading, resolving, or selecting a plan. */
 enum ResolvePlanError:
   case ConfigLoadFailed(error: ConfigLoadError)
   case ValidationFailed(errors: Vector[ValidationError])
   case SelectionFailed(messages: Vector[String])
 
+/** Rendering helpers for plan-resolution failures. */
 object ResolvePlanError:
 
+  /** Render resolution failures into scrubbed user-facing lines. */
   def renderLines(error: ResolvePlanError): Vector[String] = error match
     case ResolvePlanError.ConfigLoadFailed(loadError) => renderConfigLoadError(loadError)
     case ResolvePlanError.ValidationFailed(errors)    =>
@@ -514,6 +619,7 @@ object ResolvePlanError:
     case ConfigLoadError.ParseFailed(message) =>
       Vector(RenderSafety.display(s"config parse failed: $message"))
 
+/** Snapshot consumed by the TUI without importing config internals. */
 final case class ResolvedPlanSnapshot(
     profileName: String,
     manifestKind: String,
@@ -522,8 +628,10 @@ final case class ResolvedPlanSnapshot(
     plan: ResolvedPlan
 )
 
+/** Snapshot resolution helpers for renderers. */
 object ResolvedPlanSnapshot:
 
+  /** Resolve a snapshot using environment-derived resolution options. */
   def resolve(
       options: InstallerOptions,
       httpTextClient: HttpTextClient
@@ -533,6 +641,7 @@ object ResolvedPlanSnapshot:
     ResolutionOptions.fromEnvironment()
   )
 
+  /** Resolve a snapshot with explicit resolution options for tests or alternate runtimes. */
   def resolve(
       options: InstallerOptions,
       httpTextClient: HttpTextClient,
@@ -551,6 +660,7 @@ object ResolvedPlanSnapshot:
             plan = selectedPlan
           )
 
+/** Expected state-file failures during apply resume. */
 enum ApplyStateError:
   case InvalidPath(path: String, message: String)
   case ReadFailed(path: Path, message: String)
@@ -565,6 +675,7 @@ enum ApplyStateError:
       actualFingerprint: String
   )
 
+/** Serialized apply state tied to a profile name and manifest fingerprint. */
 final case class ApplyState(
     schemaVersion: Int,
     profileName: String,
@@ -572,6 +683,7 @@ final case class ApplyState(
     tools: Vector[ApplyStateTool]
 )
 
+/** Serialized status for a single tool in the apply state file. */
 final case class ApplyStateTool(
     name: String,
     status: String,
@@ -579,12 +691,18 @@ final case class ApplyStateTool(
     message: Option[String]
 )
 
+/** Apply-state JSON codecs and constructors. */
 object ApplyState:
+  /** Current apply-state schema version. */
   val schemaVersion: Int = 1
 
+  /** JSON codec for individual tool state rows. */
   given ReadWriter[ApplyStateTool] = macroRW
-  given ReadWriter[ApplyState]     = macroRW
 
+  /** JSON codec for the complete apply state. */
+  given ReadWriter[ApplyState] = macroRW
+
+  /** Create an empty state file for a compatible profile and manifest fingerprint. */
   def empty(profileName: String, manifestFingerprint: String): ApplyState = ApplyState(
     schemaVersion,
     profileName,
@@ -592,25 +710,38 @@ object ApplyState:
     Vector.empty
   )
 
+/** Boundary for loading and atomically saving apply state. */
 trait ApplyStateStore:
+  /** Directory that owns relative state filenames. */
   def cwd: Path
+
+  /** Load state if it exists. */
   def load(path: Path): Either[ApplyStateError, Option[ApplyState]]
+
+  /** Persist state atomically where supported by the filesystem. */
   def save(path: Path, state: ApplyState): Either[ApplyStateError, Unit]
 
+/** Apply-state storage constructors. */
 object ApplyStateStore:
+  /** State store rooted in the process current working directory. */
   def cwd: ApplyStateStore = nio(Path.of("").toAbsolutePath.normalize())
 
+  /** NIO-backed state store rooted in an explicit directory. */
   def nio(directory: Path): ApplyStateStore =
     NioApplyStateStore(directory.toAbsolutePath.normalize())
 
+/** Successful installation of a single tool. */
 final case class ToolInstallSuccess(toolName: String, installDir: String)
 
+/** Terminal result emitted for state persistence and renderer summaries. */
 enum TerminalToolResult:
   case Completed(toolName: String, installDir: String)
   case Failed(toolName: String, message: String)
 
+/** Rendering helpers for terminal tool results. */
 object TerminalToolResult:
 
+  /** Render a terminal tool result with terminal safety and redaction applied. */
   def line(
       result: TerminalToolResult,
       redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
@@ -639,11 +770,13 @@ private[core] object InstallerEventContext:
   def start(observer: InstallerEventObserver): InstallerEventContext =
     InstallerEventContext(observer, System.nanoTime())
 
+/** Expected failure before an apply run is allowed to perform side effects. */
 enum ApplyPreflightError:
   case ConfirmationRequired
   case SudoSymlinkNotAllowed(toolName: String)
   case SudoSymlinkConfirmationRequired(toolName: String)
 
+/** Expected failure while installing one tool. */
 enum ToolInstallError:
   case DownloadFailed(toolName: String, url: String, message: String)
   case ChecksumMismatch(toolName: String, expected: String, actual: String)
@@ -656,8 +789,10 @@ enum ToolInstallError:
   case SudoSymlinkNotAllowed(toolName: String)
   case SudoSymlinkConfirmationRequired(toolName: String)
 
+/** POSIX executable mode parsed from a validated four-digit octal string. */
 final case class ExecutableInstallMode(octal: String, numeric: Int):
 
+  /** Convert numeric bits into POSIX file permissions. */
   def permissions: Set[PosixFilePermission] =
     val ownerRead    = permission(PosixFilePermission.OWNER_READ, 0x100)
     val ownerWrite   = permission(PosixFilePermission.OWNER_WRITE, 0x080)
@@ -686,27 +821,36 @@ final case class ExecutableInstallMode(octal: String, numeric: Int):
       bit: Int
   ): Option[PosixFilePermission] = if (numeric & bit) == bit then Some(permission) else None
 
+/** Executable mode constructors. */
 object ExecutableInstallMode:
+  /** Default mode for installed executables. */
   val default: ExecutableInstallMode = fromOctal("0755")
 
+  /** Convert an optional manifest mode into an executable install mode. */
   def fromConfig(mode: Option[ExecutableMode]): ExecutableInstallMode = mode match
     case Some(value) => fromOctal(value.value)
     case None        => default
 
+  /** Parse a validated four-digit octal mode. */
   def fromOctal(value: String): ExecutableInstallMode =
     ExecutableInstallMode(value, Integer.parseInt(value, 8))
 
+/** Request to apply a POSIX mode to an executable inside a staged install. */
 final case class ExecutableModeRequest(path: String, mode: ExecutableInstallMode)
 
+/** Staging directory paired with the final install directory it will replace. */
 final case class StagedInstall(stagingDir: Path, installDir: Path)
 
+/** Expected filesystem failure while staging or replacing an install. */
 enum InstallFileSystemError:
   case StagingFailed(message: String)
   case ModeApplicationFailed(path: String, mode: String, message: String)
   case ReplacementFailed(message: String)
 
+/** Filesystem boundary for staging artifacts before replacing a final install directory. */
 trait InstallFileSystem:
 
+  /** Stage a direct binary into a temporary install tree. */
   def stageDirectBinary(
       installDir: Path,
       createDirectories: Vector[String],
@@ -714,6 +858,7 @@ trait InstallFileSystem:
       bytes: Array[Byte]
   ): Either[InstallFileSystemError.StagingFailed, StagedInstall]
 
+  /** Stage files selected from an archive into a temporary install tree. */
   def stageArchive(
       installDir: Path,
       createDirectories: Vector[String],
@@ -722,26 +867,33 @@ trait InstallFileSystem:
       commandExecutor: CommandExecutor
   ): Either[InstallFileSystemError.StagingFailed, StagedInstall]
 
+  /** Apply requested executable modes inside the staged install tree. */
   def applyExecutableModes(
       stagedInstall: StagedInstall,
       executables: Vector[ExecutableModeRequest]
   ): Either[InstallFileSystemError.ModeApplicationFailed, Unit]
 
+  /** Replace the final install directory with the staged install tree. */
   def replaceInstall(
       stagedInstall: StagedInstall
   ): Either[InstallFileSystemError.ReplacementFailed, Unit]
 
+  /** Discard an unused staged install tree. */
   def discardStaged(stagedInstall: StagedInstall): Unit
 
+/** Filesystem boundary constructors. */
 object InstallFileSystem:
+  /** NIO-backed filesystem implementation. */
   def nio: InstallFileSystem = NioInstallFileSystem
 
+/** Installer that applies resolved direct-binary and archive-backed tools. */
 final class DirectBinaryInstaller(
     downloadClient: BinaryDownloadClient,
     fileSystem: InstallFileSystem,
     commandExecutor: CommandExecutor = CommandExecutor.process
 ):
 
+  /** Install every tool in a plan and render terminal result lines. */
   def installPlan(
       plan: ResolvedPlan,
       applyConfirmation: ApplyConfirmation = ApplyConfirmation.Disabled,
@@ -865,6 +1017,7 @@ final class DirectBinaryInstaller(
                 results = terminal +: rest.results
               )
 
+  /** Install a single tool without sudo symlink support. Intended for focused tests and helpers. */
   def installTool(tool: ResolvedTool): Either[ToolInstallError, ToolInstallSuccess] =
     val policy = ResolvedPolicy(
       tool.installDir,
@@ -953,7 +1106,9 @@ final class DirectBinaryInstaller(
   ): Either[ToolInstallError, ToolInstallSuccess] =
     for
       bytes <- download(tool, eventContext, redactions)
-      _     <-
+      // Integrity is checked before staging/replacement so a bad artifact cannot overwrite a
+      // previously working install.
+      _ <-
         withPhase(tool, InstallerPhase.VerifyingChecksum, eventContext)(verifyChecksum(tool, bytes))
       staged <- withPhase(tool, InstallerPhase.Staging, eventContext)(stage(tool, bytes))
       _      <- withPhase(tool, InstallerPhase.VerifyingExecutables, eventContext)(
@@ -1160,6 +1315,8 @@ final class DirectBinaryInstaller(
     case AllowSudoSymlinks.Disabled => Left(ToolInstallError.SudoSymlinkNotAllowed(tool.name))
     case AllowSudoSymlinks.Enabled  =>
       val path = Path.of(symlink.path)
+      // Privileged writes must name an absolute destination. Relative sudo paths would depend on
+      // process cwd and make dry-run output misleading.
       if !path.isAbsolute then
         Left(
           ToolInstallError.SymlinkFailed(
@@ -1171,6 +1328,8 @@ final class DirectBinaryInstaller(
         )
       else
         resolveSymlinkTarget(tool, symlink).flatMap: target =>
+          // Sudo is reached only through this fixed argv shape; manifest values are data args, not
+          // shell text.
           val spec = CommandSpec(
             Vector("sudo", "ln", "-sfn", target.toString, path.toString),
             Path.of(tool.installDir).toAbsolutePath.normalize(),
@@ -1193,6 +1352,8 @@ final class DirectBinaryInstaller(
     val target     =
       if rawTarget.isAbsolute then rawTarget.toAbsolutePath.normalize()
       else installDir.resolve(rawTarget).normalize()
+    // Symlink targets are confined to the installed tool tree so a manifest cannot expose arbitrary
+    // user files through local or sudo links.
     if target.startsWith(installDir) then Right(target)
     else
       Left(
@@ -1299,13 +1460,17 @@ final class DirectBinaryInstaller(
     case ApplyPreflightError.SudoSymlinkConfirmationRequired(toolName) =>
       s"failed $toolName: sudo symlinks require apply confirmation; rerun apply with --yes"
 
+/** Constructors for the production binary installer. */
 object DirectBinaryInstaller:
 
+  /** Production installer wired to JDK downloads, NIO staging, and bounded process execution. */
   def default: DirectBinaryInstaller =
     DirectBinaryInstaller(BinaryDownloadClient.jdk, NioInstallFileSystem, CommandExecutor.process)
 
+/** Resolver for converting typed manifests into executable plans. */
 object PlanResolver:
 
+  /** Resolve variables, versions, URLs, install directories, and selected archive mappings. */
   def resolve(
       profile: BinaryDistributionProfile,
       options: ResolutionOptions,
@@ -1390,6 +1555,8 @@ private object StatefulApplyRunner:
       stateStore: ApplyStateStore
   ): Either[ApplyStateError, (Path, ApplyState)] =
     for
+      // State files are intentionally CWD-local filenames only; this prevents a profile or CLI
+      // option from writing outside the working directory or targeting an install path.
       path  <- StatePathResolver.resolve(rawPath, stateStore.cwd)
       state <- resetState match
         case ResetState.Enabled => Right(
@@ -1534,6 +1701,8 @@ private final class NioApplyStateStore(val cwd: Path) extends ApplyStateStore:
     val tmp = cwd.resolve(s".${path.getFileName}.tmp-${UUID.randomUUID()}")
     Try:
       Files.createDirectories(cwd)
+      // Write to a unique temp file first; a partial state write must never look like a valid
+      // resume checkpoint.
       val _ = Files.writeString(
         tmp,
         write(state, indent = 2),
@@ -2286,7 +2455,9 @@ private final class ResolutionBuilder(
       policy: ResolvedPolicy,
       tools: Vector[ResolvedTool]
   ): Vector[ValidationError] =
-    val appsDir           = Path.of(policy.appsDir).toAbsolutePath.normalize()
+    val appsDir = Path.of(policy.appsDir).toAbsolutePath.normalize()
+    // Install roots must stay under appsDir and must not nest inside another tool. This keeps a
+    // bad manifest from replacing the apps root or another tool's install directory.
     val containmentErrors = tools.zipWithIndex.flatMap:
       case (tool, index) =>
         val path = s"spec.plan[$index].spec.installDir"
@@ -2331,6 +2502,7 @@ private object TemplateInterpolator:
       path: String,
       vars: Map[String, String]
   ): ResolvedValue[String] =
+    // Only ${name} placeholders are recognized. Shell forms such as $(...) remain literal data.
     val errors = variableNames(value).distinct.flatMap: name =>
       if vars.contains(name) then Vector.empty
       else Vector(ValidationError(path, s"unresolved variable '$name'"))
@@ -2390,6 +2562,8 @@ private[core] final class JdkBinaryDownloadClient(
 
     Try:
       Using.resource(response.body()): input =>
+        // The whole artifact is currently materialized because checksum and archive extraction
+        // operate on bytes; size and body-time limits bound that risk until streaming exists.
         BoundedBinaryBodyReader.read(url, input, totalBytes, limits, progressObserver)
     match
       case Success(result) => result
@@ -2405,6 +2579,8 @@ private[core] object BoundedBinaryBodyReader:
       progressObserver: BinaryDownloadProgressObserver,
       nowNanos: () => Long = () => System.nanoTime()
   ): Either[BinaryDownloadError, Array[Byte]] = totalBytes match
+    // Reject oversized declared bodies before reading, then enforce the same limit while reading
+    // because Content-Length can be absent or wrong.
     case Some(length) if length > limits.maxBytes =>
       Left(BinaryDownloadError(url, maxSizeMessage(length, limits.maxBytes)))
     case _ => readBounded(url, input, totalBytes, limits, progressObserver, nowNanos)
@@ -2467,6 +2643,8 @@ private final class ProcessCommandExecutor(timeout: Duration) extends CommandExe
     val builder = ProcessBuilder(spec.argv.asJava)
     val _       = builder.directory(spec.cwd.toFile)
     val env     = builder.environment()
+    // Commands receive only the modeled environment. Parent secrets must not leak into sudo/tar
+    // process boundaries or later diagnostics.
     env.clear()
     spec.env.foreach:
       case (name, value) => val _ = env.put(name, value)
@@ -2653,6 +2831,8 @@ private object ArchiveExtractor:
       archive: ResolvedArchive,
       stagingDir: Path
   ): Either[String, Vector[PlannedArchiveFile]] =
+    // Build the complete copy plan before writing selected members so duplicate sources and target
+    // collisions fail without partially populating the staged install tree.
     rejectDuplicateArchiveSources(entries).flatMap: _ =>
       val fileMappings      = archive.files.map(planFileMapping(entries, stagingDir, _))
       val directoryMappings = archive.directories.map(planDirectoryMapping(entries, stagingDir, _))
@@ -2738,8 +2918,10 @@ private object ArchiveExtractor:
     )
     val size = tarOctal(header, 124, 12)
     val kind = header(156).toChar match
-      case 0 | '0'   => ArchiveEntryKind.File
-      case '5'       => ArchiveEntryKind.Directory
+      case 0 | '0' => ArchiveEntryKind.File
+      case '5'     => ArchiveEntryKind.Directory
+      // Links and special tar metadata are rejected because they can escape the apparent file tree
+      // even when the entry name itself is relative.
       case '1' | '2' => throw IllegalArgumentException(s"unsafe archive link entry: $source")
       case other => throw IllegalArgumentException(s"unsupported tar entry type '$other': $source")
     TarEntry(source, kind, size)
@@ -2767,6 +2949,8 @@ private object ArchiveExtractor:
 
   private def normalizedArchivePath(value: String): Either[String, String] =
     val path = value.stripSuffix("/")
+    // Archive names are treated as POSIX-like relative paths independent of host OS. Backslash,
+    // drive prefixes, absolute roots, controls, and `..` are rejected before copy planning.
     if path.isEmpty then Left("archive path must not be empty")
     else if path == "." then Right(path)
     else if path.exists(_ < ' ') then Left(s"archive path contains control character: $value")
@@ -2933,6 +3117,8 @@ private object NioInstallFileSystem extends InstallFileSystem:
   ): Either[InstallFileSystemError.StagingFailed, StagedInstall] = Try:
     val parent = Option(installDir.getParent).getOrElse(Path.of("").toAbsolutePath.normalize())
     val _      = Files.createDirectories(parent)
+    // Staging lives next to the final install so the later move can be as atomic as the filesystem
+    // allows and avoids cross-filesystem replacement surprises.
     val prefix = s".${Option(installDir.getFileName).map(_.toString).getOrElse("install")}.stage-"
     StagedInstall(Files.createTempDirectory(parent, prefix), installDir)
   match
@@ -2979,6 +3165,7 @@ private object NioInstallFileSystem extends InstallFileSystem:
       executable: ExecutableModeRequest
   ): Either[InstallFileSystemError.ModeApplicationFailed, Unit] =
     val executablePath = stagedInstall.stagingDir.resolve(executable.path).normalize()
+    // Mode changes are confined to the staged tree, never the previous live install.
     if !executablePath.startsWith(stagedInstall.stagingDir) then
       Left(
         InstallFileSystemError.ModeApplicationFailed(
@@ -3055,6 +3242,8 @@ private object NioInstallFileSystem extends InstallFileSystem:
         deleteRecursively(backupDir)
         Right(())
       case Failure(error) =>
+        // If the final move fails after moving the old install aside, attempt to restore it so a
+        // failed upgrade does not silently leave the tool missing.
         val restoreError = restoreBackup(installDir, backupDir, hadExisting)
         val message      = restoreError match
           case Some(restore) => s"${error.getMessage}; rollback failed: $restore"
