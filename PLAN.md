@@ -354,6 +354,15 @@ kind: BinaryDistributionProfile
   names. `./mill core.test`, `./mill cli.test`, `./mill tui.test`, `./mill
   __.compile`, scalafmt check, task JSON validation, and git whitespace checks
   passed.
+- 2026-06-29: T010 maintainability checkpoint passed after the release-smoke
+  update and core module split. Focused config/core/CLI/TUI tests, recursive
+  compile/test, scalafmt check, Mill module resolution, task JSON validation,
+  app-level `--help`, `plan`, `apply --dry-run`, `versions`, static
+  non-interactive `plan --tui` and `apply --dry-run --tui` smokes against
+  `config.example.yaml`, and git whitespace checks all passed. No source fixes
+  were required. Remaining risk is limited to live raw-terminal behavior, which
+  still needs the documented manual smoke workflow outside this non-interactive
+  agent shell.
 
 ## Current Agent Loop State
 
