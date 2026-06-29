@@ -12,9 +12,6 @@ import binstaller.config.DownloadSpec
 import binstaller.config.DynamicVersionKind
 import binstaller.config.ExecutableMode
 import binstaller.config.ExtractMapping
-import binstaller.config.InstallerEnv
-import binstaller.config.InstallerShell
-import binstaller.config.InstallerSpec
 import binstaller.config.PlanEntry
 import binstaller.config.SymlinkPrivilege
 import binstaller.config.ValidationError
@@ -26,6 +23,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -39,6 +37,8 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPInputStream
 import java.util.zip.ZipInputStream
+import ox.fork
+import ox.supervised
 import scala.jdk.CollectionConverters.*
 import scala.util.Failure
 import scala.util.Success
@@ -94,6 +94,11 @@ object ApplyConfirmation:
 trait BinaryInstallerService:
   def plan(options: InstallerOptions): InstallerResult
   def apply(options: InstallerOptions): InstallerResult
+  def applyWithProgress(
+      options: InstallerOptions,
+      progressObserver: BinaryDownloadProgressObserver
+  ): InstallerResult = progressObserver match
+    case _ => apply(options)
   def versions(options: InstallerOptions): InstallerResult
 
 object BinaryInstallerService:
@@ -138,8 +143,25 @@ object HttpTextClient:
 
 final case class BinaryDownloadError(url: String, message: String)
 
+enum BinaryDownloadProgress:
+  case Started(url: String, totalBytes: Option[Long])
+  case Advanced(url: String, downloadedBytes: Long, totalBytes: Option[Long])
+  case Finished(url: String, downloadedBytes: Long, totalBytes: Option[Long])
+
+trait BinaryDownloadProgressObserver:
+  def onProgress(progress: BinaryDownloadProgress): Unit
+
+object BinaryDownloadProgressObserver:
+  val none: BinaryDownloadProgressObserver = _ => ()
+
 trait BinaryDownloadClient:
   def download(url: String): Either[BinaryDownloadError, Array[Byte]]
+
+  def download(
+      url: String,
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[BinaryDownloadError, Array[Byte]] = progressObserver match
+    case _ => download(url)
 
 object BinaryDownloadClient:
   def jdk: BinaryDownloadClient = JdkBinaryDownloadClient(RuntimeHttpClient.create())
@@ -154,7 +176,67 @@ private object RuntimeHttpClient:
 
 final case class CommandSpec(argv: Vector[String], cwd: Path, env: Map[String, String])
 
-final case class CommandExecutionError(spec: CommandSpec, message: String, exitCode: Option[Int])
+final case class CommandOutput(stdout: String, stderr: String):
+  def hasOutput: Boolean = stdout.nonEmpty || stderr.nonEmpty
+
+object CommandOutput:
+  val empty: CommandOutput = CommandOutput("", "")
+
+final case class CommandExecutionError(
+    spec: CommandSpec,
+    message: String,
+    exitCode: Option[Int],
+    output: CommandOutput = CommandOutput.empty
+)
+
+private object CommandFailureDetails:
+
+  def render(error: CommandExecutionError): String =
+    render("command", error.spec, error.message, error.exitCode, error.output)
+
+  def render(
+      context: String,
+      spec: CommandSpec,
+      message: String,
+      exitCode: Option[Int],
+      output: CommandOutput
+  ): String =
+    val command = renderArgv(spec.argv)
+    val details =
+      Vector(s"  command: $command") ++
+        Vector(s"  cwd: ${spec.cwd}") ++
+        renderEnv(spec.env) ++
+        exitCode.map(code => s"  exit code: $code").toVector ++
+        renderOutputTail("stdout", output.stdout) ++
+        renderOutputTail("stderr", output.stderr)
+    (s"$context: $command: $message" +: details).mkString("\n")
+
+  private def renderArgv(argv: Vector[String]): String = argv.map(shellQuote).mkString(" ")
+
+  private def shellQuote(value: String): String = s"'${value.replace("'", "'\"'\"'")}'"
+
+  private def renderEnv(env: Map[String, String]): Vector[String] =
+    if env.isEmpty then Vector("  env: <empty>")
+    else
+      val rendered = env.toVector
+        .sortBy((name, _) => name)
+        .map((name, value) => s"$name=${renderEnvValue(name, value)}")
+        .mkString(", ")
+      Vector(s"  env: $rendered")
+
+  private def renderEnvValue(name: String, value: String): String =
+    val safeNames = Set("PATH", "HOME", "LANG", "LC_ALL", "SHELL", "TERM", "TMPDIR", "USER")
+    if safeNames(name) || name.startsWith("LC_") then value
+    else "<redacted>"
+
+  private def renderOutputTail(label: String, text: String): Vector[String] =
+    val maxRenderedLines = 40
+    val lines            = text.linesIterator.toVector.filterNot(_.isBlank)
+    val omitted =
+      if lines.length > maxRenderedLines then
+        Vector(s"  $label: ... omitted ${lines.length - maxRenderedLines} earlier line(s)")
+      else Vector.empty
+    omitted ++ lines.takeRight(maxRenderedLines).map(line => s"  $label: $line")
 
 trait CommandExecutor:
   def run(spec: CommandSpec): Either[CommandExecutionError, Unit]
@@ -196,7 +278,6 @@ final case class ResolvedTool(
     installDir: String,
     createDirectories: Vector[String],
     download: ResolvedDownload,
-    installer: Option[ResolvedInstaller],
     executables: Vector[ResolvedExecutable],
     symlinks: Vector[ResolvedSymlink]
 )
@@ -225,15 +306,6 @@ final case class ResolvedArchive(
 )
 
 final case class ResolvedExtractMapping(from: String, to: String)
-
-final case class ResolvedInstaller(
-    shell: InstallerShell,
-    args: Vector[String],
-    env: Vector[ResolvedInstallerEnv],
-    cleanup: Boolean
-)
-
-final case class ResolvedInstallerEnv(name: String, value: String)
 
 final case class ResolvedExecutable(path: String, mode: Option[ExecutableMode])
 
@@ -326,8 +398,6 @@ enum ToolInstallError:
   case ModeApplicationFailed(toolName: String, path: String, mode: String, message: String)
   case ReplacementFailed(toolName: String, message: String)
   case ArchiveExtractionFailed(toolName: String, message: String)
-  case InstallerExecutionFailed(toolName: String, argv: Vector[String], message: String)
-  case InstallerCleanupFailed(toolName: String, path: String, message: String)
   case MissingExecutable(toolName: String, path: String)
   case SymlinkFailed(toolName: String, path: String, target: String, message: String)
   case SudoSymlinkNotAllowed(toolName: String)
@@ -422,19 +492,33 @@ final class DirectBinaryInstaller(
   def installPlan(
       plan: ResolvedPlan,
       applyConfirmation: ApplyConfirmation = ApplyConfirmation.Disabled,
-      verboseOutput: VerboseOutput = VerboseOutput.Disabled
+      verboseOutput: VerboseOutput = VerboseOutput.Disabled,
+      progressObserver: BinaryDownloadProgressObserver = BinaryDownloadProgressObserver.none
   ): InstallerResult =
-    installPlanWithObserver(plan, applyConfirmation, verboseOutput, _ => Right(()))
+    installPlanWithObserver(
+      plan,
+      applyConfirmation,
+      verboseOutput,
+      _ => Right(()),
+      progressObserver
+    )
 
   def installPlanWithObserver(
       plan: ResolvedPlan,
       applyConfirmation: ApplyConfirmation,
       verboseOutput: VerboseOutput,
-      terminalObserver: TerminalToolResult => Either[String, Unit]
+      terminalObserver: TerminalToolResult => Either[String, Unit],
+      progressObserver: BinaryDownloadProgressObserver = BinaryDownloadProgressObserver.none
   ): InstallerResult = preflight(plan, applyConfirmation) match
     case Some(error) => InstallerResult(Vector(renderPreflightError(error)), 1)
     case None        =>
-      val observed = installTools(plan.policy, plan.tools, verboseOutput, terminalObserver)
+      val observed = installTools(
+        plan.policy,
+        plan.tools,
+        verboseOutput,
+        terminalObserver,
+        progressObserver
+      )
       val lines    = observed.lines ++
         observed.persistenceError.map(message => s"state write failed: $message").toVector
       val exitCode =
@@ -472,11 +556,12 @@ final class DirectBinaryInstaller(
       policy: ResolvedPolicy,
       tools: Vector[ResolvedTool],
       verboseOutput: VerboseOutput,
-      terminalObserver: TerminalToolResult => Either[String, Unit]
+      terminalObserver: TerminalToolResult => Either[String, Unit],
+      progressObserver: BinaryDownloadProgressObserver
   ): ObservedInstallResults = tools.headOption match
     case None       => ObservedInstallResults(Vector.empty, Vector.empty, None)
     case Some(tool) =>
-      val result   = installTool(policy, tool)
+      val result   = installTool(policy, tool, progressObserver)
       val terminal = terminalResult(result)
       terminalObserver(terminal) match
         case Left(message) => ObservedInstallResults(
@@ -492,14 +577,26 @@ final class DirectBinaryInstaller(
                 None
               )
             case Left(_) =>
-              val rest = installTools(policy, tools.tail, verboseOutput, terminalObserver)
+              val rest = installTools(
+                policy,
+                tools.tail,
+                verboseOutput,
+                terminalObserver,
+                progressObserver
+              )
               rest.copy(
                 lines = verboseLines(tool, verboseOutput) ++
                   (TerminalToolResult.line(terminal) +: rest.lines),
                 results = terminal +: rest.results
               )
             case Right(_) =>
-              val rest = installTools(policy, tools.tail, verboseOutput, terminalObserver)
+              val rest = installTools(
+                policy,
+                tools.tail,
+                verboseOutput,
+                terminalObserver,
+                progressObserver
+              )
               rest.copy(
                 lines = verboseLines(tool, verboseOutput) ++
                   (TerminalToolResult.line(terminal) +: rest.lines),
@@ -520,8 +617,10 @@ final class DirectBinaryInstaller(
 
   private def installTool(
       policy: ResolvedPolicy,
-      tool: ResolvedTool
-  ): Either[ToolInstallError, ToolInstallSuccess] = installWithoutPreflight(policy, tool)
+      tool: ResolvedTool,
+      progressObserver: BinaryDownloadProgressObserver = BinaryDownloadProgressObserver.none
+  ): Either[ToolInstallError, ToolInstallSuccess] =
+    installWithoutPreflight(policy, tool, progressObserver)
 
   private def terminalResult(
       result: Either[ToolInstallError, ToolInstallSuccess]
@@ -543,117 +642,32 @@ final class DirectBinaryInstaller(
 
   private def installWithoutPreflight(
       policy: ResolvedPolicy,
-      tool: ResolvedTool
-  ): Either[ToolInstallError, ToolInstallSuccess] = tool.installer match
-    case Some(installer) => installWithScript(policy, tool, installer)
-    case None            => installDownloadedBinaryOrArchive(policy, tool)
+      tool: ResolvedTool,
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[ToolInstallError, ToolInstallSuccess] =
+    installDownloadedBinaryOrArchive(policy, tool, progressObserver)
 
   private def installDownloadedBinaryOrArchive(
       policy: ResolvedPolicy,
-      tool: ResolvedTool
+      tool: ResolvedTool,
+      progressObserver: BinaryDownloadProgressObserver
   ): Either[ToolInstallError, ToolInstallSuccess] =
     for
-      bytes  <- download(tool)
+      bytes  <- download(tool, progressObserver)
       _      <- verifyChecksum(tool, bytes)
       staged <- stage(tool, bytes)
+      _      <- verifyStagedExecutables(tool, staged)
       _      <- applyModes(tool, staged)
       _      <- replace(tool, staged)
       _      <- verifyExecutables(tool)
       _      <- createSymlinks(policy, tool)
     yield ToolInstallSuccess(tool.name, tool.installDir)
 
-  private def installWithScript(
-      policy: ResolvedPolicy,
+  private def download(
       tool: ResolvedTool,
-      installer: ResolvedInstaller
-  ): Either[ToolInstallError, ToolInstallSuccess] =
-    for
-      bytes      <- download(tool)
-      _          <- verifyChecksum(tool, bytes)
-      scriptPath <- writeInstallerScript(tool, bytes)
-      _          <- runInstallerWithCleanup(tool, installer, scriptPath)
-      _          <- verifyExecutables(tool)
-      _          <- applyInstalledModes(tool)
-      _          <- createSymlinks(policy, tool)
-    yield ToolInstallSuccess(tool.name, tool.installDir)
-
-  private def runInstallerWithCleanup(
-      tool: ResolvedTool,
-      installer: ResolvedInstaller,
-      scriptPath: Path
-  ): Either[ToolInstallError, Unit] =
-    val result  = runInstaller(tool, installer)
-    val cleanup = cleanupInstallerScript(tool, installer, scriptPath)
-    cleanup match
-      case Left(error) => Left(error)
-      case Right(())   => result
-
-  private def runInstaller(
-      tool: ResolvedTool,
-      installer: ResolvedInstaller
-  ): Either[ToolInstallError, Unit] =
-    val spec = CommandSpec(
-      Vector(installer.shell.value) ++ installer.args,
-      Path.of(tool.installDir).toAbsolutePath.normalize(),
-      CommandEnvironment.baseline ++ installer.env.map(env => env.name -> env.value).toMap
-    )
-    commandExecutor.run(spec).left.map: error =>
-      ToolInstallError.InstallerExecutionFailed(tool.name, error.spec.argv, error.message)
-
-  private def writeInstallerScript(
-      tool: ResolvedTool,
-      bytes: Array[Byte]
-  ): Either[ToolInstallError, Path] =
-    for
-      scriptPath <- resolveInsideInstall(tool, tool.download.filename)
-      _          <- createInstallDirectories(tool)
-      _          <- Try:
-        Option(scriptPath.getParent).foreach(parent => Files.createDirectories(parent))
-        val _ = Files.write(
-          scriptPath,
-          bytes,
-          StandardOpenOption.CREATE,
-          StandardOpenOption.TRUNCATE_EXISTING,
-          StandardOpenOption.WRITE
-        )
-        Files.setPosixFilePermissions(
-          scriptPath,
-          ExecutableInstallMode.fromOctal("0700").permissions.asJava
-        )
-      match
-        case Success(_)     => Right(())
-        case Failure(error) => Left(ToolInstallError.StagingFailed(tool.name, error.getMessage))
-    yield scriptPath
-
-  private def createInstallDirectories(tool: ResolvedTool): Either[ToolInstallError, Unit] =
-    val writes = tool.createDirectories.map: directory =>
-      resolveInsideInstall(tool, directory).flatMap: path =>
-        Try(Files.createDirectories(path)) match
-          case Success(_)     => Right(())
-          case Failure(error) => Left(ToolInstallError.StagingFailed(tool.name, error.getMessage))
-    writes.collectFirst:
-      case Left(error) => error
-    match
-      case Some(error) => Left(error)
-      case None        => Right(())
-
-  private def cleanupInstallerScript(
-      tool: ResolvedTool,
-      installer: ResolvedInstaller,
-      scriptPath: Path
-  ): Either[ToolInstallError, Unit] =
-    if !installer.cleanup then Right(())
-    else
-      Try(Files.deleteIfExists(scriptPath)) match
-        case Success(_)     => Right(())
-        case Failure(error) => Left(ToolInstallError.InstallerCleanupFailed(
-            tool.name,
-            scriptPath.toString,
-            error.getMessage
-          ))
-
-  private def download(tool: ResolvedTool): Either[ToolInstallError, Array[Byte]] =
-    downloadClient.download(tool.download.url).left.map: error =>
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[ToolInstallError, Array[Byte]] =
+    downloadClient.download(tool.download.url, progressObserver).left.map: error =>
       ToolInstallError.DownloadFailed(tool.name, error.url, error.message)
 
   private def verifyChecksum(
@@ -708,24 +722,6 @@ final class DirectBinaryInstaller(
   ): Either[ToolInstallError, Unit] = fileSystem.replaceInstall(stagedInstall).left.map: error =>
     ToolInstallError.ReplacementFailed(tool.name, error.message)
 
-  private def applyInstalledModes(tool: ResolvedTool): Either[ToolInstallError, Unit] =
-    val writes = tool.executables.map: executable =>
-      val mode = ExecutableInstallMode.fromConfig(executable.mode)
-      resolveInsideInstall(tool, executable.path).flatMap: path =>
-        Try(Files.setPosixFilePermissions(path, mode.permissions.asJava)) match
-          case Success(_)     => Right(())
-          case Failure(error) => Left(ToolInstallError.ModeApplicationFailed(
-              tool.name,
-              executable.path,
-              mode.octal,
-              error.getMessage
-            ))
-    writes.collectFirst:
-      case Left(error) => error
-    match
-      case Some(error) => Left(error)
-      case None        => Right(())
-
   private def verifyExecutables(tool: ResolvedTool): Either[ToolInstallError, Unit] =
     tool.executables
       .map: executable =>
@@ -737,6 +733,35 @@ final class DirectBinaryInstaller(
     match
       case Some(error) => Left(error)
       case None        => Right(())
+
+  private def verifyStagedExecutables(
+      tool: ResolvedTool,
+      stagedInstall: StagedInstall
+  ): Either[ToolInstallError, Unit] =
+    tool.executables
+      .map: executable =>
+        resolveInsideStaging(tool, stagedInstall, executable.path).flatMap: path =>
+          if Files.isRegularFile(path) then Right(())
+          else Left(ToolInstallError.MissingExecutable(tool.name, executable.path))
+      .collectFirst:
+        case Left(error) => error
+    match
+      case Some(error) => Left(error)
+      case None        => Right(())
+
+  private def resolveInsideStaging(
+      tool: ResolvedTool,
+      stagedInstall: StagedInstall,
+      relative: String
+  ): Either[ToolInstallError, Path] =
+    val input      = Path.of(relative)
+    val stagingDir = stagedInstall.stagingDir.toAbsolutePath.normalize()
+    if input.isAbsolute then
+      Left(ToolInstallError.StagingFailed(tool.name, s"path must be relative: $relative"))
+    else
+      val resolved = stagingDir.resolve(input).normalize()
+      if resolved.startsWith(stagingDir) then Right(resolved)
+      else Left(ToolInstallError.StagingFailed(tool.name, s"path escapes installDir: $relative"))
 
   private def createSymlinks(
       policy: ResolvedPolicy,
@@ -798,7 +823,12 @@ final class DirectBinaryInstaller(
             CommandEnvironment.baseline
           )
           commandExecutor.run(spec).left.map: error =>
-            ToolInstallError.SymlinkFailed(tool.name, path.toString, target.toString, error.message)
+            ToolInstallError.SymlinkFailed(
+              tool.name,
+              path.toString,
+              target.toString,
+              CommandFailureDetails.render(error)
+            )
 
   private def resolveSymlinkTarget(
       tool: ResolvedTool,
@@ -840,33 +870,58 @@ final class DirectBinaryInstaller(
     case ToolInstallError.ModeApplicationFailed(toolName, _, _, _)  => toolName
     case ToolInstallError.ReplacementFailed(toolName, _)            => toolName
     case ToolInstallError.ArchiveExtractionFailed(toolName, _)      => toolName
-    case ToolInstallError.InstallerExecutionFailed(toolName, _, _)  => toolName
-    case ToolInstallError.InstallerCleanupFailed(toolName, _, _)    => toolName
     case ToolInstallError.MissingExecutable(toolName, _)            => toolName
     case ToolInstallError.SymlinkFailed(toolName, _, _, _)          => toolName
     case ToolInstallError.SudoSymlinkNotAllowed(toolName)           => toolName
     case ToolInstallError.SudoSymlinkConfirmationRequired(toolName) => toolName
 
   private def renderInstallError(error: ToolInstallError): String = error match
-    case ToolInstallError.DownloadFailed(_, url, message)       => s"download: $url: $message"
-    case ToolInstallError.ChecksumMismatch(_, expected, actual) =>
-      s"checksum: sha256 expected $expected, got $actual"
-    case ToolInstallError.StagingFailed(_, message)                     => s"staging: $message"
-    case ToolInstallError.ModeApplicationFailed(_, path, mode, message) =>
-      s"mode: $mode for $path: $message"
-    case ToolInstallError.ReplacementFailed(_, message)       => s"replacement: $message"
-    case ToolInstallError.ArchiveExtractionFailed(_, message) => s"archive extraction: $message"
-    case ToolInstallError.InstallerExecutionFailed(_, argv, message) =>
-      s"installer command: ${renderArgv(argv)}: $message"
-    case ToolInstallError.InstallerCleanupFailed(_, path, message) =>
-      s"installer cleanup: $path: $message"
-    case ToolInstallError.MissingExecutable(_, path) => s"verify executable: missing $path"
-    case ToolInstallError.SymlinkFailed(_, path, target, message) =>
-      s"symlink: $target -> $path: $message"
+    case ToolInstallError.DownloadFailed(toolName, url, message) =>
+      detailBlock(
+        s"download: $url: $message",
+        Vector("tool" -> toolName, "url" -> url, "message" -> message)
+      )
+    case ToolInstallError.ChecksumMismatch(toolName, expected, actual) =>
+      detailBlock(
+        s"checksum: sha256 expected $expected, got $actual",
+        Vector(
+          "tool" -> toolName,
+          "expected sha256" -> expected,
+          "actual sha256" -> actual,
+          "suggestion" -> "verify the downloaded artifact before updating the manifest checksum"
+        )
+      )
+    case ToolInstallError.StagingFailed(toolName, message) =>
+      detailBlock(s"staging: $message", Vector("tool" -> toolName, "message" -> message))
+    case ToolInstallError.ModeApplicationFailed(toolName, path, mode, message) =>
+      detailBlock(
+        s"mode: $mode for $path: $message",
+        Vector("tool" -> toolName, "path" -> path, "mode" -> mode, "message" -> message)
+      )
+    case ToolInstallError.ReplacementFailed(toolName, message) =>
+      detailBlock(s"replacement: $message", Vector("tool" -> toolName, "message" -> message))
+    case ToolInstallError.ArchiveExtractionFailed(toolName, message) =>
+      detailBlock(
+        s"archive extraction: $message",
+        Vector("tool" -> toolName, "message" -> message)
+      )
+    case ToolInstallError.MissingExecutable(toolName, path) =>
+      detailBlock(
+        s"verify executable: missing $path",
+        Vector("tool" -> toolName, "expected path" -> path)
+      )
+    case ToolInstallError.SymlinkFailed(toolName, path, target, message) =>
+      detailBlock(
+        s"symlink: $target -> $path: $message",
+        Vector("tool" -> toolName, "path" -> path, "target" -> target, "message" -> message)
+      )
     case ToolInstallError.SudoSymlinkNotAllowed(_) =>
       "sudo symlinks are not allowed by policy.allowSudoSymlinks"
     case ToolInstallError.SudoSymlinkConfirmationRequired(_) =>
       "sudo symlinks require apply confirmation; rerun apply with --yes"
+
+  private def detailBlock(summary: String, details: Vector[(String, String)]): String =
+    (summary +: details.map((name, value) => s"  $name: $value")).mkString("\n")
 
   private def renderPreflightError(error: ApplyPreflightError): String = error match
     case ApplyPreflightError.ConfirmationRequired =>
@@ -875,10 +930,6 @@ final class DirectBinaryInstaller(
       s"failed $toolName: sudo symlinks are not allowed by policy.allowSudoSymlinks"
     case ApplyPreflightError.SudoSymlinkConfirmationRequired(toolName) =>
       s"failed $toolName: sudo symlinks require apply confirmation; rerun apply with --yes"
-
-  private def renderArgv(argv: Vector[String]): String = argv.map(shellQuote).mkString(" ")
-
-  private def shellQuote(value: String): String = s"'${value.replace("'", "'\"'\"'")}'"
 
 object DirectBinaryInstaller:
 
@@ -909,10 +960,12 @@ private object StatefulApplyRunner:
       options: InstallerOptions,
       prepared: PreparedPlan,
       installer: DirectBinaryInstaller,
-      stateStore: ApplyStateStore
+      stateStore: ApplyStateStore,
+      progressObserver: BinaryDownloadProgressObserver = BinaryDownloadProgressObserver.none
   ): InstallerResult = confirmationPreflight(options, prepared.plan) match
     case Some(result) => result
-    case None         => runAfterConfirmation(options, prepared, installer, stateStore)
+    case None         =>
+      runAfterConfirmation(options, prepared, installer, stateStore, progressObserver)
 
   private def confirmationPreflight(
       options: InstallerOptions,
@@ -932,14 +985,20 @@ private object StatefulApplyRunner:
       options: InstallerOptions,
       prepared: PreparedPlan,
       installer: DirectBinaryInstaller,
-      stateStore: ApplyStateStore
+      stateStore: ApplyStateStore,
+      progressObserver: BinaryDownloadProgressObserver
   ): InstallerResult = statePath(options, prepared.plan) match
     case None =>
-      installer.installPlan(prepared.plan, options.applyConfirmation, options.verboseOutput)
+      installer.installPlan(
+        prepared.plan,
+        options.applyConfirmation,
+        options.verboseOutput,
+        progressObserver
+      )
     case Some(path) => loadInitialState(path, options.resetState, prepared, stateStore) match
         case Left(error)               => InstallerResult(Vector(renderStateError(error)), 1)
         case Right((statePath, state)) =>
-          runWithState(statePath, state, prepared, options, installer, stateStore)
+          runWithState(statePath, state, prepared, options, installer, stateStore, progressObserver)
 
   private def statePath(options: InstallerOptions, plan: ResolvedPlan): Option[String] =
     options.statePath.orElse(plan.policy.stateFile)
@@ -986,22 +1045,25 @@ private object StatefulApplyRunner:
       prepared: PreparedPlan,
       options: InstallerOptions,
       installer: DirectBinaryInstaller,
-      stateStore: ApplyStateStore
+      stateStore: ApplyStateStore,
+      progressObserver: BinaryDownloadProgressObserver
   ): InstallerResult =
     val completed    = completedToolNames(state)
     val pendingTools = prepared.plan.tools.filterNot(tool => completed(tool.name))
     val skippedLines = prepared.plan.tools
       .filter(tool => completed(tool.name))
       .map(tool => s"skipped ${tool.name}: already completed in state")
-    val pendingPlan  = prepared.plan.copy(tools = pendingTools)
+    val pendingPlan = prepared.plan.copy(tools = pendingTools)
     var currentState = state
-    val result       = installer.installPlanWithObserver(
+    val terminalObserver: TerminalToolResult => Either[String, Unit] = terminal =>
+      currentState = updateState(currentState, terminal)
+      stateStore.save(path, currentState).left.map(renderStateError)
+    val result = installer.installPlanWithObserver(
       pendingPlan,
       options.applyConfirmation,
       options.verboseOutput,
-      terminal =>
-        currentState = updateState(currentState, terminal)
-        stateStore.save(path, currentState).left.map(renderStateError)
+      terminalObserver,
+      progressObserver
     )
 
     result.copy(lines = skippedLines ++ result.lines)
@@ -1160,7 +1222,6 @@ private object ManifestFingerprint:
     append(builder, s"$base.installDir", spec.installDir)
     appendVector(builder, s"$base.createDirectories", spec.createDirectories)
     appendDownload(builder, s"$base.download", spec.download)
-    spec.installer.foreach(appendInstaller(builder, s"$base.installer", _))
     appendExecutables(builder, s"$base.executables", spec.executables)
     appendSymlinks(builder, s"$base.symlinks", spec.symlinks)
 
@@ -1174,19 +1235,6 @@ private object ManifestFingerprint:
       append(builder, s"$base.archive.type", archive.archiveType.value)
       appendMappings(builder, s"$base.archive.extract.files", archive.extract.files)
       appendMappings(builder, s"$base.archive.extract.directories", archive.extract.directories)
-
-  private def appendInstaller(
-      builder: StringBuilder,
-      base: String,
-      installer: InstallerSpec
-  ): Unit =
-    append(builder, s"$base.shell", installer.shell.value)
-    appendVector(builder, s"$base.args", installer.args)
-    installer.env.zipWithIndex.foreach:
-      case (env, index) =>
-        append(builder, s"$base.env[$index].name", env.name)
-        append(builder, s"$base.env[$index].value", env.value)
-    append(builder, s"$base.cleanup", installer.cleanup.toString)
 
   private def appendExecutables(
       builder: StringBuilder,
@@ -1252,12 +1300,18 @@ private final class ResolvingBinaryInstallerService(
     renderSelectedPlan(options, PlanRenderCommand.Plan)
 
   def apply(options: InstallerOptions): InstallerResult =
+    applyWithProgress(options, BinaryDownloadProgressObserver.none)
+
+  override def applyWithProgress(
+      options: InstallerOptions,
+      progressObserver: BinaryDownloadProgressObserver
+  ): InstallerResult =
     if options.dryRun == DryRunMode.Enabled then
       renderSelectedPlan(options, PlanRenderCommand.ApplyDryRun)
     else
       resolveSelectedPreparedPlan(options).fold(
         renderError,
-        prepared => StatefulApplyRunner.run(options, prepared, installer, stateStore)
+        prepared => StatefulApplyRunner.run(options, prepared, installer, stateStore, progressObserver)
       )
 
   def versions(options: InstallerOptions): InstallerResult =
@@ -1429,26 +1483,17 @@ private object PlanRenderer:
     val archiveLines = tool.download.archive match
       case Some(archive) => renderArchive(archive)
       case None          => Vector("   archive: none")
-    val installerLines = tool.installer match
-      case Some(installer) => renderInstaller(installer)
-      case None            => Vector("   installer: none")
     val directLine =
-      if tool.download.archive.isEmpty && tool.installer.isEmpty then
+      if tool.download.archive.isEmpty then
         Vector("   strategy: direct binary download")
       else Vector.empty
 
-    directLine ++ archiveLines ++ installerLines
+    directLine ++ archiveLines
 
   private def renderArchive(archive: ResolvedArchive): Vector[String] =
     Vector(s"   archive: ${archive.original.archiveType.value}") ++
       archive.files.map(mapping => s"     file ${mapping.from} -> ${mapping.to}") ++
       archive.directories.map(mapping => s"     directory ${mapping.from} -> ${mapping.to}")
-
-  private def renderInstaller(installer: ResolvedInstaller): Vector[String] = Vector(
-    s"   installer: ${installer.shell.value} ${installer.args.map(shellQuote).mkString(" ")}"
-  ) ++
-    installer.env.map(env => s"     env ${env.name}=<redacted>") :+
-    s"     cleanup: ${installer.cleanup}"
 
   private def renderExecutables(tool: ResolvedTool): Vector[String] =
     if tool.executables.isEmpty then Vector("   executables: none")
@@ -1617,10 +1662,7 @@ private final class ResolutionBuilder(
     val specPath    = s"spec.plan[$index].spec"
     val installDir  = interpolate(spec.installDir, s"$specPath.installDir", vars)
     val filename    = interpolate(spec.download.filename, s"$specPath.download.filename", vars)
-    val localVars   = vars ++ Map(
-      "installDir"   -> installDir.value,
-      "downloadPath" -> joinPath(installDir.value, filename.value)
-    )
+    val localVars   = vars + ("installDir" -> installDir.value)
     val download          = resolveDownload(spec.download, specPath, localVars, version)
     val createDirectories = resolveStringVector(
       spec.createDirectories,
@@ -1628,7 +1670,6 @@ private final class ResolutionBuilder(
       localVars,
       version
     )
-    val installer   = resolveInstaller(spec.installer, specPath, localVars, version)
     val executables = resolveExecutables(spec, specPath, localVars, version)
     val symlinks    = resolveSymlinks(spec, specPath, localVars, version)
 
@@ -1640,7 +1681,6 @@ private final class ResolutionBuilder(
         installDir = installDir.value,
         createDirectories = createDirectories.value,
         download = download.value,
-        installer = installer.value,
         executables = executables.value,
         symlinks = symlinks.value
       ),
@@ -1648,7 +1688,7 @@ private final class ResolutionBuilder(
         versionTemplateErrors(spec.installDir, s"$specPath.installDir", version) ++
         filename.errors ++
         versionTemplateErrors(spec.download.filename, s"$specPath.download.filename", version) ++
-        createDirectories.errors ++ download.errors ++ installer.errors ++ executables.errors ++
+        createDirectories.errors ++ download.errors ++ executables.errors ++
         symlinks.errors
     )
 
@@ -1716,38 +1756,6 @@ private final class ResolutionBuilder(
           ResolvedExtractMapping(from.value, to.value),
           from.errors ++ versionTemplateErrors(mapping.from, fromPath, version) ++
             to.errors ++ versionTemplateErrors(mapping.to, toPath, version)
-        )
-    ResolvedValue(resolved.map(_.value), resolved.flatMap(_.errors))
-
-  private def resolveInstaller(
-      installer: Option[InstallerSpec],
-      specPath: String,
-      vars: Map[String, String],
-      version: ResolvedVersion
-  ): ResolvedValue[Option[ResolvedInstaller]] = installer match
-    case None        => ResolvedValue.valid(None)
-    case Some(value) =>
-      val path = s"$specPath.installer"
-      val args = resolveStringVector(value.args, s"$path.args", vars, version)
-      val env  = resolveInstallerEnv(value.env, path, vars, version)
-      ResolvedValue(
-        Some(ResolvedInstaller(value.shell, args.value, env.value, value.cleanup)),
-        args.errors ++ env.errors
-      )
-
-  private def resolveInstallerEnv(
-      env: Vector[InstallerEnv],
-      installerPath: String,
-      vars: Map[String, String],
-      version: ResolvedVersion
-  ): ResolvedValue[Vector[ResolvedInstallerEnv]] =
-    val resolved = env.zipWithIndex.map:
-      case (entry, index) =>
-        val path  = s"$installerPath.env[$index].value"
-        val value = interpolate(entry.value, path, vars)
-        ResolvedValue(
-          ResolvedInstallerEnv(entry.name, value.value),
-          value.errors ++ versionTemplateErrors(entry.value, path, version)
         )
     ResolvedValue(resolved.map(_.value), resolved.flatMap(_.errors))
 
@@ -1858,9 +1866,6 @@ private final class ResolutionBuilder(
       case Right(_)      => Vector.empty
       case Left(message) => Vector(ValidationError(path, message))
 
-  private def joinPath(parent: String, child: String): String =
-    if parent.endsWith("/") then s"$parent$child" else s"$parent/$child"
-
 private object TemplateInterpolator:
   private val Variable: Regex = "\\$\\{([A-Za-z_][A-Za-z0-9_]*)\\}".r
 
@@ -1898,16 +1903,50 @@ private final class JdkHttpTextClient(client: HttpClient) extends HttpTextClient
 private final class JdkBinaryDownloadClient(client: HttpClient) extends BinaryDownloadClient:
 
   def download(url: String): Either[BinaryDownloadError, Array[Byte]] =
+    download(url, BinaryDownloadProgressObserver.none)
+
+  override def download(
+      url: String,
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[BinaryDownloadError, Array[Byte]] =
     RuntimeUrl.httpsUri(url) match
       case Left(message) => Left(BinaryDownloadError(url, message))
       case Right(uri)    =>
         val request = HttpRequest.newBuilder(uri).timeout(RuntimeHttpClient.requestTimeout).GET()
           .build()
-        Try(client.send(request, HttpResponse.BodyHandlers.ofByteArray())) match
+        Try(client.send(request, HttpResponse.BodyHandlers.ofInputStream())) match
           case Success(response) if response.statusCode() >= 200 && response.statusCode() < 300 =>
-            Right(response.body())
+            readBody(url, response, progressObserver)
           case Success(response) => Left(BinaryDownloadError(url, s"HTTP ${response.statusCode()}"))
           case Failure(error)    => Left(BinaryDownloadError(url, error.getMessage))
+
+  private def readBody(
+      url: String,
+      response: HttpResponse[InputStream],
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[BinaryDownloadError, Array[Byte]] = Try:
+    val totalBytes = response.headers().firstValueAsLong("Content-Length") match
+      case value if value.isPresent && value.getAsLong >= 0L => Some(value.getAsLong)
+      case _                                                 => None
+
+    progressObserver.onProgress(BinaryDownloadProgress.Started(url, totalBytes))
+    Using.resource(response.body()): input =>
+      val output = ByteArrayOutputStream()
+      val buffer = Array.ofDim[Byte](64 * 1024)
+      var read   = input.read(buffer)
+      var total  = 0L
+
+      while read != -1 do
+        output.write(buffer, 0, read)
+        total += read.toLong
+        progressObserver.onProgress(BinaryDownloadProgress.Advanced(url, total, totalBytes))
+        read = input.read(buffer)
+
+      progressObserver.onProgress(BinaryDownloadProgress.Finished(url, total, totalBytes))
+      output.toByteArray
+  match
+    case Success(bytes) => Right(bytes)
+    case Failure(error) => Left(BinaryDownloadError(url, error.getMessage))
 
 private object RuntimeUrl:
 
@@ -1921,6 +1960,7 @@ private object CommandEnvironment:
   val baseline: Map[String, String] = Map("PATH" -> sys.env.getOrElse("PATH", "/usr/bin:/bin"))
 
 private final class ProcessCommandExecutor(timeout: Duration) extends CommandExecutor:
+  private val capturedOutputLimitBytes = 64 * 1024
 
   def run(spec: CommandSpec): Either[CommandExecutionError, Unit] = Try:
     val builder = ProcessBuilder(spec.argv.asJava)
@@ -1930,16 +1970,52 @@ private final class ProcessCommandExecutor(timeout: Duration) extends CommandExe
     spec.env.foreach:
       case (name, value) => val _ = env.put(name, value)
     val process = builder.start()
-    if process.waitFor(timeout.toMillis, TimeUnit.MILLISECONDS) then
-      val exit = process.exitValue()
-      if exit == 0 then Right(())
-      else Left(CommandExecutionError(spec, s"command exited with status $exit", Some(exit)))
-    else
-      process.destroyForcibly()
-      Left(CommandExecutionError(spec, s"command timed out after ${timeout.toSeconds}s", None))
+    supervised:
+      val stdout = fork(readBounded(process.getInputStream))
+      val stderr = fork(readBounded(process.getErrorStream))
+      if process.waitFor(timeout.toMillis, TimeUnit.MILLISECONDS) then
+        val exit   = process.exitValue()
+        val output = CommandOutput(stdout.join(), stderr.join())
+        if exit == 0 then Right(())
+        else Left(
+          CommandExecutionError(spec, s"command exited with status $exit", Some(exit), output)
+        )
+      else
+        val _ = process.destroyForcibly()
+        val _ = process.waitFor(5, TimeUnit.SECONDS)
+        val output = CommandOutput(stdout.join(), stderr.join())
+        Left(
+          CommandExecutionError(
+            spec,
+            s"command timed out after ${timeout.toSeconds}s",
+            None,
+            output
+          )
+        )
   match
     case Success(result) => result
     case Failure(error)  => Left(CommandExecutionError(spec, error.getMessage, None))
+
+  private def readBounded(input: InputStream): String =
+    Using.resource(input): stream =>
+      val output = ByteArrayOutputStream()
+      val buffer = Array.ofDim[Byte](8 * 1024)
+      var read   = stream.read(buffer)
+      var stored = 0
+      var clipped = false
+      while read != -1 do
+        val remaining = capturedOutputLimitBytes - stored
+        if remaining > 0 then
+          val writable = read.min(remaining)
+          output.write(buffer, 0, writable)
+          stored += writable
+          clipped = clipped || writable < read
+        else clipped = true
+        read = stream.read(buffer)
+      val suffix =
+        if clipped then "\n... output truncated after 65536 bytes ..."
+        else ""
+      output.toString(StandardCharsets.UTF_8) + suffix
 
 private enum ArchiveEntryKind:
   case File, Directory
@@ -2038,7 +2114,7 @@ private object ArchiveExtractor:
       case Left(error) =>
         deleteRecursively(extractDir)
         val _ = Files.deleteIfExists(archiveFile)
-        Left(s"${error.spec.argv.mkString(" ")}: ${error.message}")
+        Left(CommandFailureDetails.render(error))
       case Right(()) =>
         val result = Try(indexExtractedDirectory(extractDir)).toEither.left.map(_.getMessage)
           .flatMap: entries =>
@@ -2181,6 +2257,7 @@ private object ArchiveExtractor:
   private def normalizedArchivePath(value: String): Either[String, String] =
     val path = value.stripSuffix("/")
     if path.isEmpty then Left("archive path must not be empty")
+    else if path == "." then Right(path)
     else if path.exists(_ < ' ') then Left(s"archive path contains control character: $value")
     else if path.contains('\\') then Left(s"archive path contains backslash: $value")
     else if path.matches("^[A-Za-z]:.*") then Left(s"archive path is drive-prefixed: $value")
@@ -2189,9 +2266,12 @@ private object ArchiveExtractor:
       if nioPath.isAbsolute then Left(s"archive path is absolute: $value")
       else
         val segments = path.split('/').toVector
-        val unsafe   = segments.exists(segment => segment == "." || segment == "..")
+        val unsafe   = segments.exists(_ == "..")
         if unsafe then Left(s"archive path escapes staging directory: $value")
-        else Right(path)
+        else
+          val normalized = segments.filterNot(segment => segment.isEmpty || segment == ".")
+          if normalized.isEmpty then Right(".")
+          else Right(normalized.mkString("/"))
 
   private def resolveInside(root: Path, relative: String): Either[String, Path] =
     val clean = relative match

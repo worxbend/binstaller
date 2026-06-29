@@ -1,8 +1,14 @@
 package binstaller.cli
 
 import binstaller.core.BinaryInstallerService
+import binstaller.core.BinaryDownloadClient
+import binstaller.core.BinaryDownloadError
+import binstaller.core.BinaryDownloadProgress
+import binstaller.core.BinaryDownloadProgressObserver
+import binstaller.core.DirectBinaryInstaller
 import binstaller.core.HttpTextClient
 import binstaller.core.HttpTextError
+import binstaller.core.InstallFileSystem
 import binstaller.core.InstallerOptions
 import binstaller.core.InstallerResult
 import binstaller.core.ResetState
@@ -164,6 +170,36 @@ object CliModuleTest extends TestSuite:
       assert(!result.out.contains("Exception"))
       assert(!Files.exists(appsDir))
 
+    test("apply renders download progress bar in place"):
+      val tempRoot = Files.createTempDirectory("binstaller-cli-progress")
+      val appsDir  = tempRoot.resolve("apps")
+      val config   = writeConfig(tempRoot, progressYaml(appsDir))
+      val service  = BinaryInstallerService.resolving(
+        FakeHttpTextClient("v1.34.0"),
+        DirectBinaryInstaller(
+          ProgressBinaryDownloadClient("alpha-binary".getBytes),
+          InstallFileSystem.nio
+        )
+      )
+
+      val result = runCli(
+        Vector("apply", "--config", config.toString, "--yes"),
+        service
+      )
+
+      assert(result.exitCode == 0)
+      val plainOutput = stripAnsi(result.out)
+      assert(plainOutput.contains("\r⬇ downloading alpha"))
+      assert(plainOutput.contains("[███████████████░░░░░░░░░░░░░░░] 50%"))
+      assert(plainOutput.contains("\r✅ completed alpha [██████████████████████████████] 100%"))
+      assert(!plainOutput.contains("\n⬇ downloading alpha"))
+      assert(plainOutput.contains("installed alpha"))
+      assert(plainOutput.contains("✨ Summary"))
+      assert(plainOutput.contains("✅ installed: 1"))
+      assert(plainOutput.contains("🎉 apply completed successfully"))
+      assert(result.out.contains("\u001b["))
+      assert(Files.readString(appsDir.resolve("alpha/bin/alpha")) == "alpha-binary")
+
   private def runCli(
       args: Vector[String],
       service: BinaryInstallerService = BinaryInstallerService.placeholder
@@ -176,8 +212,11 @@ object CliModuleTest extends TestSuite:
     CliRunResult(exitCode, outBuffer.toString, errBuffer.toString)
 
   private def renderedToolNames(output: String): Vector[String] =
-    output.linesIterator.toVector.collect:
+    stripAnsi(output).linesIterator.toVector.collect:
       case ToolHeading(name) => name
+
+  private def stripAnsi(output: String): String =
+    output.replaceAll("\u001b\\[[;\\d]*m", "")
 
   private def writeConfig(tempRoot: Path, content: String): Path =
     val path = tempRoot.resolve("profile.yaml")
@@ -215,6 +254,31 @@ object CliModuleTest extends TestSuite:
        |          - path: /usr/local/bin/alpha
        |            target: "$appsDir/alpha/bin/alpha"
        |            sudo: true
+       |""".stripMargin
+
+  private def progressYaml(appsDir: Path): String =
+    s"""
+       |apiVersion: binstaller.io/v1alpha1
+       |kind: BinaryDistributionProfile
+       |metadata:
+       |  name: progress
+       |spec:
+       |  policy:
+       |    appsDir: "$appsDir"
+       |  vars: {}
+       |  versions:
+       |    alpha: "1.0.0"
+       |  plan:
+       |    - name: alpha
+       |      kind: binary-tool
+       |      spec:
+       |        versionRef: alpha
+       |        installDir: "$appsDir/alpha"
+       |        download:
+       |          url: https://example.invalid/alpha
+       |          filename: alpha
+       |        executables:
+       |          - path: bin/alpha
        |""".stripMargin
 
   private def findRepoFile(name: String): Path = Iterator
@@ -258,6 +322,22 @@ private final class FakeHttpTextClient(text: String) extends HttpTextClient:
   def getText(url: String): Either[HttpTextError, String] =
     if url == "https://dl.k8s.io/release/stable.txt" then Right(text)
     else Left(HttpTextError(url, s"unexpected URL $url"))
+
+private final class ProgressBinaryDownloadClient(bytes: Array[Byte]) extends BinaryDownloadClient:
+
+  def download(url: String): Either[BinaryDownloadError, Array[Byte]] =
+    Right(bytes)
+
+  override def download(
+      url: String,
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[BinaryDownloadError, Array[Byte]] =
+    val halfway = bytes.length.toLong / 2L
+    val total   = Some(bytes.length.toLong)
+    progressObserver.onProgress(BinaryDownloadProgress.Started(url, total))
+    progressObserver.onProgress(BinaryDownloadProgress.Advanced(url, halfway, total))
+    progressObserver.onProgress(BinaryDownloadProgress.Finished(url, bytes.length.toLong, total))
+    Right(bytes)
 
 private final class RecordingInstallerService extends BinaryInstallerService:
 

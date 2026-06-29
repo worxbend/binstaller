@@ -102,7 +102,6 @@ final case class BinaryToolSpec(
     installDir: String,
     createDirectories: Vector[String],
     download: DownloadSpec,
-    installer: Option[InstallerSpec],
     executables: Vector[ExecutableSpec],
     symlinks: Vector[SymlinkSpec]
 )
@@ -132,20 +131,6 @@ final case class ArchiveExtract(
 )
 
 final case class ExtractMapping(from: String, to: String)
-
-final case class InstallerSpec(
-    shell: InstallerShell,
-    args: Vector[String],
-    env: Vector[InstallerEnv],
-    cleanup: Boolean
-)
-
-enum InstallerShell(val value: String):
-  case Sh   extends InstallerShell("sh")
-  case Bash extends InstallerShell("bash")
-  case Zsh  extends InstallerShell("zsh")
-
-final case class InstallerEnv(name: String, value: String)
 
 final case class ExecutableSpec(path: String, mode: Option[ExecutableMode])
 
@@ -415,7 +400,7 @@ private object ManifestDecoder:
     val installDir        = requiredString(map, s"$path.installDir")
     val createDirectories = optionalStringList(map, "createDirectories", s"$path.createDirectories")
     val download          = decodeDownload(requiredMap(map, s"$path.download"), path)
-    val installer         = optionalInstaller(map, s"$path.installer")
+    val unsupportedScript = unsupportedInstaller(map, s"$path.installer")
     val executables       = decodeExecutables(requiredList(map, s"$path.executables"), path)
     val symlinks          = decodeSymlinks(optionalList(map, "symlinks", s"$path.symlinks"), path)
 
@@ -425,12 +410,11 @@ private object ManifestDecoder:
         installDir = installDir.value,
         createDirectories = createDirectories.value,
         download = download.value,
-        installer = installer.value,
         executables = executables.value,
         symlinks = symlinks.value
       ),
       input.errors ++ versionRef.errors ++ installDir.errors ++ createDirectories.errors ++
-        download.errors ++ installer.errors ++ executables.errors ++ symlinks.errors
+        download.errors ++ unsupportedScript.errors ++ executables.errors ++ symlinks.errors
     )
 
   private def decodeDownload(
@@ -517,42 +501,15 @@ private object ManifestDecoder:
         )
     DecodeResult(decoded.map(_.value), input.errors ++ decoded.flatMap(_.errors))
 
-  private def optionalInstaller(map: YamlMap, path: String): DecodeResult[Option[InstallerSpec]] =
+  private def unsupportedInstaller(map: YamlMap, path: String): DecodeResult[Unit] =
     map.get("installer") match
-      case None        => DecodeResult.valid(None)
-      case Some(value) =>
-        val installerMap = asMap(value, path)
-        val shell        = enumValue(
-          requiredString(installerMap.value, s"$path.shell"),
-          s"$path.shell",
-          InstallerShell.values.toVector,
-          InstallerShell.Sh,
-          _.value
+      case None    => DecodeResult.valid(())
+      case Some(_) =>
+        DecodeResult.invalid(
+          (),
+          path,
+          "installer scripts are not supported; use direct binary or archive download"
         )
-        val args = optionalStringList(installerMap.value, "args", s"$path.args")
-        val env  = decodeInstallerEnv(optionalList(installerMap.value, "env", s"$path.env"), path)
-        val cleanup =
-          optionalBoolean(installerMap.value, "cleanup", s"$path.cleanup", default = false)
-        DecodeResult(
-          Some(InstallerSpec(shell.value, args.value, env.value, cleanup.value)),
-          installerMap.errors ++ shell.errors ++ args.errors ++ env.errors ++ cleanup.errors
-        )
-
-  private def decodeInstallerEnv(
-      input: DecodeResult[Vector[Any]],
-      installerPath: String
-  ): DecodeResult[Vector[InstallerEnv]] =
-    val path    = s"$installerPath.env"
-    val decoded = input.value.zipWithIndex.map:
-      case (rawValue, index) =>
-        val item     = asMap(rawValue, s"$path[$index]")
-        val name     = requiredString(item.value, s"$path[$index].name")
-        val envValue = requiredString(item.value, s"$path[$index].value")
-        DecodeResult(
-          InstallerEnv(name.value, envValue.value),
-          item.errors ++ name.errors ++ envValue.errors
-        )
-    DecodeResult(decoded.map(_.value), input.errors ++ decoded.flatMap(_.errors))
 
   private def decodeExecutables(
       input: DecodeResult[Vector[Any]],

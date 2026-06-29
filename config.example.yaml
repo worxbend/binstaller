@@ -31,6 +31,8 @@ spec:
     zig: 0.15.2
     kind: 0.31.0
     zellij: 0.44.1
+    helm: v3.21.2
+    kustomize: v5.8.1
     lazygit: 0.61.0
     jujutsu: 0.40.0
     dotbot: v0.3.0
@@ -46,20 +48,10 @@ spec:
         type: latest-url
         note: GitHub latest xplr Linux archive endpoint.
 
-    helm:
-      dynamic:
-        type: latest-url
-        note: Helm upstream install script chooses the current release.
-
     kubectl:
       resolver:
         type: http-text
         url: https://dl.k8s.io/release/stable.txt
-
-    kustomize:
-      dynamic:
-        type: latest-url
-        note: Kustomize upstream install script chooses the current release.
 
     neovide:
       dynamic:
@@ -208,21 +200,18 @@ spec:
       spec:
         versionRef: helm
         installDir: "${appsDir}/helm"
-        createDirectories:
-          - bin
         download:
-          url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-          filename: get_helm.sh
-        installer:
-          shell: sh
-          args:
-            - "${downloadPath}"
-          env:
-            - name: USE_SUDO
-              value: "false"
-            - name: HELM_INSTALL_DIR
-              value: "${appsDir}/helm/bin"
-          cleanup: true
+          url: "https://get.helm.sh/helm-${version}-linux-amd64.tar.gz"
+          filename: helm-linux-amd64.tar.gz
+          checksum:
+            algorithm: sha256
+            value: 0a745198de24545d0055cd8414bc8d2ba10363ef5f5d38369ea1b399671cc083
+          archive:
+            type: tar.gz
+            extract:
+              files:
+                - from: linux-amd64/helm
+                  to: bin/helm
         executables:
           - path: bin/helm
 
@@ -252,17 +241,18 @@ spec:
       spec:
         versionRef: kustomize
         installDir: "${appsDir}/kustomize"
-        createDirectories:
-          - bin
         download:
-          url: https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh
-          filename: install_kustomize.sh
-        installer:
-          shell: sh
-          args:
-            - "${downloadPath}"
-            - "${appsDir}/kustomize/bin"
-          cleanup: true
+          url: "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/${version}/kustomize_${version}_linux_amd64.tar.gz"
+          filename: kustomize-linux-amd64.tar.gz
+          checksum:
+            algorithm: sha256
+            value: 029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d
+          archive:
+            type: tar.gz
+            extract:
+              files:
+                - from: kustomize
+                  to: bin/kustomize
         executables:
           - path: bin/kustomize
 

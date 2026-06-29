@@ -9,7 +9,6 @@ import binstaller.config.ArchiveSpec
 import binstaller.config.ArchiveType
 import binstaller.config.AllowSudoSymlinks
 import binstaller.config.ExtractMapping
-import binstaller.config.InstallerShell
 import binstaller.config.ValidationError
 import binstaller.config.SymlinkPrivilege
 import utest.*
@@ -68,8 +67,7 @@ object CoreModuleTest extends TestSuite:
 
       val tool = onlyTool(plan)
       assert(tool.installDir == "/home/test/.apps/$(echo should-not-run)")
-      assert(tool.installer.exists(_.args.head ==
-        "/home/test/.apps/$(echo should-not-run)/script.sh"))
+      assert(tool.download.url == "https://example.invalid/alpha")
 
     test("non-https version and download URLs fail resolution"):
       val errors = resolveErrors(insecureUrlYaml)
@@ -138,7 +136,7 @@ object CoreModuleTest extends TestSuite:
       assert(Files.readString(existingFile) == "existing")
 
     test("executable modes use four-digit octal strings and default to 0755"):
-      val fileSystem = RecordingInstallFileSystem()
+      val fileSystem = RecordingInstallFileSystem(stagedFiles = Vector("bin/alpha", "bin/helper"))
       val installer  = DirectBinaryInstaller(
         FakeBinaryDownloadClient.success("alpha".getBytes),
         fileSystem
@@ -277,6 +275,8 @@ object CoreModuleTest extends TestSuite:
 
       assert(result.exitCode == 0)
       assert(result.lines.exists(_.startsWith("pinned yazi: v26.5.6")))
+      assert(result.lines.exists(_.startsWith("pinned helm: v3.21.2")))
+      assert(result.lines.exists(_.startsWith("pinned kustomize: v5.8.1")))
       assert(result.lines.exists(line =>
         line.startsWith("resolved kubectl: v1.34.0") &&
           line.contains("(tools: kubectl)")
@@ -285,17 +285,6 @@ object CoreModuleTest extends TestSuite:
         line.startsWith("dynamic minikube: dynamic latest-url") &&
           line.contains("(tools: minikube)")
       ))
-
-    test("plan output redacts installer environment values"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-redaction")
-      val config   = writeConfig(tempRoot, installerEnvYaml(tempRoot, "super-secret-token"))
-      val service  = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
-
-      val result = service.plan(applyOptions(config))
-
-      assert(result.exitCode == 0)
-      assert(result.lines.exists(_.contains("env TOKEN=<redacted>")))
-      assert(!result.lines.exists(_.contains("super-secret-token")))
 
     test("non dry-run apply requires yes when policy requireConfirmation is true"):
       val tempRoot   = Files.createTempDirectory("binstaller-core-confirm")
@@ -406,6 +395,27 @@ object CoreModuleTest extends TestSuite:
       assert(Files.readString(installDir.resolve("bin/alpha")) == "alpha")
       assert(Files.readString(installDir.resolve("share/readme")) == "docs")
 
+    test("tar.gz root directory entries do not fail extraction"):
+      val tempRoot   = Files.createTempDirectory("binstaller-core-targz-root-dir")
+      val installDir = tempRoot.resolve("alpha")
+      val installer  = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success(tarGzArchiveWithDirectories(
+          directories = Vector("./"),
+          files = Vector("./jj" -> "jujutsu")
+        )),
+        InstallFileSystem.nio
+      )
+
+      val result = installer.installTool(archiveTool(
+        installDir,
+        ArchiveType.TarGz,
+        files = Vector("jj" -> "bin/jj"),
+        executable = "bin/jj"
+      ))
+
+      assert(result == Right(ToolInstallSuccess("alpha", installDir.toString)))
+      assert(Files.readString(installDir.resolve("bin/jj")) == "jujutsu")
+
     test("archive entries that escape staging are rejected and preserve existing install"):
       val tempRoot     = Files.createTempDirectory("binstaller-core-zip-slip")
       val installDir   = tempRoot.resolve("alpha")
@@ -448,36 +458,6 @@ object CoreModuleTest extends TestSuite:
       assert(commandExecutor.commands.map(_.argv.take(2)) == Vector(Vector("tar", "-xJf")))
       assert(commandExecutor.commands.exists(_.argv.contains("-C")))
 
-    test("installer script runs through configured shell args and explicit env"):
-      val tempRoot        = Files.createTempDirectory("binstaller-core-installer")
-      val installDir      = tempRoot.resolve("script-tool")
-      val scriptPath      = installDir.resolve("install.sh")
-      val commandExecutor = InstallingCommandExecutor("bin/script-tool")
-      val installer       = DirectBinaryInstaller(
-        FakeBinaryDownloadClient.success("script-bytes".getBytes(StandardCharsets.UTF_8)),
-        InstallFileSystem.nio,
-        commandExecutor
-      )
-      val tool = installerTool(
-        installDir,
-        Some(ResolvedInstaller(
-          InstallerShell.Zsh,
-          Vector(scriptPath.toString, "--flag"),
-          Vector(ResolvedInstallerEnv("CUSTOM", "value")),
-          cleanup = true
-        ))
-      )
-
-      val result = installer.installTool(tool)
-
-      assert(result == Right(ToolInstallSuccess("script-tool", installDir.toString)))
-      assert(commandExecutor.commands.map(_.argv) ==
-        Vector(Vector("zsh", scriptPath.toString, "--flag")))
-      assert(commandExecutor.commands.head.env("CUSTOM") == "value")
-      assert(commandExecutor.commands.head.env.keySet == Set("PATH", "CUSTOM"))
-      assert(!Files.exists(scriptPath))
-      assert(Files.isRegularFile(installDir.resolve("bin/script-tool")))
-
     test("process command executor times out long-running commands"):
       val tempRoot = Files.createTempDirectory("binstaller-core-process-timeout")
       val executor = CommandExecutor.processWithTimeout(Duration.ofMillis(100))
@@ -490,19 +470,40 @@ object CoreModuleTest extends TestSuite:
 
       assert(result.left.exists(_.message.contains("timed out")))
 
-    test("installer success verifies expected executables"):
-      val tempRoot        = Files.createTempDirectory("binstaller-core-installer-missing")
-      val installDir      = tempRoot.resolve("script-tool")
-      val commandExecutor = RecordingCommandExecutor()
-      val installer       = DirectBinaryInstaller(
-        FakeBinaryDownloadClient.success("script-bytes".getBytes(StandardCharsets.UTF_8)),
-        InstallFileSystem.nio,
-        commandExecutor
+    test("process command executor captures stdout and stderr on failure"):
+      val tempRoot = Files.createTempDirectory("binstaller-core-process-output")
+      val executor = CommandExecutor.processWithTimeout(Duration.ofSeconds(5))
+
+      val result = executor.run(CommandSpec(
+        Vector("sh", "-c", "printf 'stdout-line\\n'; printf 'stderr-line\\n' >&2; exit 7"),
+        tempRoot,
+        Map("PATH" -> sys.env.getOrElse("PATH", "/usr/bin:/bin"))
+      ))
+
+      result match
+        case Left(error) =>
+          assert(error.exitCode.contains(7))
+          assert(error.output.stdout.contains("stdout-line"))
+          assert(error.output.stderr.contains("stderr-line"))
+        case Right(()) => abort("expected command failure")
+
+    test("direct install verifies expected executables"):
+      val tempRoot   = Files.createTempDirectory("binstaller-core-direct-missing")
+      val installDir = tempRoot.resolve("alpha")
+      val installer  = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success("alpha".getBytes(StandardCharsets.UTF_8)),
+        InstallFileSystem.nio
       )
 
-      val result = installer.installTool(installerTool(installDir))
+      val result = installer.installTool(directTool(
+        installDir,
+        executables = Vector(
+          ResolvedExecutable("bin/alpha", None),
+          ResolvedExecutable("bin/missing", None)
+        )
+      ))
 
-      assert(result == Left(ToolInstallError.MissingExecutable("script-tool", "bin/script-tool")))
+      assert(result == Left(ToolInstallError.MissingExecutable("alpha", "bin/missing")))
 
     test("local symlinks are created under installDir with targets resolved from installDir"):
       val tempRoot   = Files.createTempDirectory("binstaller-core-local-symlink")
@@ -781,7 +782,6 @@ object CoreModuleTest extends TestSuite:
       checksum = checksum,
       archive = None
     ),
-    installer = None,
     executables = executables,
     symlinks = symlinks
   )
@@ -792,35 +792,6 @@ object CoreModuleTest extends TestSuite:
       ResolvedSymlink("/usr/local/bin/alpha", "bin/alpha", SymlinkPrivilege.Sudo)
     )
   )
-
-  private def installerTool(
-      installDir: Path,
-      installer: Option[ResolvedInstaller] = None
-  ): ResolvedTool =
-    val resolvedInstaller = installer.getOrElse(
-      ResolvedInstaller(
-        InstallerShell.Sh,
-        Vector(installDir.resolve("install.sh").toString),
-        Vector.empty,
-        cleanup = true
-      )
-    )
-    ResolvedTool(
-      name = "script-tool",
-      description = None,
-      version = ResolvedVersion.Concrete("1.0.0"),
-      installDir = installDir.toString,
-      createDirectories = Vector("bin"),
-      download = ResolvedDownload(
-        url = "https://example.invalid/install.sh",
-        filename = "install.sh",
-        checksum = None,
-        archive = None
-      ),
-      installer = Some(resolvedInstaller),
-      executables = Vector(ResolvedExecutable("bin/script-tool", None)),
-      symlinks = Vector.empty
-    )
 
   private def archiveTool(
       installDir: Path,
@@ -852,7 +823,6 @@ object CoreModuleTest extends TestSuite:
         )
       )
     ),
-    installer = None,
     executables = Vector(ResolvedExecutable(executable, None)),
     symlinks = Vector.empty
   )
@@ -873,7 +843,7 @@ object CoreModuleTest extends TestSuite:
     entries.foreach:
       case (name, content) =>
         val bytes = content.getBytes(StandardCharsets.UTF_8)
-        gzip.write(tarHeader(name, bytes.length))
+        gzip.write(tarHeader(name, bytes.length, '0'))
         gzip.write(bytes)
         val padding = (512 - (bytes.length % 512)) % 512
         gzip.write(Array.fill[Byte](padding)(0))
@@ -881,11 +851,30 @@ object CoreModuleTest extends TestSuite:
     gzip.close()
     output.toByteArray
 
-  private def tarHeader(name: String, size: Int): Array[Byte] =
+  private def tarGzArchiveWithDirectories(
+      directories: Vector[String],
+      files: Vector[(String, String)]
+  ): Array[Byte] =
+    val output = ByteArrayOutputStream()
+    val gzip   = GZIPOutputStream(output)
+    directories.foreach: name =>
+      gzip.write(tarHeader(name, 0, '5'))
+    files.foreach:
+      case (name, content) =>
+        val bytes = content.getBytes(StandardCharsets.UTF_8)
+        gzip.write(tarHeader(name, bytes.length, '0'))
+        gzip.write(bytes)
+        val padding = (512 - (bytes.length % 512)) % 512
+        gzip.write(Array.fill[Byte](padding)(0))
+    gzip.write(Array.fill[Byte](1024)(0))
+    gzip.close()
+    output.toByteArray
+
+  private def tarHeader(name: String, size: Int, entryType: Char): Array[Byte] =
     val header = Array.fill[Byte](512)(0)
     writeTarField(header, 0, 100, name)
     writeTarField(header, 124, 12, f"$size%011o")
-    header(156) = '0'.toByte
+    header(156) = entryType.toByte
     header
 
   private def writeTarField(header: Array[Byte], offset: Int, length: Int, value: String): Unit =
@@ -964,39 +953,6 @@ object CoreModuleTest extends TestSuite:
        |          filename: beta
        |        executables:
        |          - path: bin/beta
-       |""".stripMargin
-
-  private def installerEnvYaml(tempRoot: Path, token: String): String =
-    val appsDir = tempRoot.resolve("apps")
-    s"""
-       |apiVersion: binstaller.io/v1alpha1
-       |kind: BinaryDistributionProfile
-       |metadata:
-       |  name: redaction
-       |spec:
-       |  policy:
-       |    appsDir: "$appsDir"
-       |  vars: {}
-       |  versions:
-       |    alpha: "1.0.0"
-       |  plan:
-       |    - name: alpha
-       |      kind: binary-tool
-       |      spec:
-       |        versionRef: alpha
-       |        installDir: "$appsDir/alpha"
-       |        download:
-       |          url: https://example.invalid/alpha
-       |          filename: alpha
-       |        installer:
-       |          shell: sh
-       |          args:
-       |            - "$appsDir/alpha/alpha"
-       |          env:
-       |            - name: TOKEN
-       |              value: "$token"
-       |        executables:
-       |          - path: bin/alpha
        |""".stripMargin
 
   private def invalidConfigYaml(tempRoot: Path): String =
@@ -1188,25 +1144,20 @@ object CoreModuleTest extends TestSuite:
                                           |  vars:
                                           |    shellText: "$(echo should-not-run)"
                                           |  versions:
-                                          |    script: "1.0.0"
+                                          |    alpha: "1.0.0"
                                           |  plan:
-                                          |    - name: script
+                                          |    - name: alpha
                                           |      kind: binary-tool
                                           |      spec:
-                                          |        versionRef: script
+                                          |        versionRef: alpha
                                           |        installDir: "${appsDir}/${shellText}"
                                           |        createDirectories:
                                           |          - bin
                                           |        download:
-                                          |          url: https://example.invalid/script.sh
-                                          |          filename: script.sh
-                                          |        installer:
-                                          |          shell: sh
-                                          |          args:
-                                          |            - "${downloadPath}"
-                                          |          cleanup: true
+                                          |          url: "https://example.invalid/alpha"
+                                          |          filename: alpha
                                           |        executables:
-                                          |          - path: bin/script
+                                          |          - path: bin/alpha
                                           |""".stripMargin
 
   private val insecureUrlYaml: String = """
@@ -1360,22 +1311,10 @@ private final class RecordingCommandExecutor(result: Either[String, Unit] = Righ
     recordedCommands = recordedCommands :+ spec
     result.left.map(message => CommandExecutionError(spec, message, None))
 
-private final class InstallingCommandExecutor(executablePath: String) extends CommandExecutor:
-
-  private var recordedCommands: Vector[CommandSpec] = Vector.empty
-
-  def commands: Vector[CommandSpec] = recordedCommands
-
-  def run(spec: CommandSpec): Either[CommandExecutionError, Unit] =
-    recordedCommands = recordedCommands :+ spec
-    val target = spec.cwd.resolve(executablePath)
-    Files.createDirectories(target.getParent)
-    Files.writeString(target, "installed")
-    Right(())
-
 private final class RecordingInstallFileSystem(
     stageFailure: Option[String] = None,
-    modeFailure: Option[String] = None
+    modeFailure: Option[String] = None,
+    stagedFiles: Vector[String] = Vector("bin/alpha")
 ) extends InstallFileSystem:
 
   private var modes: Vector[ExecutableModeRequest] = Vector.empty
@@ -1392,7 +1331,7 @@ private final class RecordingInstallFileSystem(
       bytes: Array[Byte]
   ): Either[InstallFileSystemError.StagingFailed, StagedInstall] = stageFailure match
     case Some(message) => Left(InstallFileSystemError.StagingFailed(message))
-    case None          => Right(StagedInstall(Path.of("/tmp/staged-alpha"), installDir))
+    case None          => stageSuccess(installDir)
 
   def stageArchive(
       installDir: Path,
@@ -1402,7 +1341,7 @@ private final class RecordingInstallFileSystem(
       commandExecutor: CommandExecutor
   ): Either[InstallFileSystemError.StagingFailed, StagedInstall] = stageFailure match
     case Some(message) => Left(InstallFileSystemError.StagingFailed(message))
-    case None          => Right(StagedInstall(Path.of("/tmp/staged-alpha"), installDir))
+    case None          => stageSuccess(installDir)
 
   def applyExecutableModes(
       stagedInstall: StagedInstall,
@@ -1432,3 +1371,16 @@ private final class RecordingInstallFileSystem(
     Right(())
 
   def discardStaged(stagedInstall: StagedInstall): Unit = ()
+
+  private def stageSuccess(
+      installDir: Path
+  ): Either[InstallFileSystemError.StagingFailed, StagedInstall] =
+    try
+      val stagingDir = Files.createTempDirectory("binstaller-recording-stage")
+      stagedFiles.foreach: file =>
+        val target = stagingDir.resolve(file)
+        Files.createDirectories(target.getParent)
+        Files.writeString(target, "staged")
+      Right(StagedInstall(stagingDir, installDir))
+    catch
+      case error: Exception => Left(InstallFileSystemError.StagingFailed(error.getMessage))

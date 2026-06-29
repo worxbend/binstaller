@@ -1,6 +1,8 @@
 package binstaller.cli
 
 import binstaller.core.BinaryInstallerService
+import binstaller.core.BinaryDownloadProgress
+import binstaller.core.BinaryDownloadProgressObserver
 import binstaller.core.CoreModule
 import binstaller.core.DryRunMode
 import binstaller.core.HttpTextClient
@@ -16,6 +18,7 @@ import picocli.CommandLine.Command
 import picocli.CommandLine.ScopeType
 
 import java.io.PrintWriter
+import java.net.URI
 import java.util.concurrent.Callable
 
 object CliModule:
@@ -209,8 +212,160 @@ private final class ApplyCommand(
 
   override def call(): Integer = executeWithOptions(
     _.copy(selection = selection, dryRun = dryRun, applyConfirmation = applyConfirmation),
-    service.apply
+    options =>
+      val progressRenderer =
+        CliDownloadProgressRenderer(out, enabled = options.dryRun == DryRunMode.Disabled)
+      val result = service.applyWithProgress(options, progressRenderer)
+      progressRenderer.finish()
+      result.copy(lines = CliApplyOutput.renderLines(result))
   )
+
+private final class CliDownloadProgressRenderer(
+    out: PrintWriter,
+    enabled: Boolean
+) extends BinaryDownloadProgressObserver:
+  private val width = 30
+  private var lastBuckets: Map[String, Int] = Map.empty
+  private var activeLineLength: Int         = 0
+
+  def onProgress(progress: BinaryDownloadProgress): Unit =
+    if enabled then progress match
+      case BinaryDownloadProgress.Started(url, totalBytes) =>
+        lastBuckets = lastBuckets.updated(url, -1)
+        renderInPlace(renderActive(url, downloadedBytes = 0L, totalBytes))
+      case BinaryDownloadProgress.Advanced(url, downloadedBytes, totalBytes) =>
+        val bucket = progressBucket(downloadedBytes, totalBytes)
+        if bucket != lastBuckets.getOrElse(url, -1) then
+          lastBuckets = lastBuckets.updated(url, bucket)
+          renderInPlace(renderActive(url, downloadedBytes, totalBytes))
+      case BinaryDownloadProgress.Finished(url, downloadedBytes, totalBytes) =>
+        lastBuckets = lastBuckets.updated(url, 100)
+        renderCompleted(renderCompletedLine(url, downloadedBytes, totalBytes))
+
+  def finish(): Unit =
+    if enabled && activeLineLength > 0 then
+      out.print(s"\r${" " * activeLineLength}\r")
+      out.flush()
+      activeLineLength = 0
+
+  private def progressBucket(downloadedBytes: Long, totalBytes: Option[Long]): Int =
+    totalBytes.filter(_ > 0L) match
+      case Some(total) => ((downloadedBytes.toDouble / total.toDouble) * 100.0).floor.toInt
+      case None        => (downloadedBytes / (1024L * 1024L)).toInt
+
+  private def renderActive(
+      url: String,
+      downloadedBytes: Long,
+      totalBytes: Option[Long]
+  ): ProgressLine =
+    val label  = fileName(url)
+    val bar    = progressBar(downloadedBytes, totalBytes)
+    val bytes  = byteText(downloadedBytes, totalBytes)
+    val plain  = s"⬇ downloading $label ${bar.plain} $bytes"
+    val styled = s"${fansi.Color.Cyan("⬇ downloading").toString} " +
+      s"${fansi.Color.Yellow(label).toString} ${bar.styled} " +
+      fansi.Color.Cyan(bytes).toString
+    ProgressLine(plain, styled)
+
+  private def renderCompletedLine(
+      url: String,
+      downloadedBytes: Long,
+      totalBytes: Option[Long]
+  ): ProgressLine =
+    val label = fileName(url)
+    val bar   = progressBar(downloadedBytes, totalBytes)
+    val bytes = byteText(downloadedBytes, totalBytes)
+    val plain = s"✅ completed $label ${bar.plain} $bytes"
+    val styled = fansi.Color.Green(s"✅ completed $label").toString +
+      s" ${bar.styled} ${fansi.Color.Green(bytes).toString}"
+    ProgressLine(plain, styled)
+
+  private def renderInPlace(line: ProgressLine): Unit =
+    val padding = " " * (activeLineLength - line.visibleLength).max(0)
+    out.print(s"\r${line.styled}$padding")
+    out.flush()
+    activeLineLength = line.visibleLength
+
+  private def renderCompleted(line: ProgressLine): Unit =
+    val padding = " " * (activeLineLength - line.visibleLength).max(0)
+    out.print(s"\r${line.styled}$padding\n")
+    out.flush()
+    activeLineLength = 0
+
+  private def progressBar(downloadedBytes: Long, totalBytes: Option[Long]): ProgressLine =
+    totalBytes.filter(_ > 0L) match
+      case Some(total) =>
+        val ratio  = (downloadedBytes.toDouble / total.toDouble).max(0.0).min(1.0)
+        val filled = (ratio * width).round.toInt
+        val pct    = (ratio * 100.0).round.toInt
+        val empty  = width - filled
+        val plain  = s"[${"█" * filled}${"░" * empty}] $pct%"
+        val styled = s"[${barColor(ratio)("█" * filled).toString}" +
+          s"${fansi.Color.Blue("░" * empty).toString}] ${percentColor(pct)(s"$pct%").toString}"
+        ProgressLine(plain, styled)
+      case None =>
+        val plain = s"[${"█" * width}]"
+        ProgressLine(plain, fansi.Color.Magenta(plain).toString)
+
+  private def barColor(ratio: Double): fansi.Attrs =
+    if ratio >= 1.0 then fansi.Color.Green
+    else if ratio >= 0.7 then fansi.Color.Yellow
+    else fansi.Color.Cyan
+
+  private def percentColor(percent: Int): fansi.Attrs =
+    if percent >= 100 then fansi.Color.Green
+    else if percent >= 70 then fansi.Color.Yellow
+    else fansi.Color.Cyan
+
+  private def byteText(downloadedBytes: Long, totalBytes: Option[Long]): String =
+    totalBytes match
+      case Some(total) => s"${formatBytes(downloadedBytes)}/${formatBytes(total)}"
+      case None        => formatBytes(downloadedBytes)
+
+  private def formatBytes(bytes: Long): String =
+    val kib = 1024.0
+    val mib = kib * 1024.0
+    val gib = mib * 1024.0
+    if bytes >= gib then f"${bytes / gib}%.1f GiB"
+    else if bytes >= mib then f"${bytes / mib}%.1f MiB"
+    else if bytes >= kib then f"${bytes / kib}%.1f KiB"
+    else s"$bytes B"
+
+  private def fileName(url: String): String =
+    val fallback = "download"
+    scala.util.Try(URI.create(url).getPath)
+      .toOption
+      .flatMap(path => Option(path).map(_.split('/').toVector.filter(_.nonEmpty).lastOption))
+      .flatten
+      .getOrElse(fallback)
+
+private final case class ProgressLine(plain: String, styled: String):
+  def visibleLength: Int = plain.length
+
+private object CliApplyOutput:
+
+  def renderLines(result: InstallerResult): Vector[String] =
+    result.lines.map(colorLine) ++ summary(result)
+
+  private def colorLine(line: String): String =
+    if line.startsWith("installed ") then fansi.Color.Green(line).toString
+    else if line.startsWith("failed ") then fansi.Color.Red(line).toString
+    else line
+
+  private def summary(result: InstallerResult): Vector[String] =
+    val installed = result.lines.count(_.startsWith("installed "))
+    val failed    = result.lines.count(_.startsWith("failed "))
+    val status    =
+      if result.exitCode == 0 then fansi.Color.Green("🎉 apply completed successfully").toString
+      else fansi.Color.Red("💥 apply finished with errors").toString
+    Vector(
+      "",
+      fansi.Color.Magenta("✨ Summary").toString,
+      s"  ${fansi.Color.Green(s"✅ installed: $installed").toString}",
+      s"  ${fansi.Color.Red(s"❌ failed: $failed").toString}",
+      s"  ${fansi.Color.Cyan(s"🚦 exit code: ${result.exitCode}").toString}",
+      s"  $status"
+    )
 
 @Command(
   name = "versions",

@@ -39,6 +39,16 @@ object ConfigModuleTest extends TestSuite:
 
       assert(profile.spec.plan.map(entry => entry.name -> entry.spec.installDir) ==
         exampleToolNames.map(name => name -> s"$${appsDir}/$name"))
+      assert(checksumFor(profile, "helm") ==
+        Some(ChecksumSpec(
+          ChecksumAlgorithm.Sha256,
+          "0a745198de24545d0055cd8414bc8d2ba10363ef5f5d38369ea1b399671cc083"
+        )))
+      assert(checksumFor(profile, "kustomize") ==
+        Some(ChecksumSpec(
+          ChecksumAlgorithm.Sha256,
+          "029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d"
+        )))
       assert(checksumFor(profile, "dotbot") ==
         Some(ChecksumSpec(
           ChecksumAlgorithm.Sha256,
@@ -49,6 +59,28 @@ object ConfigModuleTest extends TestSuite:
           ChecksumAlgorithm.Sha256,
           "25c70bcf327930282823fa6abecc54f14f53fb44b01f988187a07218b711a1a7"
         )))
+
+    test("config example installs Helm from archive, not installer script"):
+      val helm    = toolNamed(exampleProfile, "helm")
+      val archive = helm.spec.download.archive.getOrElse(abort("missing Helm archive spec"))
+
+      assert(helm.spec.download.url == "https://get.helm.sh/helm-${version}-linux-amd64.tar.gz")
+      assert(archive.archiveType == ArchiveType.TarGz)
+      assert(archive.extract.files.map(mapping => mapping.from -> mapping.to) ==
+        Vector("linux-amd64/helm" -> "bin/helm"))
+      assert(helm.spec.executables.map(_.path) == Vector("bin/helm"))
+
+    test("config example installs Kustomize from archive, not installer script"):
+      val kustomize = toolNamed(exampleProfile, "kustomize")
+      val archive   =
+        kustomize.spec.download.archive.getOrElse(abort("missing Kustomize archive spec"))
+
+      assert(kustomize.spec.download.url ==
+        "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/${version}/kustomize_${version}_linux_amd64.tar.gz")
+      assert(archive.archiveType == ArchiveType.TarGz)
+      assert(archive.extract.files.map(mapping => mapping.from -> mapping.to) ==
+        Vector("kustomize" -> "bin/kustomize"))
+      assert(kustomize.spec.executables.map(_.path) == Vector("bin/kustomize"))
 
     test("config example includes Neovim sudo symlinks gated by policy"):
       val profile      = exampleProfile
@@ -82,7 +114,7 @@ object ConfigModuleTest extends TestSuite:
       assert(errors.exists(errorAt("kind")))
       assert(errors.exists(errorAt("spec.plan[0].kind")))
       assert(errors.exists(errorAt("spec.plan[0].spec.download.archive.type")))
-      assert(errors.exists(errorAt("spec.plan[0].spec.installer.shell")))
+      assert(errors.exists(errorAt("spec.plan[0].spec.installer")))
       assert(errors.exists(errorAt("spec.plan[0].spec.executables[0].mode")))
 
     test("duplicate tool names report every duplicated name"):
@@ -111,13 +143,15 @@ object ConfigModuleTest extends TestSuite:
       assert(rejected.exists(errorAt("spec.plan[0].spec.symlinks[0].sudo")))
       assert(accepted.isRight)
 
-    test("zsh is an allowed installer shell"):
-      val result = ConfigModule.loadString(installerShellYaml("zsh"))
+    test("installer blocks are rejected"):
+      val errors = validationErrors(unsupportedInstallerYaml)
 
-      result match
-        case Right(profile) =>
-          assert(profile.spec.plan.head.spec.installer.exists(_.shell == InstallerShell.Zsh))
-        case Left(error) => abort(s"expected zsh installer shell to load, got $error")
+      assert(errors.contains(
+        ValidationError(
+          "spec.plan[0].spec.installer",
+          "installer scripts are not supported; use direct binary or archive download"
+        )
+      ))
 
   private def validationErrors(yaml: String): Vector[ValidationError] =
     ConfigModule.loadString(yaml) match
@@ -192,6 +226,8 @@ object ConfigModuleTest extends TestSuite:
     "zig"                 -> "0.15.2",
     "kind"                -> "0.31.0",
     "zellij"              -> "0.44.1",
+    "helm"                -> "v3.21.2",
+    "kustomize"           -> "v5.8.1",
     "lazygit"             -> "0.61.0",
     "jujutsu"             -> "0.40.0",
     "dotbot"              -> "v0.3.0",
@@ -201,8 +237,6 @@ object ConfigModuleTest extends TestSuite:
   private val expectedDynamicLatestUrlNames: Vector[String] = Vector(
     "minikube",
     "xplr",
-    "helm",
-    "kustomize",
     "neovide",
     "neovim"
   )
@@ -221,7 +255,7 @@ object ConfigModuleTest extends TestSuite:
                                             |    alpha: "1.0.0"
                                             |  plan:
                                             |    - name: alpha
-                                            |      kind: shell-script
+                                            |      kind: legacy-script
                                             |      spec:
                                             |        versionRef: alpha
                                             |        installDir: "${appsDir}/alpha"
@@ -321,15 +355,15 @@ object ConfigModuleTest extends TestSuite:
                                              |          - path: bin/alpha
                                              |""".stripMargin
 
-  private def installerShellYaml(shell: String): String =
-    s"""
+  private val unsupportedInstallerYaml: String =
+    """
        |apiVersion: binstaller.io/v1alpha1
        |kind: BinaryDistributionProfile
        |metadata:
-       |  name: installer-shell
+       |  name: unsupported-installer
        |spec:
        |  policy:
-       |    appsDir: "$${HOME}/.apps"
+       |    appsDir: "${HOME}/.apps"
        |  vars: {}
        |  versions:
        |    alpha: "1.0.0"
@@ -338,14 +372,14 @@ object ConfigModuleTest extends TestSuite:
        |      kind: binary-tool
        |      spec:
        |        versionRef: alpha
-       |        installDir: "$${appsDir}/alpha"
+       |        installDir: "${appsDir}/alpha"
        |        download:
        |          url: https://example.invalid/install.sh
        |          filename: install.sh
        |        installer:
-       |          shell: $shell
+       |          shell: sh
        |          args:
-       |            - "$${downloadPath}"
+       |            - "${downloadPath}"
        |        executables:
        |          - path: bin/alpha
        |""".stripMargin

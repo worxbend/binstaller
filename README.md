@@ -12,8 +12,8 @@ and installs selected tools under a user-controlled apps directory such as
 `${HOME}/.apps`.
 
 The first milestone is intentionally small: binary downloads, archive unpacking,
-installer scripts that are explicit in the manifest, local executable exposure,
-optional sudo symlinks, dry-run output, apply state, and version reporting.
+local executable exposure, optional sudo symlinks, dry-run output, apply state,
+and version reporting.
 
 ## Manifest Shape
 
