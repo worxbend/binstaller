@@ -372,6 +372,19 @@ kind: BinaryDistributionProfile
   and CLI tests cover pinned, `http-text`, and dynamic sources; the app-level
   `lock --config config.example.yaml` smoke passed and its generated lock file
   was removed after validation.
+- 2026-06-29: T012 added `apply --locked`. Locked apply loads
+  `binstaller.lock.json` by default or `--lock-file FILE`, rejects missing,
+  unreadable, stale, incompatible, or incomplete lock files with expected
+  errors, and validates schema, profile name, manifest fingerprint, selected
+  tool entries, resolved versions, resolver provenance, download URL/final
+  provenance, content length when known, and checksum metadata before dry-run
+  rendering or filesystem/state writes. Dry-run output now shows the validated
+  lock file and per-tool locked download/version provenance. Core and CLI tests
+  cover success, stale lock, download provenance drift, missing dynamic lock
+  metadata, and missing-lock no-write paths; the app-level
+  `lock --config config.example.yaml` followed by
+  `apply --config config.example.yaml --dry-run --locked` smoke passed, and the
+  generated lock file was removed after validation.
 
 ## Current Agent Loop State
 
@@ -386,8 +399,9 @@ is:
 - Direct downloads, archive extraction, checksums, symlinks, state/resume,
   root-cause error rendering, colored CLI progress, and colored CLI summaries
   are implemented.
-- `binstaller lock` can persist resolved metadata for the current manifest, but
-  `apply --locked` enforcement is still pending in T012.
+- `binstaller lock` can persist resolved metadata for the current manifest, and
+  `apply --locked` uses that file as a reproducibility gate before dry-run
+  rendering or any filesystem/state writes.
 - Installer scripts are intentionally unsupported. Any `installer:` block should
   fail manifest validation and suggest direct binary or archive download.
 - The remaining command execution boundaries are structured and narrow: sudo

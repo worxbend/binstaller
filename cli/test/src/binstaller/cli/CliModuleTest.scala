@@ -6,6 +6,7 @@ import binstaller.core.BinaryDownloadError
 import binstaller.core.BinaryDownloadProgress
 import binstaller.core.BinaryDownloadProgressObserver
 import binstaller.core.DirectBinaryInstaller
+import binstaller.core.DryRunMode
 import binstaller.core.HttpTextClient
 import binstaller.core.HttpTextError
 import binstaller.core.HttpTextResponse
@@ -13,6 +14,7 @@ import binstaller.core.InstallFileSystem
 import binstaller.core.InstallerEventObserver
 import binstaller.core.InstallerOptions
 import binstaller.core.InstallerResult
+import binstaller.core.LockedApplyMode
 import binstaller.core.LockOptions
 import binstaller.core.ResetState
 import binstaller.core.ApplyStateStore
@@ -111,6 +113,26 @@ object CliModuleTest extends TestSuite:
       assert(result.exitCode == 0)
       assert(service.applyOptions.exists(_.statePath.contains("custom.state.json")))
       assert(service.applyOptions.exists(_.resetState == ResetState.Enabled))
+
+    test("apply forwards locked options"):
+      val service = RecordingInstallerService()
+      val result  = runCli(
+        Vector(
+          "apply",
+          "--config",
+          "profile.yaml",
+          "--dry-run",
+          "--locked",
+          "--lock-file",
+          "custom.lock.json"
+        ),
+        service
+      )
+
+      assert(result.exitCode == 0)
+      assert(service.applyOptions.exists(_.dryRun == DryRunMode.Enabled))
+      assert(service.applyOptions.exists(_.lockedApply == LockedApplyMode.Enabled))
+      assert(service.applyOptions.exists(_.lockPath == "custom.lock.json"))
 
     test("lock forwards output path and selection"):
       val service = RecordingInstallerService()

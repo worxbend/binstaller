@@ -12,6 +12,9 @@ import upickle.default.*
 
 /** Expected lock-file write failure. */
 enum LockFileError:
+  case Missing(path: Path)
+  case ReadFailed(path: Path, message: String)
+  case DecodeFailed(path: Path, message: String)
   case WriteFailed(path: Path, message: String)
 
 /** Rendering helpers for lock-file failures. */
@@ -19,10 +22,19 @@ object LockFileError:
 
   /** Render a lock-file failure into a concise user-facing line. */
   def render(error: LockFileError): String = error match
-    case LockFileError.WriteFailed(path, message) => s"lock write failed for $path: $message"
+    case LockFileError.Missing(path) =>
+      s"lock file $path is missing; run `binstaller lock --config <file>` first or omit --locked"
+    case LockFileError.ReadFailed(path, message)   => s"lock read failed for $path: $message"
+    case LockFileError.DecodeFailed(path, message) => s"lock decode failed for $path: $message"
+    case LockFileError.WriteFailed(path, message)  => s"lock write failed for $path: $message"
 
 /** Runtime options specific to the `lock` command. */
 final case class LockOptions(outputPath: String)
+
+/** Lock command option defaults. */
+object LockOptions:
+  /** Default lock file path shared by `lock` and `apply --locked`. */
+  val defaultOutputPath: String = "binstaller.lock.json"
 
 /** Serialized lock file tied to one profile and manifest fingerprint. */
 final case class LockFile(
@@ -62,6 +74,9 @@ object LockFile:
 
 /** Boundary for atomically saving lock files. */
 trait LockFileStore:
+  /** Load a lock file. */
+  def load(path: Path): Either[LockFileError, LockFile]
+
   /** Persist a lock file atomically where supported by the filesystem. */
   def save(path: Path, lockFile: LockFile): Either[LockFileError, Unit]
 
@@ -71,6 +86,16 @@ object LockFileStore:
   def nio: LockFileStore = NioLockFileStore
 
 private object NioLockFileStore extends LockFileStore:
+
+  def load(path: Path): Either[LockFileError, LockFile] =
+    val normalized = path.toAbsolutePath.normalize()
+    if !Files.exists(normalized) then Left(LockFileError.Missing(normalized))
+    else
+      Try(read[LockFile](Files.readString(normalized))) match
+        case Success(lockFile)                  => Right(lockFile)
+        case Failure(error: upickle.core.Abort) =>
+          Left(LockFileError.DecodeFailed(normalized, error.getMessage))
+        case Failure(error) => Left(LockFileError.ReadFailed(normalized, error.getMessage))
 
   def save(path: Path, lockFile: LockFile): Either[LockFileError, Unit] =
     val normalized = path.toAbsolutePath.normalize()

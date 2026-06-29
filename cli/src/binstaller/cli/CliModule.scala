@@ -10,6 +10,7 @@ import binstaller.core.InstallerOptions
 import binstaller.core.InstallerResult
 import binstaller.core.InstallerRunStatus
 import binstaller.core.ApplyConfirmation
+import binstaller.core.LockedApplyMode
 import binstaller.core.LockOptions
 import binstaller.core.ResetState
 import binstaller.core.RenderSafety
@@ -245,6 +246,8 @@ private final class ApplyCommand(
 ) extends SelectableCommand(root, out, err):
   private var dryRun: DryRunMode                   = DryRunMode.Disabled
   private var applyConfirmation: ApplyConfirmation = ApplyConfirmation.Disabled
+  private var lockedApply: LockedApplyMode         = LockedApplyMode.Disabled
+  private var lockPath: String                     = LockOptions.defaultOutputPath
   private var tui: Boolean                         = false
 
   @CliOption(
@@ -261,6 +264,19 @@ private final class ApplyCommand(
     applyConfirmation = ApplyConfirmation.fromFlag(value)
 
   @CliOption(
+    names = Array("--locked"),
+    description = Array("Require a compatible JSON lock file before rendering or applying.")
+  )
+  def setLockedApply(value: Boolean): Unit = lockedApply = LockedApplyMode.fromFlag(value)
+
+  @CliOption(
+    names = Array("--lock-file"),
+    paramLabel = "FILE",
+    description = Array("Path to the JSON lock file used by --locked.")
+  )
+  def setLockPath(value: String): Unit = lockPath = value
+
+  @CliOption(
     names = Array("--tui"),
     description = Array(
       "Open the explicit apply TUI entrypoint. Default apply output remains script-friendly."
@@ -269,7 +285,13 @@ private final class ApplyCommand(
   def setTui(value: Boolean): Unit = tui = value
 
   override def call(): Integer = executeWithOptions(
-    _.copy(selection = selection, dryRun = dryRun, applyConfirmation = applyConfirmation),
+    _.copy(
+      selection = selection,
+      dryRun = dryRun,
+      applyConfirmation = applyConfirmation,
+      lockPath = lockPath,
+      lockedApply = lockedApply
+    ),
     options =>
       if tui then TuiModule.start(TuiRequest(TuiMode.Apply, options))
       else
@@ -463,7 +485,7 @@ private final class LockCommand(
     out: PrintWriter,
     err: PrintWriter
 ) extends SelectableCommand(root, out, err):
-  private var outputPath: String = "binstaller.lock.json"
+  private var outputPath: String = LockOptions.defaultOutputPath
 
   @CliOption(
     names = Array("--output"),

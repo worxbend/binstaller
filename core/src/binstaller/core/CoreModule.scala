@@ -50,7 +50,9 @@ final case class InstallerOptions(
     verboseOutput: VerboseOutput,
     selection: ToolSelection = ToolSelection.all,
     dryRun: DryRunMode = DryRunMode.Disabled,
-    applyConfirmation: ApplyConfirmation = ApplyConfirmation.Disabled
+    applyConfirmation: ApplyConfirmation = ApplyConfirmation.Disabled,
+    lockPath: String = LockOptions.defaultOutputPath,
+    lockedApply: LockedApplyMode = LockedApplyMode.Disabled
 )
 
 /** Rendered command result and process exit code. */
@@ -950,17 +952,22 @@ private final class ResolvingBinaryInstallerService(
           val result = renderError(error)
           emitSummary(result, stateFilePath = None, eventContext)
           result
-        case Right(prepared) =>
-          val statePath = configuredStatePath(options, prepared.plan)
-          eventContext.emit(InstallerEvent.PlanReady(
-            prepared.plan.tools.size,
-            statePath,
-            _
-          ))
-          val result =
-            StatefulApplyRunner.run(options, prepared, installer, stateStore, eventContext)
-          emitSummary(result, statePath, eventContext)
-          result
+        case Right(prepared) => validateLockIfRequested(options, prepared) match
+            case Left(error) =>
+              val result = renderLockedApplyError(error)
+              emitSummary(result, stateFilePath = None, eventContext)
+              result
+            case Right(_) =>
+              val statePath = configuredStatePath(options, prepared.plan)
+              eventContext.emit(InstallerEvent.PlanReady(
+                prepared.plan.tools.size,
+                statePath,
+                _
+              ))
+              val result =
+                StatefulApplyRunner.run(options, prepared, installer, stateStore, eventContext)
+              emitSummary(result, statePath, eventContext)
+              result
 
   def versions(options: InstallerOptions): InstallerResult =
     resolveFromOptions(options).fold(renderError, renderVersions)
@@ -989,21 +996,24 @@ private final class ResolvingBinaryInstallerService(
       eventContext: InstallerEventContext
   ): InstallerResult =
     eventContext.emit(InstallerEvent.ResolvingStarted(options.configPath, _))
-    resolveSelectedPlan(options) match
+    resolveSelectedPreparedPlan(options) match
       case Left(error) =>
         val result = renderError(error)
         emitSummary(result, stateFilePath = None, eventContext)
         result
-      case Right(plan) =>
+      case Right(prepared) =>
+        val plan      = prepared.plan
         val statePath = configuredStatePath(options, plan)
-        eventContext.emit(InstallerEvent.PlanReady(plan.tools.size, statePath, _))
-        val result = PlanRenderer.render(plan, command)
-        emitSummary(result, statePath, eventContext)
-        result
-
-  private def resolveSelectedPlan(
-      options: InstallerOptions
-  ): Either[ResolvePlanError, ResolvedPlan] = resolveSelectedPreparedPlan(options).map(_.plan)
+        validateLockIfRequested(options, prepared) match
+          case Left(error) =>
+            val result = renderLockedApplyError(error)
+            emitSummary(result, stateFilePath = None, eventContext)
+            result
+          case Right(lockedProvenance) =>
+            eventContext.emit(InstallerEvent.PlanReady(plan.tools.size, statePath, _))
+            val result = PlanRenderer.render(plan, command, lockedProvenance)
+            emitSummary(result, statePath, eventContext)
+            result
 
   private def resolveSelectedPreparedPlan(
       options: InstallerOptions
@@ -1090,6 +1100,18 @@ private final class ResolvingBinaryInstallerService(
   private def renderError(error: ResolvePlanError): InstallerResult =
     InstallerResult(ResolvePlanError.renderLines(error), 1)
 
+  private def validateLockIfRequested(
+      options: InstallerOptions,
+      prepared: PreparedPlan
+  ): Either[LockedApplyError, Option[LockedApplyProvenance]] = options.lockedApply match
+    case LockedApplyMode.Disabled => Right(None)
+    case LockedApplyMode.Enabled  => LockedApplyValidator
+        .validate(prepared, Path.of(options.lockPath), lockFileStore, metadataClient)
+        .map(Some(_))
+
+  private def renderLockedApplyError(error: LockedApplyError): InstallerResult =
+    InstallerResult(LockedApplyError.renderLines(error), 1)
+
 private object ToolSelector:
 
   def select(
@@ -1160,20 +1182,32 @@ private enum PlanRenderCommand:
 
 private object PlanRenderer:
 
-  def render(plan: ResolvedPlan, command: PlanRenderCommand): InstallerResult = InstallerResult(
+  def render(
+      plan: ResolvedPlan,
+      command: PlanRenderCommand,
+      lockedProvenance: Option[LockedApplyProvenance] = None
+  ): InstallerResult = InstallerResult(
     RenderSafety.displayLines(
-      header(plan, command) ++ plan.tools.zipWithIndex.flatMap(renderTool),
+      header(plan, command, lockedProvenance) ++
+        plan.tools.zipWithIndex.flatMap(renderTool(_, lockedProvenance)),
       plan.redactions
     ),
     0
   )
 
-  private def header(plan: ResolvedPlan, command: PlanRenderCommand): Vector[String] =
+  private def header(
+      plan: ResolvedPlan,
+      command: PlanRenderCommand,
+      lockedProvenance: Option[LockedApplyProvenance]
+  ): Vector[String] =
     val sudoSymlinkCount =
       plan.tools.flatMap(_.symlinks).count(_.privilege == SymlinkPrivilege.Sudo)
     val stateLine = plan.policy.stateFile match
       case Some(path) => s"state file: $path (not created)"
       case None       => "state file: not configured"
+    val lockLine = lockedProvenance match
+      case Some(value) => s"lock file: ${value.path} (validated)"
+      case None        => "lock file: not required"
     val sudoLine =
       if sudoSymlinkCount == 0 then "sudo risk: none"
       else
@@ -1187,11 +1221,15 @@ private object PlanRenderer:
       s"tools: ${plan.tools.size}",
       s"apps dir: ${plan.policy.appsDir} (not created)",
       stateLine,
+      lockLine,
       "filesystem: no changes will be made",
       sudoLine
     )
 
-  private def renderTool(indexedTool: (ResolvedTool, Int)): Vector[String] =
+  private def renderTool(
+      indexedTool: (ResolvedTool, Int),
+      lockedProvenance: Option[LockedApplyProvenance]
+  ): Vector[String] =
     val (tool, index) = indexedTool
     Vector(
       "",
@@ -1201,8 +1239,23 @@ private object PlanRenderer:
       s"   download: ${tool.download.url}",
       s"   download file: ${joinPath(tool.installDir, tool.download.filename)}",
       s"   checksum: ${renderChecksum(tool.download.checksum)}"
-    ) ++ renderCreateDirectories(tool) ++ renderStrategy(tool) ++ renderExecutables(tool) ++
+    ) ++ renderLockedProvenance(tool, lockedProvenance) ++
+      renderCreateDirectories(tool) ++ renderStrategy(tool) ++ renderExecutables(tool) ++
       renderSymlinks(tool)
+
+  private def renderLockedProvenance(
+      tool: ResolvedTool,
+      lockedProvenance: Option[LockedApplyProvenance]
+  ): Vector[String] = lockedProvenance.flatMap(_.tools.get(tool.name)) match
+    case Some(lockedTool) =>
+      val size = lockedTool.sizeBytes.map(value => s"$value bytes").getOrElse("unknown")
+      Vector(
+        s"   locked download final url: ${lockedTool.downloadProvenance.finalUrl}",
+        s"   locked download size: $size"
+      ) ++ lockedTool.versionProvenance.map(provenance =>
+        s"   locked version final url: ${provenance.finalUrl}"
+      ).toVector
+    case None => Vector.empty
 
   private def renderVersion(version: ResolvedVersion): String = version match
     case ResolvedVersion.Concrete(value, provenance) =>

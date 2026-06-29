@@ -41,6 +41,7 @@ import javax.net.ssl.SSLSession
 import scala.jdk.CollectionConverters.*
 import scala.util.Using
 import upickle.default.read
+import upickle.default.write
 
 object CoreModuleTest extends TestSuite:
 
@@ -541,6 +542,136 @@ object CoreModuleTest extends TestSuite:
       assert(tools("gamma").dynamicSource)
       assert(!Files.exists(tempRoot.resolve("lock.state.json")))
       assert(!Files.exists(tempRoot.resolve("apps")))
+
+    test("locked dry-run validates lock and renders locked provenance without writes"):
+      val tempRoot = Files.createTempDirectory("binstaller-core-locked-dry-run")
+      val config   = writeConfig(tempRoot, lockYaml(tempRoot))
+      val lockPath = tempRoot.resolve("binstaller.lock.json")
+      writeLock(lockPath, currentLockFile(config, dynamicSize = Some(33L)))
+      val service = lockedApplyService(
+        tempRoot,
+        dynamicSize = Some(33L),
+        installer = DirectBinaryInstaller(
+          FakeBinaryDownloadClient.failure("locked dry-run must not download"),
+          InstallFileSystem.nio
+        )
+      )
+
+      val result = service.apply(
+        applyOptions(config).copy(
+          dryRun = DryRunMode.Enabled,
+          lockPath = lockPath.toString,
+          lockedApply = LockedApplyMode.Enabled
+        )
+      )
+
+      assert(result.exitCode == 0)
+      assert(result.lines.exists(_.startsWith("lock file: ")))
+      assert(result.lines.exists(_.contains("(validated)")))
+      assert(result.lines.exists(
+        _.contains("locked download final url: https://cdn.example.invalid/beta-2.0.0")
+      ))
+      assert(result.lines.exists(
+        _.contains("locked version final url: https://cdn.example.invalid/beta-version")
+      ))
+      assert(!Files.exists(tempRoot.resolve("apps")))
+      assert(!Files.exists(tempRoot.resolve("lock.state.json")))
+
+    test("locked apply rejects stale manifest fingerprint before install"):
+      val tempRoot  = Files.createTempDirectory("binstaller-core-locked-stale")
+      val config    = writeConfig(tempRoot, lockYaml(tempRoot))
+      val lockPath  = tempRoot.resolve("binstaller.lock.json")
+      val staleLock = currentLockFile(config, dynamicSize = Some(33L)).copy(
+        manifestFingerprint = "stale-fingerprint"
+      )
+      writeLock(lockPath, staleLock)
+      val service = lockedApplyService(tempRoot, dynamicSize = Some(33L))
+
+      val result = service.apply(
+        applyOptions(config).copy(
+          applyConfirmation = ApplyConfirmation.Enabled,
+          lockPath = lockPath.toString,
+          lockedApply = LockedApplyMode.Enabled
+        )
+      )
+
+      assert(result.exitCode == 1)
+      assert(result.lines.exists(_.contains("manifest fingerprint changed")))
+      assert(!Files.exists(tempRoot.resolve("apps/alpha")))
+      assert(!Files.exists(tempRoot.resolve("lock.state.json")))
+
+    test("locked apply rejects download provenance drift before install"):
+      val tempRoot  = Files.createTempDirectory("binstaller-core-locked-url-drift")
+      val config    = writeConfig(tempRoot, lockYaml(tempRoot))
+      val lockPath  = tempRoot.resolve("binstaller.lock.json")
+      val staleBeta = currentLockFile(config, dynamicSize = Some(33L)).tools.map:
+        case tool if tool.name == "beta" =>
+          tool.copy(downloadProvenance =
+            UrlProvenance(
+              "https://example.invalid/beta-2.0.0",
+              "https://old-cdn.example.invalid/beta-2.0.0",
+              Vector(UrlRedirectHop(
+                "https://example.invalid/beta-2.0.0",
+                "https://old-cdn.example.invalid/beta-2.0.0",
+                301
+              ))
+            )
+          )
+        case tool => tool
+      writeLock(lockPath, currentLockFile(config, dynamicSize = Some(33L)).copy(tools = staleBeta))
+      val service = lockedApplyService(tempRoot, dynamicSize = Some(33L))
+
+      val result = service.apply(
+        applyOptions(config).copy(
+          applyConfirmation = ApplyConfirmation.Enabled,
+          lockPath = lockPath.toString,
+          lockedApply = LockedApplyMode.Enabled
+        )
+      )
+
+      assert(result.exitCode == 1)
+      assert(result.lines.exists(_.contains("download provenance changed")))
+      assert(!Files.exists(tempRoot.resolve("apps/beta")))
+      assert(!Files.exists(tempRoot.resolve("lock.state.json")))
+
+    test("locked apply rejects missing dynamic lock data"):
+      val tempRoot = Files.createTempDirectory("binstaller-core-locked-dynamic-missing")
+      val config   = writeConfig(tempRoot, lockYaml(tempRoot))
+      val lockPath = tempRoot.resolve("binstaller.lock.json")
+      writeLock(lockPath, currentLockFile(config, dynamicSize = None))
+      val service = lockedApplyService(tempRoot, dynamicSize = Some(33L))
+
+      val result = service.apply(
+        applyOptions(config).copy(
+          dryRun = DryRunMode.Enabled,
+          lockPath = lockPath.toString,
+          lockedApply = LockedApplyMode.Enabled
+        )
+      )
+
+      assert(result.exitCode == 1)
+      assert(result.lines.exists(_.contains("incomplete dynamic lock data")))
+      assert(!Files.exists(tempRoot.resolve("apps")))
+      assert(!Files.exists(tempRoot.resolve("lock.state.json")))
+
+    test("locked apply rejects missing lock before install"):
+      val tempRoot   = Files.createTempDirectory("binstaller-core-locked-missing")
+      val installDir = tempRoot.resolve("alpha")
+      val config     = writeConfig(tempRoot, directBinaryYaml(installDir))
+      val lockPath   = tempRoot.resolve("missing.lock.json")
+      val service    = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
+
+      val result = service.apply(
+        applyOptions(config).copy(
+          applyConfirmation = ApplyConfirmation.Enabled,
+          lockPath = lockPath.toString,
+          lockedApply = LockedApplyMode.Enabled
+        )
+      )
+
+      assert(result.exitCode == 1)
+      assert(result.lines.exists(_.contains("is missing")))
+      assert(!Files.exists(installDir))
 
     test("non dry-run apply requires yes when policy requireConfirmation is true"):
       val tempRoot   = Files.createTempDirectory("binstaller-core-confirm")
@@ -1348,12 +1479,102 @@ object CoreModuleTest extends TestSuite:
     ApplyStateStore.nio(cwd)
   )
 
+  private def lockedApplyService(
+      tempRoot: Path,
+      dynamicSize: Option[Long],
+      installer: DirectBinaryInstaller = DirectBinaryInstaller(
+        RoutingBinaryDownloadClient.success,
+        InstallFileSystem.nio
+      )
+  ): BinaryInstallerService = BinaryInstallerService.resolving(
+    LockHttpTextClient("2.0.0", betaVersionProvenance),
+    installer,
+    ApplyStateStore.nio(tempRoot),
+    lockMetadataClient(dynamicSize),
+    LockFileStore.nio
+  )
+
   private def applyOptions(config: Path): InstallerOptions = InstallerOptions(
     configPath = config.toString,
     statePath = None,
     resetState = ResetState.Disabled,
     verboseOutput = VerboseOutput.Disabled,
     applyConfirmation = ApplyConfirmation.Enabled
+  )
+
+  private def writeLock(path: Path, lockFile: LockFile): Unit =
+    val _ = Files.writeString(path, write(lockFile, indent = 2))
+
+  private def currentLockFile(config: Path, dynamicSize: Option[Long]): LockFile =
+    val profile = ConfigModule.load(config.toString) match
+      case Right(value) => value
+      case Left(error)  => abort(s"expected valid config, got $error")
+    LockFile(
+      LockFile.schemaVersion,
+      profile.metadata.name,
+      ManifestFingerprint.profile(profile),
+      Vector(
+        LockFileTool(
+          name = "alpha",
+          resolvedVersion = Some("1.0.0"),
+          versionProvenance = None,
+          downloadProvenance = UrlProvenance.direct("https://example.invalid/alpha-1.0.0"),
+          sizeBytes = Some(11L),
+          checksum = Some(LockFileChecksum("sha256", "a" * 64)),
+          dynamicSource = false
+        ),
+        LockFileTool(
+          name = "beta",
+          resolvedVersion = Some("2.0.0"),
+          versionProvenance = Some(betaVersionProvenance),
+          downloadProvenance = betaDownloadProvenance,
+          sizeBytes = Some(22L),
+          checksum = None,
+          dynamicSource = false
+        ),
+        LockFileTool(
+          name = "gamma",
+          resolvedVersion = None,
+          versionProvenance = None,
+          downloadProvenance = UrlProvenance.direct("https://example.invalid/latest/gamma"),
+          sizeBytes = dynamicSize,
+          checksum = None,
+          dynamicSource = true
+        )
+      )
+    )
+
+  private def lockMetadataClient(dynamicSize: Option[Long]): BinaryMetadataClient =
+    RoutingBinaryMetadataClient(Map(
+      "https://example.invalid/alpha-1.0.0" -> BinaryMetadata(
+        Some(11L),
+        UrlProvenance.direct("https://example.invalid/alpha-1.0.0")
+      ),
+      "https://example.invalid/beta-2.0.0"   -> BinaryMetadata(Some(22L), betaDownloadProvenance),
+      "https://example.invalid/latest/gamma" -> BinaryMetadata(
+        dynamicSize,
+        UrlProvenance.direct("https://example.invalid/latest/gamma")
+      )
+    ))
+
+  private val betaVersionProvenance: UrlProvenance = UrlProvenance(
+    "https://example.invalid/beta-version",
+    "https://cdn.example.invalid/beta-version",
+    Vector(UrlRedirectHop(
+      "https://example.invalid/beta-version",
+      "https://cdn.example.invalid/beta-version",
+      302
+    ))
+  )
+
+  private val betaDownloadProvenance: UrlProvenance = UrlProvenance(
+    "https://example.invalid/beta-2.0.0",
+    "https://cdn.example.invalid/beta-2.0.0",
+    Vector(UrlRedirectHop(
+      "https://example.invalid/beta-2.0.0",
+      "https://cdn.example.invalid/beta-2.0.0",
+      301
+    ))
   )
 
   private def writeConfig(tempRoot: Path, content: String): Path =
