@@ -48,6 +48,12 @@ kind: BinaryDistributionProfile
   and invalid manifest identity, plan kinds, archive types, executable modes,
   installer shells, duplicate names, unknown version refs, and sudo symlink
   policy violations report aggregated validation errors with YAML-like paths.
+- 2026-06-29: T004 validation checkpoint passed. Focused config/core/cli tests,
+  recursive compile and tests, scalafmt, git whitespace checks, and read-only
+  `app.run --help` / `app.run plan --config config.example.yaml` smoke checks
+  completed successfully with no fixes required. Remaining risk is in the
+  planned T005+ implementation work: CLI plan/apply output still uses
+  placeholder core services until version resolution and planning are added.
 
 ### User Experience Goals
 
