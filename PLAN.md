@@ -156,6 +156,15 @@ as part of this refactor.
   TUI path. Release docs and native release smokes were also migrated to the
   first-class `tui --config` smoke. Targeted CLI/TUI tests, app help smokes,
   JSON validation, stale-doc scan, and `git diff --check` passed.
+- 2026-06-30: Validation iteration 39 completed T016 final validation for the
+  first-class TUI refactor. Focused config/core/CLI/TUI tests, recursive
+  compile/test, scalafmt check, Mill resolution, app help/config smokes,
+  first-class static `tui --config config.example.yaml`, `git diff --check`,
+  and JSON validation all passed. `plan --help` and `apply --help` logs were
+  scanned and contain no `--tui`. Local blockers remain environment-bound:
+  `native-image` is not on `PATH` (`command -v native-image` exits 1), and
+  stdin is not a live TTY (`test -t 0` exits 1), so live raw-terminal smoke
+  remains a documented manual/interactive-environment check.
 
 ## Product Target
 
