@@ -81,7 +81,7 @@ object TuiModule:
       settings: PlanningTuiSettings
   ): InstallerResult = ResolvedPlanSnapshot.resolve(request.options, httpTextClient) match
     case Left(error) => InstallerResult(
-        s"binstaller ${request.mode.commandName} --tui" +: ResolvePlanError.renderLines(error),
+        s"binstaller ${request.entrypointName}" +: ResolvePlanError.renderLines(error),
         1
       )
     case Right(snapshot) =>
@@ -95,7 +95,7 @@ object TuiModule:
       terminal: TuiTerminal
   ): InstallerResult = ResolvedPlanSnapshot.resolve(request.options, httpTextClient) match
     case Left(error) => InstallerResult(
-        s"binstaller ${request.mode.commandName} --tui" +: ResolvePlanError.renderLines(error),
+        s"binstaller ${request.entrypointName}" +: ResolvePlanError.renderLines(error),
         1
       )
     case Right(snapshot) =>
@@ -147,7 +147,13 @@ enum TuiMode:
     case Apply => "apply"
 
 /** Request passed from CLI to the TUI layer. */
-final case class TuiRequest(mode: TuiMode, options: InstallerOptions)
+final case class TuiRequest(
+    mode: TuiMode,
+    options: InstallerOptions,
+    entrypoint: Option[String] = None
+):
+  /** User-facing command label for diagnostics. */
+  def entrypointName: String = entrypoint.getOrElse(s"${mode.commandName} --tui")
 
 /** Terminal viewport used by deterministic renderers. */
 final case class TuiViewport(width: Int, height: Int)

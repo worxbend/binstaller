@@ -59,6 +59,10 @@ object CliModule:
       subcommandLine(PlanCommand(root, service, out, err), out, err)
     )
     commandLine.addSubcommand(
+      "tui",
+      subcommandLine(TuiCommand(root, out, err), out, err)
+    )
+    commandLine.addSubcommand(
       "apply",
       subcommandLine(ApplyCommand(root, service, out, err), out, err)
     )
@@ -216,21 +220,26 @@ private final class PlanCommand(
     out: PrintWriter,
     err: PrintWriter
 ) extends SelectableCommand(root, out, err):
-  private var tui: Boolean = false
-
-  @CliOption(
-    names = Array("--tui"),
-    description = Array(
-      "Open the explicit planning TUI entrypoint. Default plan output remains script-friendly."
-    )
-  )
-  def setTui(value: Boolean): Unit = tui = value
 
   override def call(): Integer = executeWithOptions(
     _.copy(selection = selection, dryRun = DryRunMode.Enabled),
-    options =>
-      if tui then TuiModule.start(TuiRequest(TuiMode.Plan, options))
-      else service.plan(options)
+    service.plan
+  )
+
+@Command(
+  name = "tui",
+  mixinStandardHelpOptions = true,
+  description = Array("Open the interactive terminal UI.")
+)
+private final class TuiCommand(
+    root: BinstallerCommand,
+    out: PrintWriter,
+    err: PrintWriter
+) extends ConfiguredCommand(root, out, err):
+
+  override def call(): Integer = executeWithOptions(
+    _.copy(dryRun = DryRunMode.Enabled),
+    options => TuiModule.start(TuiRequest(TuiMode.Plan, options, Some("tui")))
   )
 
 @Command(
@@ -248,7 +257,6 @@ private final class ApplyCommand(
   private var applyConfirmation: ApplyConfirmation = ApplyConfirmation.Disabled
   private var lockedApply: LockedApplyMode         = LockedApplyMode.Disabled
   private var lockPath: String                     = LockOptions.defaultOutputPath
-  private var tui: Boolean                         = false
 
   @CliOption(
     names = Array("--dry-run"),
@@ -276,14 +284,6 @@ private final class ApplyCommand(
   )
   def setLockPath(value: String): Unit = lockPath = value
 
-  @CliOption(
-    names = Array("--tui"),
-    description = Array(
-      "Open the explicit apply TUI entrypoint. Default apply output remains script-friendly."
-    )
-  )
-  def setTui(value: Boolean): Unit = tui = value
-
   override def call(): Integer = executeWithOptions(
     _.copy(
       selection = selection,
@@ -293,13 +293,11 @@ private final class ApplyCommand(
       lockedApply = lockedApply
     ),
     options =>
-      if tui then TuiModule.start(TuiRequest(TuiMode.Apply, options))
-      else
-        val eventRenderer =
-          CliApplyEventRenderer(out, enabled = options.dryRun == DryRunMode.Disabled)
-        val result = service.applyWithEvents(options, eventRenderer)
-        eventRenderer.finish()
-        result.copy(lines = CliApplyOutput.colorLines(result.lines) ++ eventRenderer.summaryLines)
+      val eventRenderer =
+        CliApplyEventRenderer(out, enabled = options.dryRun == DryRunMode.Disabled)
+      val result = service.applyWithEvents(options, eventRenderer)
+      eventRenderer.finish()
+      result.copy(lines = CliApplyOutput.colorLines(result.lines) ++ eventRenderer.summaryLines)
   )
 
 private final class CliApplyEventRenderer(
