@@ -27,7 +27,8 @@ The GitHub Actions job:
 5. Runs `./mill __.test`.
 6. Builds `./mill app.nativeImage`.
 7. Copies the native executable to `dist/binstaller-linux-amd64`.
-8. Smokes native `--help`, `plan`, and `apply --dry-run`.
+8. Smokes native `--help`, `plan`, `apply --dry-run`, static `plan --tui`,
+   and static `apply --dry-run --tui`.
 9. Creates `binstaller-linux-amd64.tar.gz`.
 10. Writes `SHA256SUMS`.
 11. Publishes the GitHub Release assets.
@@ -67,6 +68,8 @@ native_path="$(find out/app/nativeImage.dest -maxdepth 1 -type f -name native-ex
 "$native_path" --help
 "$native_path" plan --config config.example.yaml
 "$native_path" apply --config config.example.yaml --dry-run
+"$native_path" plan --config config.example.yaml --tui
+"$native_path" apply --config config.example.yaml --dry-run --tui
 "$native_path" versions --config config.example.yaml
 ```
 
@@ -88,6 +91,8 @@ chmod +x dist/binstaller-linux-amd64
 ./dist/binstaller-linux-amd64 --help
 ./dist/binstaller-linux-amd64 plan --config config.example.yaml
 ./dist/binstaller-linux-amd64 apply --config config.example.yaml --dry-run
+./dist/binstaller-linux-amd64 plan --config config.example.yaml --tui
+./dist/binstaller-linux-amd64 apply --config config.example.yaml --dry-run --tui
 ./dist/binstaller-linux-amd64 versions --config config.example.yaml
 ```
 

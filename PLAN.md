@@ -316,6 +316,13 @@ kind: BinaryDistributionProfile
   against `config.example.yaml`, and git whitespace checks. Native-image
   remains locally blocked because `native-image` is not on `PATH`;
   `java -version` reports OpenJDK 25.0.3.
+- 2026-06-29: T006 added static TUI native smokes to the native release
+  workflow. After the native executable is copied to `dist/binstaller-linux-amd64`,
+  the release job now preserves the existing native `--help`, `plan`, and
+  `apply --dry-run` smokes and also runs native `plan --tui` and
+  `apply --dry-run --tui` against `config.example.yaml`. The release guide
+  documents these static TUI native smoke checks for workflow, local native,
+  and post-publish release smoke paths.
 
 ## Current Agent Loop State
 
