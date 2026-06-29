@@ -375,10 +375,16 @@ object PlanningTuiModel:
         s"version: ${ResolvedVersion.render(tool.version)}",
         s"install dir: ${tool.installDir}",
         s"download url: ${tool.download.url}",
+        "download final url: observed during dry-run/apply download boundary",
+        "download provenance: initial manifest URL; redirects are reported after execution",
         s"download file: ${joinPath(tool.installDir, tool.download.filename)}",
+        s"checksum status: ${checksumStatusSummary(tool.download)}",
         s"checksum: ${checksumDetail(tool.download)}"
-      ) ++ versionProvenanceLines(tool.version) ++ archiveLines(tool.download.archive) ++
-        symlinkLines(tool) ++ dryRunPreview(tool),
+      ) ++ versionProvenanceLines(tool.version) ++
+        archiveLines(tool.download.archive) ++
+        symlinkLines(tool) ++
+        Vector(s"sudo risk: ${sudoRiskDetail(tool)}") ++
+        dryRunPreview(tool),
       redactions
     )
   )
@@ -392,13 +398,26 @@ object PlanningTuiModel:
   ): Vector[String] = RenderSafety.displayLines(lines, redactions)
 
   private def versionProvenanceLines(version: ResolvedVersion): Vector[String] = version match
-    case ResolvedVersion.Concrete(_, provenance) =>
-      UrlProvenance.redirectDetailLines("version resolver", provenance)
-    case ResolvedVersion.DynamicLatestUrl(_) => Vector.empty
+    case ResolvedVersion.Concrete(_, Some(provenance)) => Vector(
+        s"version resolver initial url: ${provenance.initialUrl}",
+        s"version resolver final url: ${provenance.finalUrl}",
+        s"version resolver provenance: ${if provenance.redirected then "redirected" else "direct"}"
+      ) ++
+        Option
+          .when(provenance.redirected)(
+            s"version resolver redirects: ${UrlProvenance.redirectChainForDisplay(provenance)}"
+          )
+          .toVector
+    case ResolvedVersion.Concrete(_, None) =>
+      Vector("version resolver provenance: static manifest value")
+    case ResolvedVersion.DynamicLatestUrl(note) => Vector(
+        s"version resolver provenance: dynamic latest-url${note.fold("")(value => s" ($value)")}"
+      )
 
   private def archiveLines(archive: Option[ResolvedArchive]): Vector[String] = archive match
-    case None        => Vector("archive: none")
+    case None        => Vector("archive: none", "archive mappings: none")
     case Some(value) => Vector(s"archive: ${value.original.archiveType.value}") ++
+        Vector("archive mappings:") ++
         mappingLines("archive file", value.files) ++
         mappingLines("archive directory", value.directories)
 
@@ -419,6 +438,11 @@ object PlanningTuiModel:
       case SymlinkPrivilege.Sudo => "sudo"
     s"  $privilege: ${absoluteOrInstallPath(tool.installDir, symlink.target)} -> " +
       absoluteOrInstallPath(tool.installDir, symlink.path)
+
+  private def sudoRiskDetail(tool: ResolvedTool): String =
+    if tool.symlinks.exists(_.privilege == SymlinkPrivilege.Sudo) then
+      "yes - sudo symlink creation may prompt for elevated privileges"
+    else "no"
 
   private def dryRunPreview(tool: ResolvedTool): Vector[String] =
     val strategy = tool.download.archive match
@@ -472,6 +496,12 @@ object PlanningTuiModel:
   private def checksumDetail(download: ResolvedDownload): String = download.checksum match
     case Some(value) => s"${value.algorithm.value} ${value.value} (${checksumStatus(value)})"
     case None        => "missing (not configured)"
+
+  private def checksumStatusSummary(download: ResolvedDownload): String = download.checksum match
+    case Some(value) if ResolvedChecksum.isDiscovered(value) =>
+      s"discovered ${value.algorithm.value}"
+    case Some(value) => s"configured ${value.algorithm.value}"
+    case None        => "missing"
 
   private def checksumOperation(download: ResolvedDownload): String = download.checksum match
     case Some(value) => s"verify ${value.algorithm.value} checksum ${value.value}"
@@ -959,7 +989,7 @@ object ExecutionTuiRenderer:
         PlanningTuiStatus.Active,
         fit(
           s"${header.appName} ${header.appVersion} | mode ${header.mode} execution | " +
-            s"elapsed ${header.elapsedText}",
+            s"action [${header.mode}] | elapsed ${header.elapsedText}",
           width
         )
       ),
@@ -980,8 +1010,8 @@ object ExecutionTuiRenderer:
         Vector(
           paneTitle("Execution", active = true, width),
           fit(
-            s"${spinner(spinnerFrame)} current tool ${value.name} | phase ${value.phase} | " +
-              s"elapsed ${formatDuration(value.elapsedTime)}",
+            s"activity ${spinner(spinnerFrame)} | current tool ${value.name} | " +
+              s"phase ${value.phase} | elapsed ${formatDuration(value.elapsedTime)}",
             width
           ),
           fit(progress, width)
@@ -1046,7 +1076,7 @@ object ExecutionTuiRenderer:
           case Some(total) =>
             s"${progressBar(downloaded, total)} ${byteText(downloaded, Some(total))}"
           case None => s"progress bytes ${byteText(downloaded, None)}"
-      case None => "progress waiting for tool events"
+      case None => s"progress indeterminate ${indeterminateBar} bytes pending"
 
   private def progressBar(downloadedBytes: Long, totalBytes: Long): String =
     val width  = 28
@@ -1055,6 +1085,8 @@ object ExecutionTuiRenderer:
     val empty  = width - filled
     val pct    = (ratio * 100.0).round.toInt
     s"[${"█" * filled}${"░" * empty}] $pct%"
+
+  private def indeterminateBar: String = "[░░░░░░░░░░░░░░░░░░░░░░░░░░░░]"
 
   private def spinner(frame: Int): String = Vector("|", "/", "-", "\\")(frame.abs % 4)
 
@@ -1196,8 +1228,8 @@ object PlanningTuiLayout:
   /** Calculate planning pane heights from the current viewport. */
   def forViewport(viewport: TuiViewport): PlanningTuiLayout =
     val usable = (viewport.height.max(18) - 14).max(4)
-    val table  = usable.min(7).max(3)
-    val detail = ((usable - table) / 2).min(6).max(2)
+    val table  = usable.min(6).max(3)
+    val detail = (((usable - table) * 2) / 5).min(7).max(3)
     val logs   = (usable - table - detail).max(3)
     PlanningTuiLayout(table, detail, logs)
 
@@ -1487,14 +1519,19 @@ object PlanningTuiRenderer:
         PlanningTuiStatus.Active,
         fit(
           s"${header.appName} ${header.appVersion} | mode ${header.mode} | " +
-            s"manifest ${header.manifestName} (${header.manifestKind})",
+            s"action [${header.mode}] | ${header.selectionText}",
           width
         )
+      ),
+      fit(
+        s"profile ${header.manifestName} (${header.manifestKind}) | " +
+          s"manifest ${header.manifestName} (${header.manifestKind})",
+        width
       ),
       fit(s"config ${header.configPath}", width),
       fit(s"state ${header.stateFilePath.getOrElse("not configured")}", width),
       fit(
-        s"host ${header.hostSummary} | ${header.selectionText} | filter ${header.filterText}",
+        s"host ${header.hostSummary} | mode chip ${header.mode} | filter ${header.filterText}",
         width
       ),
       separator(width)
@@ -1521,12 +1558,14 @@ object PlanningTuiRenderer:
   private def rowLine(row: PlanningTuiRow, width: Int): String =
     val marker   = if row.selected then ">" else " "
     val checkbox = if row.checked then "[x]" else "[ ]"
-    val risks    = if row.riskMarkers.isEmpty then "none" else row.riskMarkers.mkString(",")
+    val risks    = if row.riskMarkers.isEmpty then "[ok]" else row.riskMarkers.map(badge).mkString
     val plain    = s"$marker ${cell(row.index.toString, 3)} $checkbox " +
       s"${cell(row.status.label, 10)} ${cell(row.name, 20)} ${cell(row.kind, 12)} " +
       s"${cell(row.version, 18)} ${cell(row.installDir, 26)} " +
       s"${cell(row.checksumState, 10)} ${truncate(risks, 20)}"
     PlanningTuiStatus.style(row.status, fit(plain, width))
+
+  private def badge(value: String): String = s"[$value]"
 
   private def detail(
       detail: Option[PlanningTuiDetail],

@@ -102,7 +102,17 @@ object TuiModuleTest extends TestSuite:
 
     test("execution view shows active tool progress bytes elapsed and logs"):
       val fixture = writeFixture()
-      val state   = ExecutionTuiState
+      val pending = ExecutionTuiRenderer
+        .render(
+          ExecutionTuiState
+            .initial(
+              TuiRequest(TuiMode.Apply, fixture.options),
+              ExecutionTuiSettings.fromPlanning(testSettings(height = 42))
+            )
+            .toModel
+        )
+        .mkString("\n")
+      val state = ExecutionTuiState
         .initial(
           TuiRequest(TuiMode.Apply, fixture.options),
           ExecutionTuiSettings.fromPlanning(testSettings(height = 42))
@@ -123,8 +133,13 @@ object TuiModuleTest extends TestSuite:
           elapsed(350)
         ))
 
-      val plain = stripAnsi(ExecutionTuiRenderer.render(state.toModel).mkString("\n"))
+      val plain        = stripAnsi(ExecutionTuiRenderer.render(state.toModel).mkString("\n"))
+      val pendingPlain = stripAnsi(pending)
+
+      assert(pendingPlain.contains("activity |"))
+      assert(pendingPlain.contains("progress indeterminate"))
       assert(plain.contains("Execution [active]"))
+      assert(plain.contains("activity"))
       assert(plain.contains("current tool alpha"))
       assert(plain.contains("phase Downloading"))
       assert(plain.contains("elapsed 300ms"))
@@ -280,6 +295,48 @@ object TuiModuleTest extends TestSuite:
       assert(model.rows.map(_.name) == Vector("alpha", "beta"))
       assert(model.rows.map(_.kind).distinct == Vector("binary-tool"))
       assert(model.rows.head.checksumState == ChecksumAlgorithm.Sha256.value)
+
+    test("polished planning model carries dense header and entry details"):
+      val fixture   = writeFixture()
+      val alpha     = modelFor(fixture, selectedIndex = 0, width = 100, height = 44)
+      val beta      = modelFor(fixture, selectedIndex = 1, width = 100, height = 44)
+      val sudoModel = modelFor(writeRiskFixture(), selectedIndex = 0, width = 100, height = 44)
+      val rendered  = PlanningTuiRenderer.render(alpha)
+      val plain     = stripAnsi(rendered.mkString("\n"))
+      val alphaText = alpha.detail.map(_.lines.mkString("\n")).getOrElse("")
+      val betaText  = beta.detail.map(_.lines.mkString("\n")).getOrElse("")
+      val sudoText  = sudoModel.detail.map(_.lines.mkString("\n")).getOrElse("")
+
+      assert(plain.contains("binstaller 1.2.3 | mode browse | action [browse]"))
+      assert(plain.contains("profile tui-profile (BinaryDistributionProfile)"))
+      assert(plain.contains(s"config ${fixture.config}"))
+      assert(plain.contains(s"state ${fixture.stateFile}"))
+      assert(plain.contains("host linux/amd64 | mode chip browse"))
+      assert(plain.contains("selected 2 / total 2"))
+      assert(alphaText.contains("version resolver provenance: static manifest value"))
+      assert(alphaText.contains("download final url: observed during dry-run/apply"))
+      assert(alphaText.contains("download provenance: initial manifest URL"))
+      assert(alphaText.contains("checksum status: configured sha256"))
+      assert(alphaText.contains("archive mappings:"))
+      assert(alphaText.contains("archive file: alpha -> bin/alpha"))
+      assert(betaText.contains("symlinks:"))
+      assert(betaText.contains("sudo risk: no"))
+      assert(sudoText.contains("sudo risk: yes"))
+      assert(alphaText.contains("dry-run operation preview:"))
+      assertRenderedWithin(rendered, width = 100)
+
+    test("polished planning renderer clips normal and narrow snapshots without overlap"):
+      val fixture = writeFixture(longValues = true)
+      val normal  =
+        PlanningTuiRenderer.render(modelFor(fixture, selectedIndex = 0, width = 96, height = 44))
+      val narrow =
+        PlanningTuiRenderer.render(modelFor(fixture, selectedIndex = 0, width = 28, height = 24))
+      val plain = stripAnsi(narrow.mkString("\n"))
+
+      assertRenderedWithin(normal, width = 96)
+      assertRenderedWithin(narrow, width = 28)
+      assert(plain.contains("…"))
+      assert(plain.linesIterator.forall(line => !line.contains("  \u001b")))
 
     test("app state owns header entries selection focus filter modal logs and execution state"):
       val fixture = writeFixture()
@@ -763,7 +820,7 @@ object TuiModuleTest extends TestSuite:
       )
       val model = PlanningTuiModel.fromSnapshot(
         snapshot.copy(plan = plan),
-        testSettings(width = 100, height = 50).copy(detailScroll = 6)
+        testSettings(width = 100, height = 50).copy(detailScroll = 8)
       )
 
       val plain = stripAnsi(PlanningTuiRenderer.render(model).mkString("\n"))

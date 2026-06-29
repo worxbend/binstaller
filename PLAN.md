@@ -111,6 +111,15 @@ as part of this refactor.
   terminal failure screen while still closing the terminal boundary. Focused
   core, CLI, TUI, recursive compile, scalafmt, JSON, whitespace, and static
   `tui --config config.example.yaml` checks passed.
+- 2026-06-30: T011 polished the TUI workspace layout. The header now exposes
+  profile/manifest, config/state paths, host, mode chip, action mode, and
+  selected/total count; plan rows render compact risk badges; details include
+  URL/final-URL/provenance, checksum status, archive mappings, symlinks, sudo
+  risk, and dry-run preview; execution frames show activity/progress,
+  indeterminate progress, bytes, elapsed time, logs, result rows, and summary.
+  Snapshot/model tests now cover dense normal-width output and narrow clipping.
+  Focused TUI tests, static `tui --config config.example.yaml`, recursive
+  compile, scalafmt check, JSON validation, and whitespace checks passed.
 
 ## Product Target
 
