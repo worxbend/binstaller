@@ -146,6 +146,13 @@ kind: BinaryDistributionProfile
   completed successfully. Native image build was skipped because `native-image`
   was not available on `PATH`; the active JVM was OpenJDK rather than GraalVM.
   No pending must-fix hardening findings remain without documented deferral.
+- 2026-06-29: VALIDATION-22 checkpoint passed. The configured config/core/CLI
+  tests, recursive compile, recursive tests, scalafmt, git whitespace check,
+  Mill module resolution, task JSON validation, and app-level `--help`, `plan`,
+  `apply --dry-run`, and `versions` smokes against `config.example.yaml` all
+  completed successfully with no source fixes required. Native image execution
+  remains blocked locally because `native-image` is not available on `PATH`;
+  `java -version` reports OpenJDK 25.0.3 rather than GraalVM.
 
 ### User Experience Goals
 
