@@ -101,6 +101,10 @@ kind: BinaryDistributionProfile
   sources, `${appsDir}` install directories, configured sha256 checksums, live
   core resolution of example install paths, and Neovim sudo symlink policy
   gating.
+- 2026-06-29: T013 completed state persistence and resume for apply. State is
+  tied to profile name plus a manifest fingerprint, CWD-local filenames only,
+  atomically written after each terminal tool result, and resume skips completed
+  tools by name while retrying failed tools unless selection excludes them.
 
 ### User Experience Goals
 

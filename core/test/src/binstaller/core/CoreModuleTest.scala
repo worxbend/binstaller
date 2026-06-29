@@ -21,6 +21,7 @@ import java.nio.file.Path
 import java.util.zip.GZIPOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import scala.jdk.CollectionConverters.*
 import scala.util.Using
 
 object CoreModuleTest extends TestSuite:
@@ -429,6 +430,105 @@ object CoreModuleTest extends TestSuite:
         "/usr/local/bin/alpha"
       )))
 
+    test("completed state entries are skipped and failed entries are retried"):
+      val tempRoot     = Files.createTempDirectory("binstaller-core-state-resume")
+      val config       = writeConfig(tempRoot, twoToolYaml(tempRoot, "resume.state.json"))
+      val firstService = statefulService(
+        tempRoot,
+        RoutingBinaryDownloadClient(Map(
+          "https://example.invalid/alpha" -> Right("alpha".getBytes(StandardCharsets.UTF_8)),
+          "https://example.invalid/beta"  -> Left("network unavailable")
+        ))
+      )
+
+      val firstResult = firstService.apply(applyOptions(config))
+
+      assert(firstResult.exitCode == 1)
+      assert(Files.isRegularFile(tempRoot.resolve("apps/alpha/bin/alpha")))
+      assert(!Files.exists(tempRoot.resolve("apps/beta")))
+
+      val secondService = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
+      val skippedResult = secondService.apply(
+        applyOptions(config).copy(selection = ToolSelection(Vector.empty, Vector("beta")))
+      )
+
+      assert(skippedResult.exitCode == 0)
+      assert(skippedResult.lines == Vector("skipped alpha: already completed in state"))
+      assert(!Files.exists(tempRoot.resolve("apps/beta")))
+
+      val retryResult = secondService.apply(applyOptions(config))
+      val state       = loadState(tempRoot, "resume.state.json")
+
+      assert(retryResult.exitCode == 0)
+      assert(retryResult.lines.exists(_.contains("skipped alpha")))
+      assert(retryResult.lines.exists(_.contains("installed beta")))
+      assert(Files.isRegularFile(tempRoot.resolve("apps/beta/bin/beta")))
+      assert(state.tools.map(tool => tool.name -> tool.status) ==
+        Vector("alpha" -> "completed", "beta" -> "completed"))
+      assert(!hasTempStateFile(tempRoot, "resume.state.json"))
+
+    test("incompatible state fails clearly unless reset-state is enabled"):
+      val tempRoot  = Files.createTempDirectory("binstaller-core-state-reset")
+      val config    = writeConfig(tempRoot, twoToolYaml(tempRoot, "mismatch.state.json"))
+      val store     = ApplyStateStore.nio(tempRoot)
+      val statePath = tempRoot.resolve("mismatch.state.json")
+      store.save(
+        statePath,
+        ApplyState.empty("other-profile", "other-fingerprint")
+      ) match
+        case Right(())   => ()
+        case Left(error) => abort(s"failed to seed state: $error")
+      val service = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
+
+      val mismatchResult = service.apply(applyOptions(config))
+      val resetResult    = service.apply(applyOptions(config).copy(resetState = ResetState.Enabled))
+
+      assert(mismatchResult.exitCode == 1)
+      assert(mismatchResult.lines.exists(_.contains("does not match this manifest")))
+      assert(mismatchResult.lines.exists(_.contains("--reset-state")))
+      assert(resetResult.exitCode == 0)
+      assert(loadState(tempRoot, "mismatch.state.json").profileName == "resume-profile")
+
+    test("state paths must be cwd-local filenames"):
+      val tempRoot = Files.createTempDirectory("binstaller-core-state-path")
+      val config   = writeConfig(tempRoot, twoToolYaml(tempRoot, "valid.state.json"))
+      val service  = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
+
+      val absoluteResult = service.apply(
+        applyOptions(config).copy(statePath =
+          Some(tempRoot.resolve("absolute.state.json").toString)
+        )
+      )
+      val nestedResult = service.apply(
+        applyOptions(config).copy(statePath = Some("nested/state.json"))
+      )
+
+      assert(absoluteResult.exitCode == 1)
+      assert(absoluteResult.lines.exists(_.contains("absolute state paths are not allowed")))
+      assert(nestedResult.exitCode == 1)
+      assert(nestedResult.lines.exists(_.contains("current working directory")))
+      assert(!Files.exists(tempRoot.resolve("apps")))
+
+    test("state is saved after each terminal tool result"):
+      val tempRoot = Files.createTempDirectory("binstaller-core-state-writes")
+      val config   = writeConfig(tempRoot, twoToolYaml(tempRoot, "writes.state.json"))
+      val store    = RecordingApplyStateStore(ApplyStateStore.nio(tempRoot))
+      val service  = BinaryInstallerService.resolving(
+        FakeHttpTextClient(""),
+        DirectBinaryInstaller(RoutingBinaryDownloadClient.success, InstallFileSystem.nio),
+        store
+      )
+
+      val result = service.apply(applyOptions(config))
+
+      assert(result.exitCode == 0)
+      assert(store.savedStates.size == 2)
+      assert(store.savedStates.map(_.tools.map(tool => tool.name -> tool.status)) ==
+        Vector(
+          Vector("alpha" -> "completed"),
+          Vector("alpha" -> "completed", "beta" -> "completed")
+        ))
+
   private def resolve(
       yaml: String,
       httpTextClient: HttpTextClient = FakeHttpTextClient("")
@@ -468,6 +568,41 @@ object CoreModuleTest extends TestSuite:
   private def errorAt(path: String)(error: ValidationError): Boolean = error.path == path
 
   private def abort(message: String): Nothing = throw java.lang.AssertionError(message)
+
+  private def statefulService(
+      cwd: Path,
+      downloadClient: BinaryDownloadClient
+  ): BinaryInstallerService = BinaryInstallerService.resolving(
+    FakeHttpTextClient(""),
+    DirectBinaryInstaller(downloadClient, InstallFileSystem.nio),
+    ApplyStateStore.nio(cwd)
+  )
+
+  private def applyOptions(config: Path): InstallerOptions = InstallerOptions(
+    configPath = config.toString,
+    statePath = None,
+    resetState = ResetState.Disabled,
+    verboseOutput = VerboseOutput.Disabled
+  )
+
+  private def writeConfig(tempRoot: Path, content: String): Path =
+    val config = tempRoot.resolve("profile.yaml")
+    Files.writeString(config, content)
+    config
+
+  private def loadState(tempRoot: Path, name: String): ApplyState =
+    ApplyStateStore.nio(tempRoot).load(tempRoot.resolve(name)) match
+      case Right(Some(state)) => state
+      case other              => abort(s"expected saved state, got $other")
+
+  private def hasTempStateFile(
+      tempRoot: Path,
+      name: String
+  ): Boolean = Using.resource(Files.list(tempRoot)): stream =>
+    stream
+      .iterator()
+      .asScala
+      .exists(path => path.getFileName.toString.startsWith(s".$name.tmp-"))
 
   private def exampleConfigPath: Path = upwardPaths(Path.of("").toAbsolutePath)
     .map(_.resolve("config.example.yaml"))
@@ -630,6 +765,48 @@ object CoreModuleTest extends TestSuite:
        |          filename: alpha
        |        executables:
        |          - path: bin/alpha
+       |""".stripMargin
+
+  private def twoToolYaml(tempRoot: Path, stateFile: String): String =
+    val appsDir = tempRoot.resolve("apps")
+    s"""
+       |apiVersion: binstaller.io/v1alpha1
+       |kind: BinaryDistributionProfile
+       |metadata:
+       |  name: resume-profile
+       |spec:
+       |  policy:
+       |    appsDir: "$appsDir"
+       |    stateFile: "$stateFile"
+       |  vars: {}
+       |  versions:
+       |    alpha: "1.0.0"
+       |    beta: "1.0.0"
+       |  plan:
+       |    - name: alpha
+       |      kind: binary-tool
+       |      spec:
+       |        versionRef: alpha
+       |        installDir: "$appsDir/alpha"
+       |        createDirectories:
+       |          - bin
+       |        download:
+       |          url: https://example.invalid/alpha
+       |          filename: alpha
+       |        executables:
+       |          - path: bin/alpha
+       |    - name: beta
+       |      kind: binary-tool
+       |      spec:
+       |        versionRef: beta
+       |        installDir: "$appsDir/beta"
+       |        createDirectories:
+       |          - bin
+       |        download:
+       |          url: https://example.invalid/beta
+       |          filename: beta
+       |        executables:
+       |          - path: bin/beta
        |""".stripMargin
 
   private val testResolutionOptions: ResolutionOptions = ResolutionOptions(
@@ -834,6 +1011,36 @@ private object FakeBinaryDownloadClient:
 
   def failure(message: String): FakeBinaryDownloadClient =
     FakeBinaryDownloadClient(Left(BinaryDownloadError("", message)))
+
+private final class RoutingBinaryDownloadClient(
+    results: Map[String, Either[String, Array[Byte]]]
+) extends BinaryDownloadClient:
+
+  def download(url: String): Either[BinaryDownloadError, Array[Byte]] = results
+    .getOrElse(url, Left(s"unexpected URL $url"))
+    .left
+    .map(message => BinaryDownloadError(url, message))
+
+private object RoutingBinaryDownloadClient:
+
+  def success: RoutingBinaryDownloadClient = RoutingBinaryDownloadClient(Map(
+    "https://example.invalid/alpha" -> Right("alpha".getBytes(StandardCharsets.UTF_8)),
+    "https://example.invalid/beta"  -> Right("beta".getBytes(StandardCharsets.UTF_8))
+  ))
+
+private final class RecordingApplyStateStore(delegate: ApplyStateStore) extends ApplyStateStore:
+
+  private var states: Vector[ApplyState] = Vector.empty
+
+  def savedStates: Vector[ApplyState] = states
+
+  def cwd: Path = delegate.cwd
+
+  def load(path: Path): Either[ApplyStateError, Option[ApplyState]] = delegate.load(path)
+
+  def save(path: Path, state: ApplyState): Either[ApplyStateError, Unit] =
+    states = states :+ state
+    delegate.save(path, state)
 
 private final class FakeArchiveCommandExecutor(path: String, content: String)
     extends CommandExecutor:

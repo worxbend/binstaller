@@ -3,6 +3,9 @@ package binstaller.cli
 import binstaller.core.BinaryInstallerService
 import binstaller.core.HttpTextClient
 import binstaller.core.HttpTextError
+import binstaller.core.InstallerOptions
+import binstaller.core.InstallerResult
+import binstaller.core.ResetState
 import utest.*
 
 import java.io.PrintWriter
@@ -55,6 +58,24 @@ object CliModuleTest extends TestSuite:
 
       assert(result.exitCode != 0)
       assert(result.err.trim == "Missing required option: --config")
+
+    test("apply forwards state override and reset-state"):
+      val service = RecordingInstallerService()
+      val result  = runCli(
+        Vector(
+          "apply",
+          "--config",
+          "profile.yaml",
+          "--state",
+          "custom.state.json",
+          "--reset-state"
+        ),
+        service
+      )
+
+      assert(result.exitCode == 0)
+      assert(service.applyOptions.exists(_.statePath.contains("custom.state.json")))
+      assert(service.applyOptions.exists(_.resetState == ResetState.Enabled))
 
     test("plan prints all example tools in manifest order"):
       val result = runCli(
@@ -221,3 +242,17 @@ private final class FakeHttpTextClient(text: String) extends HttpTextClient:
   def getText(url: String): Either[HttpTextError, String] =
     if url == "https://dl.k8s.io/release/stable.txt" then Right(text)
     else Left(HttpTextError(url, s"unexpected URL $url"))
+
+private final class RecordingInstallerService extends BinaryInstallerService:
+
+  private var recordedApplyOptions: Option[InstallerOptions] = None
+
+  def applyOptions: Option[InstallerOptions] = recordedApplyOptions
+
+  def plan(options: InstallerOptions): InstallerResult = InstallerResult(Vector("plan"), 0)
+
+  def apply(options: InstallerOptions): InstallerResult =
+    recordedApplyOptions = Some(options)
+    InstallerResult(Vector("apply"), 0)
+
+  def versions(options: InstallerOptions): InstallerResult = InstallerResult(Vector("versions"), 0)

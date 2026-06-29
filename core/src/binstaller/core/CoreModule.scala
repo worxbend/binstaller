@@ -27,12 +27,14 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.io.ByteArrayInputStream
 import java.io.InputStream
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermission
 import java.security.MessageDigest
+import java.util.UUID
 import java.util.zip.GZIPInputStream
 import java.util.zip.ZipInputStream
 import scala.jdk.CollectionConverters.*
@@ -41,6 +43,7 @@ import scala.util.Success
 import scala.util.Try
 import scala.util.Using
 import scala.util.matching.Regex
+import upickle.default.*
 
 object CoreModule:
   def modulePath: Vector[String] = Vector(ConfigModule.moduleName, "core")
@@ -103,7 +106,19 @@ object BinaryInstallerService:
   ): BinaryInstallerService = ResolvingBinaryInstallerService(
     httpTextClient,
     ResolutionOptions.fromEnvironment(),
-    installer
+    installer,
+    ApplyStateStore.cwd
+  )
+
+  def resolving(
+      httpTextClient: HttpTextClient,
+      installer: DirectBinaryInstaller,
+      stateStore: ApplyStateStore
+  ): BinaryInstallerService = ResolvingBinaryInstallerService(
+    httpTextClient,
+    ResolutionOptions.fromEnvironment(),
+    installer,
+    stateStore
   )
 
 final case class ResolutionOptions(runtimeVariables: Map[String, String])
@@ -203,7 +218,74 @@ enum ResolvePlanError:
   case ValidationFailed(errors: Vector[ValidationError])
   case SelectionFailed(messages: Vector[String])
 
+enum ApplyStateError:
+  case InvalidPath(path: String, message: String)
+  case ReadFailed(path: Path, message: String)
+  case WriteFailed(path: Path, message: String)
+  case DecodeFailed(path: Path, message: String)
+
+  case IncompatibleState(
+      path: Path,
+      expectedProfileName: String,
+      actualProfileName: String,
+      expectedFingerprint: String,
+      actualFingerprint: String
+  )
+
+final case class ApplyState(
+    schemaVersion: Int,
+    profileName: String,
+    manifestFingerprint: String,
+    tools: Vector[ApplyStateTool]
+)
+
+final case class ApplyStateTool(
+    name: String,
+    status: String,
+    installDir: Option[String],
+    message: Option[String]
+)
+
+object ApplyState:
+  val schemaVersion: Int = 1
+
+  given ReadWriter[ApplyStateTool] = macroRW
+  given ReadWriter[ApplyState]     = macroRW
+
+  def empty(profileName: String, manifestFingerprint: String): ApplyState = ApplyState(
+    schemaVersion,
+    profileName,
+    manifestFingerprint,
+    Vector.empty
+  )
+
+trait ApplyStateStore:
+  def cwd: Path
+  def load(path: Path): Either[ApplyStateError, Option[ApplyState]]
+  def save(path: Path, state: ApplyState): Either[ApplyStateError, Unit]
+
+object ApplyStateStore:
+  def cwd: ApplyStateStore = nio(Path.of("").toAbsolutePath.normalize())
+
+  def nio(directory: Path): ApplyStateStore =
+    NioApplyStateStore(directory.toAbsolutePath.normalize())
+
 final case class ToolInstallSuccess(toolName: String, installDir: String)
+
+enum TerminalToolResult:
+  case Completed(toolName: String, installDir: String)
+  case Failed(toolName: String, message: String)
+
+object TerminalToolResult:
+
+  def line(result: TerminalToolResult): String = result match
+    case TerminalToolResult.Completed(toolName, installDir) => s"installed $toolName to $installDir"
+    case TerminalToolResult.Failed(toolName, message)       => s"failed $toolName: $message"
+
+private final case class ObservedInstallResults(
+    results: Vector[TerminalToolResult],
+    persistenceError: Option[String]
+)
 
 enum ToolInstallError:
   case DownloadFailed(toolName: String, url: String, message: String)
@@ -308,15 +390,24 @@ final class DirectBinaryInstaller(
   def installPlan(
       plan: ResolvedPlan,
       applyConfirmation: ApplyConfirmation = ApplyConfirmation.Disabled
+  ): InstallerResult = installPlanWithObserver(plan, applyConfirmation, _ => Right(()))
+
+  def installPlanWithObserver(
+      plan: ResolvedPlan,
+      applyConfirmation: ApplyConfirmation,
+      terminalObserver: TerminalToolResult => Either[String, Unit]
   ): InstallerResult = sudoPreflight(plan, applyConfirmation) match
     case Some(error) =>
       InstallerResult(Vector(s"failed ${toolName(error)}: ${renderInstallError(error)}"), 1)
     case None =>
-      val results = installTools(plan.policy, plan.tools)
-      val lines   = results.map:
-        case Right(success) => s"installed ${success.toolName} to ${success.installDir}"
-        case Left(error)    => s"failed ${toolName(error)}: ${renderInstallError(error)}"
-      val exitCode = if results.exists(_.isLeft) then 1 else 0
+      val observed = installTools(plan.policy, plan.tools, terminalObserver)
+      val lines    = observed.results.map(TerminalToolResult.line) ++
+        observed.persistenceError.map(message => s"state write failed: $message").toVector
+      val exitCode =
+        if observed.results.exists(_.isInstanceOf[TerminalToolResult.Failed]) ||
+          observed.persistenceError.nonEmpty
+        then 1
+        else 0
 
       InstallerResult(lines, exitCode)
 
@@ -335,14 +426,20 @@ final class DirectBinaryInstaller(
 
   private def installTools(
       policy: ResolvedPolicy,
-      tools: Vector[ResolvedTool]
-  ): Vector[Either[ToolInstallError, ToolInstallSuccess]] = tools.headOption match
-    case None       => Vector.empty
+      tools: Vector[ResolvedTool],
+      terminalObserver: TerminalToolResult => Either[String, Unit]
+  ): ObservedInstallResults = tools.headOption match
+    case None       => ObservedInstallResults(Vector.empty, None)
     case Some(tool) =>
-      val result = installTool(policy, tool)
-      result match
-        case Left(_)  => Vector(result)
-        case Right(_) => result +: installTools(policy, tools.tail)
+      val result   = installTool(policy, tool)
+      val terminal = terminalResult(result)
+      terminalObserver(terminal) match
+        case Left(message) => ObservedInstallResults(Vector(terminal), Some(message))
+        case Right(())     => result match
+            case Left(_)  => ObservedInstallResults(Vector(terminal), None)
+            case Right(_) =>
+              val rest = installTools(policy, tools.tail, terminalObserver)
+              rest.copy(results = terminal +: rest.results)
 
   def installTool(tool: ResolvedTool): Either[ToolInstallError, ToolInstallSuccess] =
     val policy = ResolvedPolicy(tool.installDir, None, AllowSudoSymlinks.Disabled)
@@ -354,6 +451,12 @@ final class DirectBinaryInstaller(
       policy: ResolvedPolicy,
       tool: ResolvedTool
   ): Either[ToolInstallError, ToolInstallSuccess] = installWithoutPreflight(policy, tool)
+
+  private def terminalResult(
+      result: Either[ToolInstallError, ToolInstallSuccess]
+  ): TerminalToolResult = result match
+    case Right(success) => TerminalToolResult.Completed(success.toolName, success.installDir)
+    case Left(error)    => TerminalToolResult.Failed(toolName(error), renderInstallError(error))
 
   private def installWithoutPreflight(
       policy: ResolvedPolicy,
@@ -699,6 +802,312 @@ object PlanResolver:
     if resolved.errors.isEmpty then Right(resolved.value)
     else Left(ResolvePlanError.ValidationFailed(resolved.errors))
 
+private final case class PreparedPlan(
+    profileName: String,
+    manifestFingerprint: String,
+    plan: ResolvedPlan
+)
+
+private object StatefulApplyRunner:
+
+  def run(
+      options: InstallerOptions,
+      prepared: PreparedPlan,
+      installer: DirectBinaryInstaller,
+      stateStore: ApplyStateStore
+  ): InstallerResult = statePath(options, prepared.plan) match
+    case None       => installer.installPlan(prepared.plan, options.applyConfirmation)
+    case Some(path) => loadInitialState(path, options.resetState, prepared, stateStore) match
+        case Left(error)               => InstallerResult(Vector(renderStateError(error)), 1)
+        case Right((statePath, state)) =>
+          runWithState(statePath, state, prepared, options, installer, stateStore)
+
+  private def statePath(options: InstallerOptions, plan: ResolvedPlan): Option[String] =
+    options.statePath.orElse(plan.policy.stateFile)
+
+  private def loadInitialState(
+      rawPath: String,
+      resetState: ResetState,
+      prepared: PreparedPlan,
+      stateStore: ApplyStateStore
+  ): Either[ApplyStateError, (Path, ApplyState)] =
+    for
+      path  <- StatePathResolver.resolve(rawPath, stateStore.cwd)
+      state <- resetState match
+        case ResetState.Enabled => Right(
+            ApplyState.empty(prepared.profileName, prepared.manifestFingerprint)
+          )
+        case ResetState.Disabled => stateStore.load(path).flatMap:
+            case None => Right(ApplyState.empty(prepared.profileName, prepared.manifestFingerprint))
+            case Some(state) => validateState(path, state, prepared)
+    yield path -> state
+
+  private def validateState(
+      path: Path,
+      state: ApplyState,
+      prepared: PreparedPlan
+  ): Either[ApplyStateError, ApplyState] =
+    if state.profileName == prepared.profileName &&
+      state.manifestFingerprint == prepared.manifestFingerprint
+    then Right(state)
+    else
+      Left(
+        ApplyStateError.IncompatibleState(
+          path,
+          prepared.profileName,
+          state.profileName,
+          prepared.manifestFingerprint,
+          state.manifestFingerprint
+        )
+      )
+
+  private def runWithState(
+      path: Path,
+      state: ApplyState,
+      prepared: PreparedPlan,
+      options: InstallerOptions,
+      installer: DirectBinaryInstaller,
+      stateStore: ApplyStateStore
+  ): InstallerResult =
+    val completed    = completedToolNames(state)
+    val pendingTools = prepared.plan.tools.filterNot(tool => completed(tool.name))
+    val skippedLines = prepared.plan.tools
+      .filter(tool => completed(tool.name))
+      .map(tool => s"skipped ${tool.name}: already completed in state")
+    val pendingPlan  = prepared.plan.copy(tools = pendingTools)
+    var currentState = state
+    val result       = installer.installPlanWithObserver(
+      pendingPlan,
+      options.applyConfirmation,
+      terminal =>
+        currentState = updateState(currentState, terminal)
+        stateStore.save(path, currentState).left.map(renderStateError)
+    )
+
+    result.copy(lines = skippedLines ++ result.lines)
+
+  private def completedToolNames(state: ApplyState): Set[String] = state.tools.collect:
+    case tool if tool.status == "completed" => tool.name
+  .toSet
+
+  private def updateState(state: ApplyState, result: TerminalToolResult): ApplyState =
+    val updatedTool = result match
+      case TerminalToolResult.Completed(toolName, installDir) =>
+        ApplyStateTool(toolName, "completed", Some(installDir), None)
+      case TerminalToolResult.Failed(toolName, message) =>
+        ApplyStateTool(toolName, "failed", None, Some(message))
+    state.copy(tools = replaceTool(state.tools, updatedTool))
+
+  private def replaceTool(
+      tools: Vector[ApplyStateTool],
+      updated: ApplyStateTool
+  ): Vector[ApplyStateTool] =
+    val withoutCurrent = tools.filterNot(_.name == updated.name)
+    withoutCurrent :+ updated
+
+  private def renderStateError(error: ApplyStateError): String = error match
+    case ApplyStateError.InvalidPath(path, message)  => s"state path '$path' is invalid: $message"
+    case ApplyStateError.ReadFailed(path, message)   => s"state read failed for $path: $message"
+    case ApplyStateError.WriteFailed(path, message)  => s"state write failed for $path: $message"
+    case ApplyStateError.DecodeFailed(path, message) => s"state decode failed for $path: $message"
+    case ApplyStateError.IncompatibleState(
+          path,
+          expectedProfileName,
+          actualProfileName,
+          expectedFingerprint,
+          actualFingerprint
+        ) =>
+      s"state file $path does not match this manifest: expected profile '$expectedProfileName' " +
+        s"with fingerprint $expectedFingerprint, found profile '$actualProfileName' with " +
+        s"fingerprint $actualFingerprint; rerun with --reset-state to ignore saved state"
+
+private object StatePathResolver:
+
+  def resolve(rawPath: String, cwd: Path): Either[ApplyStateError.InvalidPath, Path] =
+    val path = Path.of(rawPath)
+    if rawPath.trim.isEmpty then invalid(rawPath, "state filename must not be empty")
+    else if path.isAbsolute then invalid(rawPath, "absolute state paths are not allowed")
+    else if path.getNameCount != 1 then
+      invalid(rawPath, "state path must be a filename in the current working directory")
+    else
+      val resolved = cwd.toAbsolutePath.normalize().resolve(path).normalize()
+      if resolved.getParent == cwd.toAbsolutePath.normalize() then Right(resolved)
+      else invalid(rawPath, "state path must stay in the current working directory")
+
+  private def invalid(
+      path: String,
+      message: String
+  ): Either[ApplyStateError.InvalidPath, Path] = Left(ApplyStateError.InvalidPath(path, message))
+
+private final class NioApplyStateStore(val cwd: Path) extends ApplyStateStore:
+
+  def load(path: Path): Either[ApplyStateError, Option[ApplyState]] =
+    if !Files.exists(path) then Right(None)
+    else
+      Try(read[ApplyState](Files.readString(path))) match
+        case Success(state)                     => Right(Some(state))
+        case Failure(error: upickle.core.Abort) =>
+          Left(ApplyStateError.DecodeFailed(path, error.getMessage))
+        case Failure(error) => Left(ApplyStateError.ReadFailed(path, error.getMessage))
+
+  def save(path: Path, state: ApplyState): Either[ApplyStateError, Unit] =
+    val tmp = cwd.resolve(s".${path.getFileName}.tmp-${UUID.randomUUID()}")
+    Try:
+      Files.createDirectories(cwd)
+      val _ = Files.writeString(
+        tmp,
+        write(state, indent = 2),
+        StandardOpenOption.CREATE_NEW,
+        StandardOpenOption.WRITE
+      )
+      val _ = Files.move(
+        tmp,
+        path,
+        StandardCopyOption.ATOMIC_MOVE,
+        StandardCopyOption.REPLACE_EXISTING
+      )
+    match
+      case Success(_)     => Right(())
+      case Failure(error) =>
+        val _ = Files.deleteIfExists(tmp)
+        Left(ApplyStateError.WriteFailed(path, error.getMessage))
+
+private object ManifestFingerprint:
+
+  def profile(profile: BinaryDistributionProfile): String =
+    Sha256.digest(canonicalProfile(profile).getBytes(StandardCharsets.UTF_8))
+
+  private def canonicalProfile(profile: BinaryDistributionProfile): String =
+    val builder = StringBuilder()
+    append(builder, "apiVersion", profile.apiVersion.value)
+    append(builder, "kind", profile.kind.value)
+    append(builder, "metadata.name", profile.metadata.name)
+    appendMap(builder, "metadata.labels", profile.metadata.labels)
+    appendMap(builder, "metadata.annotations", profile.metadata.annotations)
+    appendPolicy(builder, profile.spec.policy)
+    appendMap(builder, "spec.vars", profile.spec.vars)
+    appendVersions(builder, profile.spec.versions)
+    appendPlan(builder, profile.spec.plan)
+    builder.result()
+
+  private def appendPolicy(builder: StringBuilder, policy: binstaller.config.InstallPolicy): Unit =
+    append(builder, "spec.policy.dryRun", policy.dryRun.toString)
+    append(builder, "spec.policy.continueOnError", policy.continueOnError.toString)
+    append(builder, "spec.policy.appsDir", policy.appsDir)
+    append(builder, "spec.policy.cleanInstall", policy.cleanInstall.toString)
+    append(builder, "spec.policy.requireConfirmation", policy.requireConfirmation.toString)
+    append(builder, "spec.policy.allowSudoSymlinks", policy.allowSudoSymlinks.toString)
+    append(builder, "spec.policy.stateFile", policy.stateFile.getOrElse(""))
+
+  private def appendVersions(
+      builder: StringBuilder,
+      versions: Map[String, VersionSource]
+  ): Unit = versions.toVector.sortBy(_._1).foreach:
+    case (name, source) => source match
+        case VersionSource.Pinned(value)       => append(builder, s"spec.versions.$name", value)
+        case VersionSource.Dynamic(kind, note) =>
+          append(builder, s"spec.versions.$name.dynamic.type", kind.value)
+          append(builder, s"spec.versions.$name.dynamic.note", note.getOrElse(""))
+        case VersionSource.Resolver(kind, url) =>
+          append(builder, s"spec.versions.$name.resolver.type", kind.value)
+          append(builder, s"spec.versions.$name.resolver.url", url)
+
+  private def appendPlan(builder: StringBuilder, plan: Vector[PlanEntry]): Unit =
+    plan.zipWithIndex.foreach:
+      case (entry, index) =>
+        val base = s"spec.plan[$index]"
+        append(builder, s"$base.name", entry.name)
+        append(builder, s"$base.kind", entry.kind.value)
+        append(builder, s"$base.description", entry.description.getOrElse(""))
+        append(
+          builder,
+          s"$base.when.os.family",
+          entry.when.flatMap(_.os).flatMap(_.family).getOrElse("")
+        )
+        append(
+          builder,
+          s"$base.when.architecture",
+          entry.when.flatMap(_.architecture).getOrElse("")
+        )
+        appendToolSpec(builder, s"$base.spec", entry.spec)
+
+  private def appendToolSpec(
+      builder: StringBuilder,
+      base: String,
+      spec: BinaryToolSpec
+  ): Unit =
+    append(builder, s"$base.versionRef", spec.versionRef)
+    append(builder, s"$base.installDir", spec.installDir)
+    appendVector(builder, s"$base.createDirectories", spec.createDirectories)
+    appendDownload(builder, s"$base.download", spec.download)
+    spec.installer.foreach(appendInstaller(builder, s"$base.installer", _))
+    appendExecutables(builder, s"$base.executables", spec.executables)
+    appendSymlinks(builder, s"$base.symlinks", spec.symlinks)
+
+  private def appendDownload(builder: StringBuilder, base: String, download: DownloadSpec): Unit =
+    append(builder, s"$base.url", download.url)
+    append(builder, s"$base.filename", download.filename)
+    download.checksum.foreach: checksum =>
+      append(builder, s"$base.checksum.algorithm", checksum.algorithm.value)
+      append(builder, s"$base.checksum.value", checksum.value)
+    download.archive.foreach: archive =>
+      append(builder, s"$base.archive.type", archive.archiveType.value)
+      appendMappings(builder, s"$base.archive.extract.files", archive.extract.files)
+      appendMappings(builder, s"$base.archive.extract.directories", archive.extract.directories)
+
+  private def appendInstaller(
+      builder: StringBuilder,
+      base: String,
+      installer: InstallerSpec
+  ): Unit =
+    append(builder, s"$base.shell", installer.shell.value)
+    appendVector(builder, s"$base.args", installer.args)
+    installer.env.zipWithIndex.foreach:
+      case (env, index) =>
+        append(builder, s"$base.env[$index].name", env.name)
+        append(builder, s"$base.env[$index].value", env.value)
+    append(builder, s"$base.cleanup", installer.cleanup.toString)
+
+  private def appendExecutables(
+      builder: StringBuilder,
+      base: String,
+      executables: Vector[binstaller.config.ExecutableSpec]
+  ): Unit = executables.zipWithIndex.foreach:
+    case (executable, index) =>
+      append(builder, s"$base[$index].path", executable.path)
+      append(builder, s"$base[$index].mode", executable.mode.map(_.value).getOrElse(""))
+
+  private def appendSymlinks(
+      builder: StringBuilder,
+      base: String,
+      symlinks: Vector[binstaller.config.SymlinkSpec]
+  ): Unit = symlinks.zipWithIndex.foreach:
+    case (symlink, index) =>
+      append(builder, s"$base[$index].path", symlink.path)
+      append(builder, s"$base[$index].target", symlink.target)
+      append(builder, s"$base[$index].privilege", symlink.privilege.toString)
+
+  private def appendMappings(
+      builder: StringBuilder,
+      base: String,
+      mappings: Vector[ExtractMapping]
+  ): Unit = mappings.zipWithIndex.foreach:
+    case (mapping, index) =>
+      append(builder, s"$base[$index].from", mapping.from)
+      append(builder, s"$base[$index].to", mapping.to)
+
+  private def appendMap(builder: StringBuilder, base: String, values: Map[String, String]): Unit =
+    values.toVector.sortBy(_._1).foreach:
+      case (name, value) => append(builder, s"$base.$name", value)
+
+  private def appendVector(builder: StringBuilder, base: String, values: Vector[String]): Unit =
+    values.zipWithIndex.foreach:
+      case (value, index) => append(builder, s"$base[$index]", value)
+
+  private def append(builder: StringBuilder, key: String, value: String): Unit =
+    val _ = builder.append(key.length).append(':').append(key).append('=')
+    val _ = builder.append(value.length).append(':').append(value).append('\n')
+
 private object PlaceholderBinaryInstallerService extends BinaryInstallerService:
   def plan(options: InstallerOptions): InstallerResult = placeholderResult("plan", options)
 
@@ -715,7 +1124,8 @@ private object PlaceholderBinaryInstallerService extends BinaryInstallerService:
 private final class ResolvingBinaryInstallerService(
     httpTextClient: HttpTextClient,
     resolutionOptions: ResolutionOptions,
-    installer: DirectBinaryInstaller
+    installer: DirectBinaryInstaller,
+    stateStore: ApplyStateStore
 ) extends BinaryInstallerService:
 
   def plan(options: InstallerOptions): InstallerResult =
@@ -725,13 +1135,13 @@ private final class ResolvingBinaryInstallerService(
     if options.dryRun == DryRunMode.Enabled then
       renderSelectedPlan(options, PlanRenderCommand.ApplyDryRun)
     else
-      resolveSelectedPlan(options).fold(
+      resolveSelectedPreparedPlan(options).fold(
         renderError,
-        plan => installer.installPlan(plan, options.applyConfirmation)
+        prepared => StatefulApplyRunner.run(options, prepared, installer, stateStore)
       )
 
   def versions(options: InstallerOptions): InstallerResult =
-    resolveFromOptions(options).fold(renderError, renderVersions)
+    resolveFromOptions(options).fold(renderError, prepared => renderVersions(prepared.plan))
 
   private def renderSelectedPlan(
       options: InstallerOptions,
@@ -741,14 +1151,25 @@ private final class ResolvingBinaryInstallerService(
 
   private def resolveSelectedPlan(
       options: InstallerOptions
-  ): Either[ResolvePlanError, ResolvedPlan] =
-    resolveFromOptions(options).flatMap(plan => ToolSelector.select(plan, options.selection))
+  ): Either[ResolvePlanError, ResolvedPlan] = resolveSelectedPreparedPlan(options).map(_.plan)
+
+  private def resolveSelectedPreparedPlan(
+      options: InstallerOptions
+  ): Either[ResolvePlanError, PreparedPlan] = resolveFromOptions(options).flatMap: prepared =>
+    ToolSelector.select(prepared.plan, options.selection).map: selected =>
+      prepared.copy(plan = selected)
 
   private def resolveFromOptions(
       options: InstallerOptions
-  ): Either[ResolvePlanError, ResolvedPlan] = ConfigModule.load(options.configPath) match
+  ): Either[ResolvePlanError, PreparedPlan] = ConfigModule.load(options.configPath) match
     case Left(error)    => Left(ResolvePlanError.ConfigLoadFailed(error))
-    case Right(profile) => PlanResolver.resolve(profile, resolutionOptions, httpTextClient)
+    case Right(profile) => PlanResolver.resolve(profile, resolutionOptions, httpTextClient).map:
+        plan =>
+          PreparedPlan(
+            profile.metadata.name,
+            ManifestFingerprint.profile(profile),
+            plan
+          )
 
   private def renderVersions(plan: ResolvedPlan): InstallerResult = InstallerResult(
     plan.tools.map(tool => s"${tool.name} ${ResolvedVersion.render(tool.version)}"),
