@@ -184,6 +184,12 @@ kind: BinaryDistributionProfile
   `config.example.yaml`, scalafmt, and git whitespace checks all passed with no
   source fixes required. The explicit `plan --tui` and `apply --tui`
   entrypoints remain isolated from default CLI output.
+- 2026-06-29: T005 of the TUI phase completed the deterministic planning TUI
+  renderer. `plan --tui` and `apply --tui --dry-run` now render a dense
+  pre-execution frame with header metadata, selected plan table, highlighted
+  details, logs, footer status, and keybar. The renderer uses `fansi` styling,
+  truncates long table values with an ellipsis while keeping full values in
+  details, and has focused model/rendering tests.
 
 ## Current Agent Loop State
 
@@ -202,9 +208,10 @@ is:
   fail manifest validation and suggest direct binary or archive download.
 - The remaining command execution boundaries are structured and narrow: sudo
   symlink operations, the current `tar.xz` fallback, and test/fake executors.
-- The next user-facing gap is the TUI: users need a richer apply experience
-  with focusable panes, a larger scrollable logs area, visible state-file path,
-  clear active execution state, and styled progress/status rendering.
+- The planning TUI now renders deterministically behind explicit `plan --tui`
+  and `apply --tui` entrypoints. The next user-facing gap is interactive TUI
+  navigation: focusable panes, selectable rows, filter input, scrollable details
+  and logs, resize handling, and clean terminal exit.
 - After the TUI lands, the repository should enter a codebase-hardening and
   documentation phase before README is treated as final.
 
@@ -216,7 +223,7 @@ The next agent loop should execute this ordered pending queue:
 - T002: Add TUI module shell - add the `tui` module and wire explicit plan/apply TUI entrypoints without changing default script-friendly CLI output.
 - T003: Introduce apply events - make core emit structured renderer-agnostic plan/apply events for CLI and TUI.
 - T004: Checkpoint TUI foundation - validate the module shell and event model before terminal rendering work.
-- T005: Render planning TUI - implement header, plan table/tree, details pane, logs pane, footer, keybar, colors, truncation, and deterministic rendering tests.
+- T005: Render planning TUI - completed deterministic header, plan table, details, logs, footer, keybar, colors, truncation, and renderer/model tests.
 - T006: Add TUI navigation - implement focus cycling, selection, log/detail scrolling, filtering, help, resize handling, and clean quit.
 - T007: Render execution TUI - implement the active apply screen with spinner/progress, recent logs, completed/failed rows, and terminal cleanup.
 - T008: Checkpoint TUI experience - run full validation and manual terminal smoke checks after the TUI is usable.

@@ -419,6 +419,59 @@ enum ResolvePlanError:
   case ValidationFailed(errors: Vector[ValidationError])
   case SelectionFailed(messages: Vector[String])
 
+object ResolvePlanError:
+
+  def renderLines(error: ResolvePlanError): Vector[String] = error match
+    case ResolvePlanError.ConfigLoadFailed(loadError) => renderConfigLoadError(loadError)
+    case ResolvePlanError.ValidationFailed(errors)    =>
+      errors.map(error => s"${error.path}: ${error.message}")
+    case ResolvePlanError.SelectionFailed(messages) =>
+      messages.map(message => s"selection: $message")
+
+  private def renderConfigLoadError(error: ConfigLoadError): Vector[String] = error match
+    case ConfigLoadError.ValidationFailed(errors) =>
+      errors.map(error => s"${error.path}: ${error.message}")
+    case ConfigLoadError.ReadFailed(path, message) =>
+      Vector(s"config read failed for $path: $message")
+    case ConfigLoadError.ParseFailed(message) => Vector(s"config parse failed: $message")
+
+final case class ResolvedPlanSnapshot(
+    profileName: String,
+    manifestKind: String,
+    configPath: String,
+    stateFilePath: Option[String],
+    plan: ResolvedPlan
+)
+
+object ResolvedPlanSnapshot:
+
+  def resolve(
+      options: InstallerOptions,
+      httpTextClient: HttpTextClient
+  ): Either[ResolvePlanError, ResolvedPlanSnapshot] = resolve(
+    options,
+    httpTextClient,
+    ResolutionOptions.fromEnvironment()
+  )
+
+  def resolve(
+      options: InstallerOptions,
+      httpTextClient: HttpTextClient,
+      resolutionOptions: ResolutionOptions
+  ): Either[ResolvePlanError, ResolvedPlanSnapshot] = ConfigModule.load(options.configPath) match
+    case Left(error)    => Left(ResolvePlanError.ConfigLoadFailed(error))
+    case Right(profile) => PlanResolver
+        .resolve(profile, resolutionOptions, httpTextClient)
+        .flatMap(plan => ToolSelector.select(plan, options.selection))
+        .map: selectedPlan =>
+          ResolvedPlanSnapshot(
+            profileName = profile.metadata.name,
+            manifestKind = profile.kind.value,
+            configPath = options.configPath,
+            stateFilePath = options.statePath.orElse(selectedPlan.policy.stateFile),
+            plan = selectedPlan
+          )
+
 enum ApplyStateError:
   case InvalidPath(path: String, message: String)
   case ReadFailed(path: Path, message: String)
@@ -1645,20 +1698,8 @@ private final class ResolvingBinaryInstallerService(
         val value = resolved.map(ResolvedVersion.render).getOrElse("<unresolved>")
         s"resolved $name: $value from $url (tools: $toolList)"
 
-  private def renderError(error: ResolvePlanError): InstallerResult = error match
-    case ResolvePlanError.ConfigLoadFailed(loadError) => renderConfigLoadError(loadError)
-    case ResolvePlanError.ValidationFailed(errors)    =>
-      InstallerResult(errors.map(error => s"${error.path}: ${error.message}"), 1)
-    case ResolvePlanError.SelectionFailed(messages) =>
-      InstallerResult(messages.map(message => s"selection: $message"), 1)
-
-  private def renderConfigLoadError(error: ConfigLoadError): InstallerResult = error match
-    case ConfigLoadError.ValidationFailed(errors) =>
-      InstallerResult(errors.map(error => s"${error.path}: ${error.message}"), 1)
-    case ConfigLoadError.ReadFailed(path, message) =>
-      InstallerResult(Vector(s"config read failed for $path: $message"), 1)
-    case ConfigLoadError.ParseFailed(message) =>
-      InstallerResult(Vector(s"config parse failed: $message"), 1)
+  private def renderError(error: ResolvePlanError): InstallerResult =
+    InstallerResult(ResolvePlanError.renderLines(error), 1)
 
 private object ToolSelector:
 

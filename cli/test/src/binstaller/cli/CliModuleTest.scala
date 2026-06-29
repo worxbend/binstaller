@@ -105,8 +105,8 @@ object CliModuleTest extends TestSuite:
       val result  = runCli(Vector("plan", "--config", "profile.yaml", "--tui"), service)
 
       assert(result.exitCode == 1)
-      assert(result.out.contains("binstaller plan --tui is not implemented yet."))
-      assert(result.out.contains("non-interactive"))
+      assert(result.out.contains("binstaller plan --tui"))
+      assert(result.out.contains("config read failed for profile.yaml"))
       assert(service.planOptions.isEmpty)
 
     test("apply tui is explicit and does not call apply service"):
@@ -114,8 +114,8 @@ object CliModuleTest extends TestSuite:
       val result  = runCli(Vector("apply", "--config", "profile.yaml", "--tui"), service)
 
       assert(result.exitCode == 1)
-      assert(result.out.contains("binstaller apply --tui is not implemented yet."))
-      assert(result.out.contains("apply --dry-run"))
+      assert(result.out.contains("binstaller apply --tui"))
+      assert(result.out.contains("config read failed for profile.yaml"))
       assert(service.applyOptions.isEmpty)
 
     test("plan prints all example tools in manifest order"):
