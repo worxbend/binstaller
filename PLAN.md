@@ -329,6 +329,14 @@ kind: BinaryDistributionProfile
   provenance, HTTP text resolution, runtime HTTP URL/client helpers, and binary
   download/body limits. The module graph was not changed, and `./mill core.test`,
   `./mill __.compile`, scalafmt check, and git whitespace checks passed.
+- 2026-06-29: T008 extracted archive extraction, structured command execution,
+  install filesystem staging/replacement, and symlink apply boundaries out of
+  `CoreModule.scala` into focused core source files. Security-sensitive comments
+  remain beside traversal normalization, archive metadata rejection, command
+  environment isolation, sudo argv construction, checksum-before-replace, and
+  replacement rollback. `./mill core.test`, `./mill cli.test`, `./mill
+  __.compile`, scalafmt check, task JSON validation, and git whitespace checks
+  passed.
 
 ## Current Agent Loop State
 
