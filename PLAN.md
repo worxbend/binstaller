@@ -33,9 +33,9 @@ as part of this refactor.
   scrollable details/logs, static fallback for non-interactive shells, terminal
   cleanup, resize handling, and tests.
 - Core exposes renderer-agnostic plan/apply events and should remain UI-agnostic.
-- The current design is still wrong for the product direction: mode selection
-  and entry selection are not yet owned by one unified TUI app state. The TUI
-  should be the application shell where the user decides what to run.
+- The TUI now owns one unified app state for browsing, checkbox selection,
+  filtering, plan preview, dry-run, confirmed apply, logs, and modals. Remaining
+  work is documentation/review/README closure and final validation.
 
 ## Implementation Progress
 
@@ -138,6 +138,15 @@ as part of this refactor.
   passed without production or test source fixes. Local blockers remain
   environment-bound: `native-image` is not on `PATH`, and stdin is not a live
   TTY for the manual raw-terminal smoke.
+- 2026-06-30: T014 updated the architecture, TUI guide, manual TUI smoke,
+  security, and testing docs for the first-class `binstaller tui` command. The
+  docs now describe TUI-local selection, filtering, internal `p`/`d`/`r`
+  actions, confirmation and failure modals, modal/log redaction, terminal
+  control scrubbing, selected-entry execution guarantees, terminal lifecycle
+  expectations, deterministic TUI tests, and the static non-interactive
+  `./mill app.run tui --config config.example.yaml` smoke. Targeted docs checks
+  passed: `git diff --check`, `./mill app.run tui --help`, and
+  `./mill app.run tui --config config.example.yaml`.
 
 ## Product Target
 

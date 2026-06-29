@@ -1,6 +1,6 @@
 # Testing Guide
 
-Date: 2026-06-29
+Date: 2026-06-30
 
 Use the checked-in Mill launcher. The project is a Scala 3/Mill build; do not
 add sbt, Maven, Gradle, npm, or Make for normal validation.
@@ -29,11 +29,12 @@ App smokes:
 
 ```bash
 ./mill app.run --help
+./mill app.run tui --help
 ./mill app.run plan --config config.example.yaml
 ./mill app.run apply --config config.example.yaml --dry-run
 ./mill app.run versions --config config.example.yaml
-./mill app.run plan --config config.example.yaml --tui
-./mill app.run apply --config config.example.yaml --dry-run --tui
+./mill app.run lock --help
+./mill app.run tui --config config.example.yaml
 ```
 
 Use `./mill mill.scalalib.scalafmt/reformatAll` to repair formatting.
@@ -93,12 +94,30 @@ Use plain-output assertions for text, table content, and progress summaries.
 Keep at least one assertion proving colored output is present when color itself
 is part of the behavior.
 
-For TUI, prefer deterministic model and renderer tests:
+For TUI, prefer deterministic state, renderer, input, and terminal-boundary
+tests:
 
-- render a static planning or execution model
+- build `TuiAppState` from a resolved snapshot and assert header, entries,
+  selection, filter, focus, modal, logs, and execution state
+- drive `TuiAppController` or `PlanningTuiSession.run` with explicit
+  `TuiInput` values for keybindings, selection, filtering, modals, and action
+  shortcuts
+- assert selected-entry plan/dry-run/apply actions convert TUI-local selection
+  to core `ToolSelection` only at service boundaries
+- render static browsing and execution models
 - strip ANSI and compare stable substrings
-- drive `PlanningTuiSession.run` with explicit `TuiInput` values
-- use `FakeTuiTerminal` for open/close and non-interactive fallback assertions
+- use `FakeTuiTerminal` for open/close, render-failure cleanup, resize, Ctrl+C,
+  quit, modal close, and non-interactive fallback assertions
+
+The static TUI smoke command is:
+
+```bash
+./mill app.run tui --config config.example.yaml
+```
+
+In non-interactive shells it should render a TUI-shaped frame plus a clear
+`non-interactive terminal detected` message without entering raw mode or the
+alternate screen.
 
 Live raw-terminal behavior remains manual and is documented in
 `docs/tui-smoke.md`.

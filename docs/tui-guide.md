@@ -1,35 +1,44 @@
 # TUI Guide
 
-Date: 2026-06-29
+Date: 2026-06-30
 
 The TUI is explicit. Default commands remain script-friendly.
 
 ```bash
-binstaller plan --config config.example.yaml --tui
-binstaller apply --config config.example.yaml --dry-run --tui
-binstaller apply --config config.example.yaml --tui --yes
+binstaller tui --config config.example.yaml
+binstaller tui --config config.example.yaml --state binstaller-state.json
+binstaller tui --config config.example.yaml --reset-state --verbose
 ```
+
+`plan`, `apply`, `versions`, and `lock` stay non-interactive. The TUI command
+loads one manifest, owns checkbox selection internally, and lets the user run
+plan preview, dry-run, and confirmed apply without leaving the workspace.
 
 In non-interactive shells, the TUI renders a static frame and does not enter raw
 mode or the alternate screen.
 
-## Planning View
+## Browsing Workspace
 
-`plan --tui` shows:
+`binstaller tui` starts in browsing mode and shows:
 
 - Header: app name/version, mode, manifest name, config path, state file, host
   summary, selection, and filter.
-- Plan pane: selected tools with status, kind, version, install directory,
-  checksum state, and risk markers.
-- Details pane: full URL, archive mappings, symlinks, and dry-run operations for
-  the highlighted tool.
-- Logs pane: resolver and render messages.
+- Plan pane: every resolved tool with a checkbox, status, kind, version, install
+  directory, checksum state, and risk markers.
+- Details pane: the highlighted tool's version, URL, final-URL/provenance note,
+  checksum status, archive mappings, symlinks, sudo risk, and dry-run operation
+  preview.
+- Logs pane: resolver messages plus plan, dry-run, apply, and error details.
 - Footer/keybar: aggregate risks, state, and key hints.
+
+The TUI selection is independent of CLI `--only`/`--skip`. It is converted to
+core selection only when `p`, `d`, or confirmed `r` calls the underlying service.
+Hidden filtered entries keep their checkbox state.
 
 ## Execution View
 
-`apply --tui` uses the execution renderer instead of the full planning table.
-It shows:
+Pressing `d` or confirmed `r` switches the primary view to execution mode. It
+shows:
 
 - Current tool and current phase.
 - Spinner/progress text and elapsed time.
@@ -38,8 +47,22 @@ It shows:
 - Compact completed, failed, and skipped rows.
 - Final summary with installed, failed, skipped, and exit code.
 
-`apply --dry-run --tui` exits after rendering and includes the same concrete
-operation lines as non-interactive `apply --dry-run`.
+Dry-run (`d`) renders concrete operations without downloads, install writes,
+symlink writes, or state writes. Real apply (`r`, then `Enter` in the
+confirmation modal) runs the same core apply path as CLI apply with confirmation
+enabled.
+
+## Actions
+
+- `p`: append a selected-entry plan preview to Logs. It does not install or
+  write state.
+- `d`: run dry-run apply for selected entries and show the execution view.
+- `r`: open the real-apply confirmation modal for selected entries.
+- `Enter` in the confirmation modal: run real apply for those selected entries.
+- `Escape` or `n` in the confirmation modal: close it without writes.
+
+If no entries are checked, `p`, `d`, and `r` open a message modal and do not call
+the plan or apply service.
 
 ## Keybindings
 
@@ -50,30 +73,60 @@ operation lines as non-interactive `apply --dry-run`.
   Details or Logs is focused.
 - `PageUp` / `PageDown`: jump selection or scroll by a pane.
 - `Home` / `End`: move to first/last row or scroll edge.
-- `/`: edit filter.
-- `Enter`: apply filter.
-- `Escape`: cancel filter editing or close help.
+- `Space`: toggle the current visible row checkbox.
+- `a`: select all visible rows.
+- `c`: clear all visible rows.
+- `i`: invert visible row selection.
+- `/`: edit the filter.
+- `Enter`: apply filter while editing, focus Details from browsing mode, or
+  confirm a modal action.
+- `l`: focus Logs.
+- `Escape`: cancel filter editing or close a modal.
 - `?`: toggle in-frame help.
-- `q` or `Ctrl+C`: exit the planning TUI and restore terminal state.
+- `q` or `Ctrl+C`: exit the TUI and restore terminal state.
 - Mouse wheel: scrolls the focused Details or Logs pane when the terminal sends
   SGR mouse-wheel sequences.
 
-During synchronous non-dry-run apply, the live execution view does not advertise
-`q`/`Ctrl+C` cancellation. Terminal cleanup still runs on normal completion and
-handled failure.
+During synchronous apply work, input is processed between rendered frames rather
+than as a preemptive cancellation mechanism. Terminal cleanup still runs on
+normal completion and handled failure.
+
+## Selection And Filtering
+
+The Plan pane has both a highlighted row and checkbox state. `Up`/`Down` moves
+the highlighted row. `Space`, `a`, `c`, and `i` change checkbox state. The
+header shows `selected N / total M` after each change.
+
+Filtering matches visible entry text such as tool names and descriptions. If
+the filter hides the highlighted row, the row index clamps to the visible result
+set. Hidden selections are preserved, so filtering does not accidentally clear
+or add entries.
 
 ## Pane Focus And Scrolling
 
-The focused pane title includes `[focus]`. The Plan pane changes the selected
+The focused pane title includes `[focus]`. The Plan pane changes the highlighted
 row; Details and Logs scroll independently.
 
 When Details or Logs overflow, the pane title includes a range like
 `scroll 2-7/12` and the right edge renders scrollbar markers. Full long values
 that are truncated in the table remain visible in Details.
 
-Filtering matches tool names, descriptions, versions, install directories,
-URLs, and risk markers. If the filter removes the current row, selection clamps
-to the visible result set.
+Filtering currently matches tool names and descriptions. Full URL, archive,
+symlink, and operation details remain visible in the Details pane for the
+highlighted row.
+
+## Modals
+
+The TUI uses in-frame modals for help, no-selection messages, real-apply
+confirmation, startup failures, plan/dry-run/apply failures, and root-cause
+details for failed execution rows. Error modals include category, action, root
+cause, suggestion, bounded stdout/stderr snippets when available, and compact
+details. Modal and log text uses the same display safety path as other TUI
+rendering: terminal control characters are scrubbed and sensitive
+environment-derived values are redacted before display.
+
+`Enter` or `Escape` closes informational/error modals. In execution mode,
+`Enter` opens the first failed row's root-cause modal when a failed row exists.
 
 ## Progress States
 
@@ -99,8 +152,8 @@ Execution consumes core events:
 - If you see `non-interactive terminal detected`, the process used a static
   fallback frame.
 - The system backend uses `/dev/tty` and `stty` to enter raw mode.
-- Live resize is size-at-open today. Restart the TUI after resizing for the new
-  dimensions.
+- Live resize is polled through the terminal boundary and rerenders on the next
+  input/read cycle when the terminal reports a changed size.
 - Mouse wheel behavior depends on terminal emulator and multiplexer mouse
   settings.
 - If a local terminal is left in raw mode after an external kill, recover with:

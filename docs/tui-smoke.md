@@ -163,15 +163,21 @@ With the no-network profile loaded:
    Expected: the primary view changes to execution mode, shows dry-run
    operations, recent logs, and a final summary; no apps directory or state
    file is created.
-5. Restart the TUI, press `r`.
+5. Press `Enter` after dry-run finishes.
+   Expected: if a failed row exists, a root-cause modal opens; otherwise the
+   execution view remains stable. Press `Escape` to return.
+6. Restart the TUI, press `r`.
    Expected: a confirmation modal opens before any apply work starts.
-6. Press `Escape` or `n`.
+7. Press `Escape` or `n`.
    Expected: the confirmation modal closes and no apps directory or state file
    is created.
 
 Do not press `Enter` in the real-apply confirmation modal unless the profile
 uses an isolated temporary `appsDir` and a disposable current-directory state
 filename.
+
+If all rows are unchecked, pressing `p`, `d`, or `r` should open a visible
+no-selection modal and leave apps/state paths untouched.
 
 ## Detail And Log Scrolling
 
