@@ -234,6 +234,14 @@ kind: BinaryDistributionProfile
   `q`/Ctrl+C cancellation while apply runs synchronously. The review document
   marks remaining deferrals for ZIP external attributes, native `tar.xz`
   pre-inspection, and strict rejection of missing checksums.
+- 2026-06-29: VALIDATION-35 checkpoint passed after the post-TUI must-fix
+  readiness work. Config, core, CLI, recursive compile, recursive tests
+  including TUI, app-level `--help`, `plan`, `apply --dry-run`, and `versions`
+  smokes, static non-interactive `plan --tui` and `apply --dry-run --tui`
+  smokes, scalafmt, Mill module resolution, task JSON validation, and git
+  whitespace checks all passed with no source fixes required. Live
+  raw-terminal TUI smoke remains manual because this agent shell is not an
+  interactive TTY.
 
 ## Current Agent Loop State
 
