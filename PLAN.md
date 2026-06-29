@@ -249,6 +249,14 @@ kind: BinaryDistributionProfile
   for redaction, bounded downloads, checksums, archive extraction, process and
   sudo boundaries, state persistence, terminal control, path normalization, and
   replacement rollback.
+- 2026-06-29: T016 final validation passed with no source fixes required.
+  Config, core, CLI, TUI, recursive compile, recursive tests, scalafmt, git
+  whitespace, task JSON, module resolution, app-level `--help`, `plan`,
+  `apply --dry-run`, `versions`, and static non-interactive TUI smokes against
+  `config.example.yaml` all passed. Native image build remains locally blocked
+  because `native-image` is not on `PATH`; `java -version` reports OpenJDK
+  25.0.3. Iteration 41 re-ran this final gate and marked T016 complete in the
+  task ledger.
 
 ## Current Agent Loop State
 
@@ -275,8 +283,8 @@ is:
   The no-network smoke uses a temporary profile and dry-run apply; any real
   apply smoke must use an isolated temporary `appsDir` and disposable
   current-directory state filename.
-- After the TUI lands, the repository should enter a codebase-hardening and
-  documentation phase before README is treated as final.
+- The TUI, post-TUI readiness fixes, maintainer docs, README, and final
+  validation are complete for this loop.
 
 ## Agent Loop Tasks
 
@@ -301,9 +309,9 @@ The next agent loop should execute this ordered pending queue:
   with a separate non-dry-run apply, so validation used `--no-daemon` with an
   isolated `MILL_OUTPUT_DIR`; this exposed and fixed test fixture lookup for
   `config.example.yaml` when Mill output is outside the checkout.
-- T014: Write maintainer docs - add architecture, manifest, security, TUI, testing, and release guides.
-- T015: Finalize README - make README the concise user-facing entry point linking deeper docs.
-- T016: Run final validation - run the configured validation suite and record native-image status.
+- T014: Write maintainer docs - completed architecture, manifest, security, TUI, testing, and release guides.
+- T015: Finalize README - completed the concise user-facing entry point linking deeper docs.
+- T016: Run final validation - completed final configured validation and recorded the local native-image blocker.
 
 ## Next Phase Development Plan
 
