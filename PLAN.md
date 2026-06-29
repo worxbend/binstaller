@@ -1873,6 +1873,11 @@ Current progress:
   maintainer documentation under `docs/`: architecture, manifest reference,
   security model, TUI guide, testing guide, and release guide. README remains
   intentionally unchanged until the final README task.
+- 2026-06-29: T015 of the current TUI/production-readiness loop finalized the
+  README as the concise user-facing entry point. It now describes the current
+  narrow Linux amd64 binary-installer scope, CLI commands, explicit TUI
+  entrypoints, state/resume behavior, release artifacts, and links to the
+  maintainer docs instead of duplicating internal details.
 
 ## Verification Strategy
 
