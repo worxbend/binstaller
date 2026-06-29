@@ -147,6 +147,15 @@ as part of this refactor.
   `./mill app.run tui --config config.example.yaml` smoke. Targeted docs checks
   passed: `git diff --check`, `./mill app.run tui --help`, and
   `./mill app.run tui --config config.example.yaml`.
+- 2026-06-30: T015 added the mandatory first-class TUI review document covering
+  command boundaries, TUI control flow, modal rendering, selection guarantees,
+  security risks, test evidence, and documented deferrals. README now documents
+  `binstaller tui --config config.example.yaml`, keeps `plan`,
+  `apply --dry-run`, `apply --yes`, `versions`, and `lock` as non-interactive
+  command paths, and no longer presents `plan --tui` or `apply --tui` as the
+  TUI path. Release docs and native release smokes were also migrated to the
+  first-class `tui --config` smoke. Targeted CLI/TUI tests, app help smokes,
+  JSON validation, stale-doc scan, and `git diff --check` passed.
 
 ## Product Target
 

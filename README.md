@@ -77,6 +77,18 @@ Inspect pinned, resolved, and dynamic version sources:
 binstaller versions --config config.example.yaml
 ```
 
+Write a reproducible lock file without installing tools:
+
+```bash
+binstaller lock --config config.example.yaml --output binstaller.lock.json
+```
+
+Open the interactive installer workspace:
+
+```bash
+binstaller tui --config config.example.yaml
+```
+
 The manifest policy defaults to `mode: developer`, which preserves local
 tooling convenience. Production-oriented profiles can set `policy.mode: strict`
 to reject dynamic latest URLs, missing checksums, sudo symlinks, and `tar.xz`
@@ -89,6 +101,8 @@ Source-development equivalents use the checked-in Mill launcher:
 ./mill app.run plan --config config.example.yaml
 ./mill app.run apply --config config.example.yaml --dry-run
 ./mill app.run versions --config config.example.yaml
+./mill app.run lock --config config.example.yaml --output binstaller.lock.json
+./mill app.run tui --config config.example.yaml
 ```
 
 ## CLI Surface
@@ -96,24 +110,35 @@ Source-development equivalents use the checked-in Mill launcher:
 Top-level commands:
 
 - `plan`: render the binary installer plan without changing files.
+- `tui`: open the interactive terminal UI workspace.
 - `apply`: run the installer, or render operations with `--dry-run`.
 - `versions`: resolve and print manifest version sources.
+- `lock`: resolve and write a JSON lock file without installing tools.
 
 Useful shared options:
 
-- `--config FILE`: path to the YAML profile; required for `plan`, `apply`, and
-  `versions`.
-- `--state FILE`: override the profile state file.
-- `--reset-state`: ignore saved execution state and start fresh.
+- `--config FILE`: path to the YAML profile; required for `plan`, `tui`,
+  `apply`, `versions`, and `lock`.
+- `--state FILE`: override the profile state file for apply and TUI actions.
+- `--reset-state`: ignore saved execution state and start fresh for apply and
+  TUI actions.
 - `--verbose`: show additional command diagnostics.
-- `--only TOOL`: include only a named tool for `plan` or `apply`; repeatable.
-- `--skip TOOL`: omit a named tool for `plan` or `apply`; repeatable.
+- `--only TOOL`: include only a named tool for `plan`, `apply`, or `lock`;
+  repeatable.
+- `--skip TOOL`: omit a named tool for `plan`, `apply`, or `lock`; repeatable.
 
 `apply` also accepts:
 
 - `--dry-run`: render concrete apply operations without downloads, install
   writes, symlink writes, or state writes.
 - `--yes`: confirm non-dry-run apply actions, including sudo symlinks.
+- `--locked`: require a compatible JSON lock file before rendering or applying.
+- `--lock-file FILE`: path to the JSON lock file used by `--locked`.
+
+`lock` also accepts:
+
+- `--output FILE`: path to the JSON lock file to write. The default is
+  `binstaller.lock.json`.
 
 Exit codes:
 
@@ -141,14 +166,13 @@ The TUI is explicit and optional. Default command output remains
 script-friendly.
 
 ```bash
-binstaller plan --config config.example.yaml --tui
-binstaller apply --config config.example.yaml --dry-run --tui
-binstaller apply --config config.example.yaml --tui --yes
+binstaller tui --config config.example.yaml
 ```
 
-`plan --tui` opens the planning view. `apply --tui` opens the execution view.
-In non-interactive shells, the TUI renders a static fallback frame instead of
-entering raw mode or the alternate screen.
+The TUI owns checkbox selection, filtering, selected-entry plan preview,
+dry-run, confirmed apply, logs, and error/root-cause modals inside one
+workspace. In non-interactive shells, it renders a static fallback frame instead
+of entering raw mode or the alternate screen.
 
 ## Build From Source
 
@@ -190,5 +214,7 @@ GRAALVM_HOME=/path/to/graalvm ./mill app.nativeImage
 - [Testing guide](docs/testing.md): project-native checks and test patterns.
 - [Release guide](docs/release.md): native artifacts, release workflow, and
   smoke checks.
+- [First-class TUI review](docs/first-class-tui-review.md): final command,
+  control-flow, modal, selection, security, and deferral review.
 - [Post-TUI readiness review](docs/post-tui-readiness-review.md): hardening
   findings, implemented fixes, and documented deferrals.
