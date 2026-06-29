@@ -178,6 +178,12 @@ kind: BinaryDistributionProfile
   keeps CLI/TUI code out of core. The CLI apply progress bar and colored summary
   now consume the structured event path while preserving script-friendly default
   commands.
+- 2026-06-29: T004 of the TUI phase validation checkpoint passed. Config, core,
+  CLI, recursive compile, recursive tests including `tui`, app-level `--help`,
+  `plan`, `apply --dry-run`, and `versions` smokes against
+  `config.example.yaml`, scalafmt, and git whitespace checks all passed with no
+  source fixes required. The explicit `plan --tui` and `apply --tui`
+  entrypoints remain isolated from default CLI output.
 
 ## Current Agent Loop State
 
