@@ -148,6 +148,22 @@ object CliModuleTest extends TestSuite:
       assert(!Files.exists(stateFile))
       assert(!Files.exists(appsDir.resolve("alpha")))
 
+    test("non dry-run apply requires yes when confirmation policy is enabled"):
+      val tempRoot = Files.createTempDirectory("binstaller-cli-confirm")
+      val appsDir  = tempRoot.resolve("apps")
+      val config   = writeConfig(tempRoot, noWriteYaml(appsDir, tempRoot.resolve("state.json")))
+
+      val result = runCli(
+        Vector("apply", "--config", config.toString),
+        resolvingService
+      )
+
+      assert(result.exitCode == 1)
+      assert(result.out.contains("policy.requireConfirmation"))
+      assert(result.out.contains("--yes"))
+      assert(!result.out.contains("Exception"))
+      assert(!Files.exists(appsDir))
+
   private def runCli(
       args: Vector[String],
       service: BinaryInstallerService = BinaryInstallerService.placeholder

@@ -105,6 +105,14 @@ kind: BinaryDistributionProfile
   tied to profile name plus a manifest fingerprint, CWD-local filenames only,
   atomically written after each terminal tool result, and resume skips completed
   tools by name while retrying failed tools unless selection excludes them.
+- 2026-06-29: T014 completed CLI reporting polish. Expected validation,
+  resolution, confirmation, and apply failures now render concise lines without
+  stack traces; invalid config validation errors are printed individually;
+  failed tools include the tool name, action, and reason; `versions` reports
+  pinned, resolved, and dynamic version sources with referencing tools; non
+  dry-run apply enforces `policy.requireConfirmation` via `--yes`; and
+  `policy.continueOnError` controls whether apply stops after the first failed
+  tool.
 
 ### User Experience Goals
 

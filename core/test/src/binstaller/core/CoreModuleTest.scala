@@ -217,12 +217,103 @@ object CoreModuleTest extends TestSuite:
           configPath = config.toString,
           statePath = None,
           resetState = ResetState.Disabled,
-          verboseOutput = VerboseOutput.Disabled
+          verboseOutput = VerboseOutput.Disabled,
+          applyConfirmation = ApplyConfirmation.Enabled
         )
       )
 
       assert(result.exitCode == 1)
-      assert(result.lines.exists(_.contains("download failed")))
+      assert(result.lines.exists(_.contains("failed alpha: download:")))
+      assert(result.lines.exists(_.contains("network unavailable")))
+      assert(!result.lines.exists(_.contains("Exception")))
+      assert(!result.lines.exists(_.contains("at binstaller.")))
+
+    test("invalid config reports every aggregated validation error concisely"):
+      val tempRoot = Files.createTempDirectory("binstaller-core-invalid-config")
+      val config   = writeConfig(tempRoot, invalidConfigYaml(tempRoot))
+      val service  = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
+
+      val result = service.plan(applyOptions(config))
+
+      assert(result.exitCode == 1)
+      assert(result.lines.exists(_.startsWith("apiVersion: unsupported value")))
+      assert(result.lines.exists(_.startsWith("kind: unsupported value")))
+      assert(
+        result.lines.exists(_.startsWith("spec.policy.continueOnError: value must be a boolean"))
+      )
+      assert(!result.lines.exists(_.contains("ValidationFailed")))
+      assert(!result.lines.exists(_.contains("Exception")))
+
+    test("versions output includes pinned resolved and dynamic sources with referencing tools"):
+      val service = BinaryInstallerService.resolving(FakeHttpTextClient("v1.34.0"))
+      val result  = service.versions(
+        applyOptions(exampleConfigPath).copy(applyConfirmation = ApplyConfirmation.Disabled)
+      )
+
+      assert(result.exitCode == 0)
+      assert(result.lines.exists(_.startsWith("pinned yazi: v26.5.6")))
+      assert(result.lines.exists(line =>
+        line.startsWith("resolved kubectl: v1.34.0") &&
+          line.contains("(tools: kubectl)")
+      ))
+      assert(result.lines.exists(line =>
+        line.startsWith("dynamic minikube: dynamic latest-url") &&
+          line.contains("(tools: minikube)")
+      ))
+
+    test("non dry-run apply requires yes when policy requireConfirmation is true"):
+      val tempRoot   = Files.createTempDirectory("binstaller-core-confirm")
+      val installDir = tempRoot.resolve("alpha")
+      val config     = writeConfig(tempRoot, directBinaryYaml(installDir))
+      val service    = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
+
+      val result =
+        service.apply(applyOptions(config).copy(applyConfirmation = ApplyConfirmation.Disabled))
+
+      assert(result.exitCode == 1)
+      assert(result.lines == Vector(
+        "apply requires confirmation by policy.requireConfirmation; rerun apply with --yes"
+      ))
+      assert(!Files.exists(installDir))
+
+    test("continueOnError false stops apply after the first failed tool"):
+      val tempRoot = Files.createTempDirectory("binstaller-core-stop-on-error")
+      val config   = writeConfig(tempRoot, twoToolYaml(tempRoot, "stop.state.json"))
+      val service  = statefulService(
+        tempRoot,
+        RoutingBinaryDownloadClient(Map(
+          "https://example.invalid/alpha" -> Left("network unavailable"),
+          "https://example.invalid/beta"  -> Right("beta".getBytes(StandardCharsets.UTF_8))
+        ))
+      )
+
+      val result = service.apply(applyOptions(config))
+
+      assert(result.exitCode == 1)
+      assert(result.lines.exists(_.startsWith("failed alpha: download:")))
+      assert(!result.lines.exists(_.contains("installed beta")))
+      assert(!Files.exists(tempRoot.resolve("apps/beta")))
+
+    test("continueOnError true continues apply after failed tools"):
+      val tempRoot = Files.createTempDirectory("binstaller-core-continue-on-error")
+      val config   = writeConfig(
+        tempRoot,
+        twoToolYaml(tempRoot, "continue.state.json", continueOnError = true)
+      )
+      val service = statefulService(
+        tempRoot,
+        RoutingBinaryDownloadClient(Map(
+          "https://example.invalid/alpha" -> Left("network unavailable"),
+          "https://example.invalid/beta"  -> Right("beta".getBytes(StandardCharsets.UTF_8))
+        ))
+      )
+
+      val result = service.apply(applyOptions(config))
+
+      assert(result.exitCode == 1)
+      assert(result.lines.exists(_.startsWith("failed alpha: download:")))
+      assert(result.lines.exists(_.contains("installed beta")))
+      assert(Files.isRegularFile(tempRoot.resolve("apps/beta/bin/beta")))
 
     test("zip archive file mapping lands at configured relative target path"):
       val tempRoot   = Files.createTempDirectory("binstaller-core-zip")
@@ -394,7 +485,13 @@ object CoreModuleTest extends TestSuite:
         commandExecutor
       )
       val plan = ResolvedPlan(
-        ResolvedPolicy(tempRoot.toString, None, AllowSudoSymlinks.Enabled),
+        ResolvedPolicy(
+          tempRoot.toString,
+          None,
+          AllowSudoSymlinks.Enabled,
+          RequireConfirmation.Disabled,
+          ContinueOnError.Disabled
+        ),
         Vector(sudoSymlinkTool(installDir))
       )
 
@@ -415,7 +512,13 @@ object CoreModuleTest extends TestSuite:
         commandExecutor
       )
       val plan = ResolvedPlan(
-        ResolvedPolicy(tempRoot.toString, None, AllowSudoSymlinks.Enabled),
+        ResolvedPolicy(
+          tempRoot.toString,
+          None,
+          AllowSudoSymlinks.Enabled,
+          RequireConfirmation.Disabled,
+          ContinueOnError.Disabled
+        ),
         Vector(sudoSymlinkTool(installDir))
       )
 
@@ -582,7 +685,8 @@ object CoreModuleTest extends TestSuite:
     configPath = config.toString,
     statePath = None,
     resetState = ResetState.Disabled,
-    verboseOutput = VerboseOutput.Disabled
+    verboseOutput = VerboseOutput.Disabled,
+    applyConfirmation = ApplyConfirmation.Enabled
   )
 
   private def writeConfig(tempRoot: Path, content: String): Path =
@@ -767,7 +871,11 @@ object CoreModuleTest extends TestSuite:
        |          - path: bin/alpha
        |""".stripMargin
 
-  private def twoToolYaml(tempRoot: Path, stateFile: String): String =
+  private def twoToolYaml(
+      tempRoot: Path,
+      stateFile: String,
+      continueOnError: Boolean = false
+  ): String =
     val appsDir = tempRoot.resolve("apps")
     s"""
        |apiVersion: binstaller.io/v1alpha1
@@ -778,6 +886,7 @@ object CoreModuleTest extends TestSuite:
        |  policy:
        |    appsDir: "$appsDir"
        |    stateFile: "$stateFile"
+       |    continueOnError: $continueOnError
        |  vars: {}
        |  versions:
        |    alpha: "1.0.0"
@@ -807,6 +916,32 @@ object CoreModuleTest extends TestSuite:
        |          filename: beta
        |        executables:
        |          - path: bin/beta
+       |""".stripMargin
+
+  private def invalidConfigYaml(tempRoot: Path): String =
+    s"""
+       |apiVersion: wrong.example/v1
+       |kind: WrongKind
+       |metadata:
+       |  name: invalid
+       |spec:
+       |  policy:
+       |    appsDir: "${tempRoot.resolve("apps")}"
+       |    continueOnError: no
+       |  vars: {}
+       |  versions:
+       |    alpha: "1.0.0"
+       |  plan:
+       |    - name: alpha
+       |      kind: binary-tool
+       |      spec:
+       |        versionRef: alpha
+       |        installDir: "${tempRoot.resolve("apps/alpha")}"
+       |        download:
+       |          url: https://example.invalid/alpha
+       |          filename: alpha
+       |        executables:
+       |          - path: bin/alpha
        |""".stripMargin
 
   private val testResolutionOptions: ResolutionOptions = ResolutionOptions(

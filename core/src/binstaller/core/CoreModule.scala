@@ -160,8 +160,22 @@ final case class ResolvedPlan(
 final case class ResolvedPolicy(
     appsDir: String,
     stateFile: Option[String],
-    allowSudoSymlinks: AllowSudoSymlinks
+    allowSudoSymlinks: AllowSudoSymlinks,
+    requireConfirmation: RequireConfirmation,
+    continueOnError: ContinueOnError
 )
+
+enum RequireConfirmation:
+  case Enabled, Disabled
+
+object RequireConfirmation:
+  def fromBoolean(value: Boolean): RequireConfirmation = if value then Enabled else Disabled
+
+enum ContinueOnError:
+  case Enabled, Disabled
+
+object ContinueOnError:
+  def fromBoolean(value: Boolean): ContinueOnError = if value then Enabled else Disabled
 
 final case class ResolvedTool(
     name: String,
@@ -283,9 +297,15 @@ object TerminalToolResult:
     case TerminalToolResult.Failed(toolName, message)       => s"failed $toolName: $message"
 
 private final case class ObservedInstallResults(
+    lines: Vector[String],
     results: Vector[TerminalToolResult],
     persistenceError: Option[String]
 )
+
+enum ApplyPreflightError:
+  case ConfirmationRequired
+  case SudoSymlinkNotAllowed(toolName: String)
+  case SudoSymlinkConfirmationRequired(toolName: String)
 
 enum ToolInstallError:
   case DownloadFailed(toolName: String, url: String, message: String)
@@ -389,19 +409,21 @@ final class DirectBinaryInstaller(
 
   def installPlan(
       plan: ResolvedPlan,
-      applyConfirmation: ApplyConfirmation = ApplyConfirmation.Disabled
-  ): InstallerResult = installPlanWithObserver(plan, applyConfirmation, _ => Right(()))
+      applyConfirmation: ApplyConfirmation = ApplyConfirmation.Disabled,
+      verboseOutput: VerboseOutput = VerboseOutput.Disabled
+  ): InstallerResult =
+    installPlanWithObserver(plan, applyConfirmation, verboseOutput, _ => Right(()))
 
   def installPlanWithObserver(
       plan: ResolvedPlan,
       applyConfirmation: ApplyConfirmation,
+      verboseOutput: VerboseOutput,
       terminalObserver: TerminalToolResult => Either[String, Unit]
-  ): InstallerResult = sudoPreflight(plan, applyConfirmation) match
-    case Some(error) =>
-      InstallerResult(Vector(s"failed ${toolName(error)}: ${renderInstallError(error)}"), 1)
-    case None =>
-      val observed = installTools(plan.policy, plan.tools, terminalObserver)
-      val lines    = observed.results.map(TerminalToolResult.line) ++
+  ): InstallerResult = preflight(plan, applyConfirmation) match
+    case Some(error) => InstallerResult(Vector(renderPreflightError(error)), 1)
+    case None        =>
+      val observed = installTools(plan.policy, plan.tools, verboseOutput, terminalObserver)
+      val lines    = observed.lines ++
         observed.persistenceError.map(message => s"state write failed: $message").toVector
       val exitCode =
         if observed.results.exists(_.isInstanceOf[TerminalToolResult.Failed]) ||
@@ -411,41 +433,78 @@ final class DirectBinaryInstaller(
 
       InstallerResult(lines, exitCode)
 
+  private def preflight(
+      plan: ResolvedPlan,
+      applyConfirmation: ApplyConfirmation
+  ): Option[ApplyPreflightError] = applyConfirmation match
+    case ApplyConfirmation.Disabled
+        if plan.policy.requireConfirmation == RequireConfirmation.Enabled =>
+      Some(ApplyPreflightError.ConfirmationRequired)
+    case _ => sudoPreflight(plan, applyConfirmation)
+
   private def sudoPreflight(
       plan: ResolvedPlan,
       applyConfirmation: ApplyConfirmation
-  ): Option[ToolInstallError] = plan.tools
+  ): Option[ApplyPreflightError] = plan.tools
     .find(_.symlinks.exists(_.privilege == SymlinkPrivilege.Sudo))
     .flatMap: tool =>
       plan.policy.allowSudoSymlinks match
-        case AllowSudoSymlinks.Disabled => Some(ToolInstallError.SudoSymlinkNotAllowed(tool.name))
-        case AllowSudoSymlinks.Enabled  => applyConfirmation match
+        case AllowSudoSymlinks.Disabled =>
+          Some(ApplyPreflightError.SudoSymlinkNotAllowed(tool.name))
+        case AllowSudoSymlinks.Enabled => applyConfirmation match
             case ApplyConfirmation.Enabled  => None
             case ApplyConfirmation.Disabled =>
-              Some(ToolInstallError.SudoSymlinkConfirmationRequired(tool.name))
+              Some(ApplyPreflightError.SudoSymlinkConfirmationRequired(tool.name))
 
   private def installTools(
       policy: ResolvedPolicy,
       tools: Vector[ResolvedTool],
+      verboseOutput: VerboseOutput,
       terminalObserver: TerminalToolResult => Either[String, Unit]
   ): ObservedInstallResults = tools.headOption match
-    case None       => ObservedInstallResults(Vector.empty, None)
+    case None       => ObservedInstallResults(Vector.empty, Vector.empty, None)
     case Some(tool) =>
       val result   = installTool(policy, tool)
       val terminal = terminalResult(result)
       terminalObserver(terminal) match
-        case Left(message) => ObservedInstallResults(Vector(terminal), Some(message))
-        case Right(())     => result match
-            case Left(_)  => ObservedInstallResults(Vector(terminal), None)
+        case Left(message) => ObservedInstallResults(
+            verboseLines(tool, verboseOutput) :+ TerminalToolResult.line(terminal),
+            Vector(terminal),
+            Some(message)
+          )
+        case Right(()) => result match
+            case Left(_) if policy.continueOnError == ContinueOnError.Disabled =>
+              ObservedInstallResults(
+                verboseLines(tool, verboseOutput) :+ TerminalToolResult.line(terminal),
+                Vector(terminal),
+                None
+              )
+            case Left(_) =>
+              val rest = installTools(policy, tools.tail, verboseOutput, terminalObserver)
+              rest.copy(
+                lines = verboseLines(tool, verboseOutput) ++
+                  (TerminalToolResult.line(terminal) +: rest.lines),
+                results = terminal +: rest.results
+              )
             case Right(_) =>
-              val rest = installTools(policy, tools.tail, terminalObserver)
-              rest.copy(results = terminal +: rest.results)
+              val rest = installTools(policy, tools.tail, verboseOutput, terminalObserver)
+              rest.copy(
+                lines = verboseLines(tool, verboseOutput) ++
+                  (TerminalToolResult.line(terminal) +: rest.lines),
+                results = terminal +: rest.results
+              )
 
   def installTool(tool: ResolvedTool): Either[ToolInstallError, ToolInstallSuccess] =
-    val policy = ResolvedPolicy(tool.installDir, None, AllowSudoSymlinks.Disabled)
-    sudoPreflight(ResolvedPlan(policy, Vector(tool)), ApplyConfirmation.Disabled) match
-      case Some(error) => Left(error)
-      case None        => installTool(policy, tool)
+    val policy = ResolvedPolicy(
+      tool.installDir,
+      None,
+      AllowSudoSymlinks.Disabled,
+      RequireConfirmation.Disabled,
+      ContinueOnError.Disabled
+    )
+    if tool.symlinks.exists(_.privilege == SymlinkPrivilege.Sudo) then
+      Left(ToolInstallError.SudoSymlinkNotAllowed(tool.name))
+    else installTool(policy, tool)
 
   private def installTool(
       policy: ResolvedPolicy,
@@ -457,6 +516,18 @@ final class DirectBinaryInstaller(
   ): TerminalToolResult = result match
     case Right(success) => TerminalToolResult.Completed(success.toolName, success.installDir)
     case Left(error)    => TerminalToolResult.Failed(toolName(error), renderInstallError(error))
+
+  private def verboseLines(tool: ResolvedTool, verboseOutput: VerboseOutput): Vector[String] =
+    verboseOutput match
+      case VerboseOutput.Disabled => Vector.empty
+      case VerboseOutput.Enabled  =>
+        val downloadLine   = s"verbose ${tool.name}: download ${tool.download.url}"
+        val extractionLine = tool.download.archive match
+          case Some(archive) => Some(
+              s"verbose ${tool.name}: extract ${archive.original.archiveType.value} ${tool.download.filename}"
+            )
+          case None => None
+        Vector(downloadLine) ++ extractionLine.toVector
 
   private def installWithoutPreflight(
       policy: ResolvedPolicy,
@@ -765,26 +836,33 @@ final class DirectBinaryInstaller(
     case ToolInstallError.SudoSymlinkConfirmationRequired(toolName) => toolName
 
   private def renderInstallError(error: ToolInstallError): String = error match
-    case ToolInstallError.DownloadFailed(_, url, message) => s"download failed for $url: $message"
+    case ToolInstallError.DownloadFailed(_, url, message)       => s"download: $url: $message"
     case ToolInstallError.ChecksumMismatch(_, expected, actual) =>
-      s"sha256 checksum mismatch: expected $expected, got $actual"
-    case ToolInstallError.StagingFailed(_, message) => s"staging failed: $message"
+      s"checksum: sha256 expected $expected, got $actual"
+    case ToolInstallError.StagingFailed(_, message)                     => s"staging: $message"
     case ToolInstallError.ModeApplicationFailed(_, path, mode, message) =>
-      s"mode $mode failed for $path: $message"
-    case ToolInstallError.ReplacementFailed(_, message)       => s"replacement failed: $message"
-    case ToolInstallError.ArchiveExtractionFailed(_, message) =>
-      s"archive extraction failed: $message"
+      s"mode: $mode for $path: $message"
+    case ToolInstallError.ReplacementFailed(_, message)       => s"replacement: $message"
+    case ToolInstallError.ArchiveExtractionFailed(_, message) => s"archive extraction: $message"
     case ToolInstallError.InstallerExecutionFailed(_, argv, message) =>
-      s"installer command failed (${argv.mkString(" ")}): $message"
+      s"installer command: ${argv.mkString(" ")}: $message"
     case ToolInstallError.InstallerCleanupFailed(_, path, message) =>
-      s"installer cleanup failed for $path: $message"
-    case ToolInstallError.MissingExecutable(_, path) => s"expected executable is missing: $path"
+      s"installer cleanup: $path: $message"
+    case ToolInstallError.MissingExecutable(_, path) => s"verify executable: missing $path"
     case ToolInstallError.SymlinkFailed(_, path, target, message) =>
-      s"symlink failed $target -> $path: $message"
+      s"symlink: $target -> $path: $message"
     case ToolInstallError.SudoSymlinkNotAllowed(_) =>
       "sudo symlinks are not allowed by policy.allowSudoSymlinks"
     case ToolInstallError.SudoSymlinkConfirmationRequired(_) =>
       "sudo symlinks require apply confirmation; rerun apply with --yes"
+
+  private def renderPreflightError(error: ApplyPreflightError): String = error match
+    case ApplyPreflightError.ConfirmationRequired =>
+      "apply requires confirmation by policy.requireConfirmation; rerun apply with --yes"
+    case ApplyPreflightError.SudoSymlinkNotAllowed(toolName) =>
+      s"failed $toolName: sudo symlinks are not allowed by policy.allowSudoSymlinks"
+    case ApplyPreflightError.SudoSymlinkConfirmationRequired(toolName) =>
+      s"failed $toolName: sudo symlinks require apply confirmation; rerun apply with --yes"
 
 object DirectBinaryInstaller:
 
@@ -803,6 +881,7 @@ object PlanResolver:
     else Left(ResolvePlanError.ValidationFailed(resolved.errors))
 
 private final case class PreparedPlan(
+    profile: BinaryDistributionProfile,
     profileName: String,
     manifestFingerprint: String,
     plan: ResolvedPlan
@@ -815,8 +894,32 @@ private object StatefulApplyRunner:
       prepared: PreparedPlan,
       installer: DirectBinaryInstaller,
       stateStore: ApplyStateStore
+  ): InstallerResult = confirmationPreflight(options, prepared.plan) match
+    case Some(result) => result
+    case None         => runAfterConfirmation(options, prepared, installer, stateStore)
+
+  private def confirmationPreflight(
+      options: InstallerOptions,
+      plan: ResolvedPlan
+  ): Option[InstallerResult] = options.applyConfirmation match
+    case ApplyConfirmation.Disabled
+        if plan.policy.requireConfirmation == RequireConfirmation.Enabled =>
+      Some(InstallerResult(
+        Vector(
+          "apply requires confirmation by policy.requireConfirmation; rerun apply with --yes"
+        ),
+        1
+      ))
+    case _ => None
+
+  private def runAfterConfirmation(
+      options: InstallerOptions,
+      prepared: PreparedPlan,
+      installer: DirectBinaryInstaller,
+      stateStore: ApplyStateStore
   ): InstallerResult = statePath(options, prepared.plan) match
-    case None       => installer.installPlan(prepared.plan, options.applyConfirmation)
+    case None =>
+      installer.installPlan(prepared.plan, options.applyConfirmation, options.verboseOutput)
     case Some(path) => loadInitialState(path, options.resetState, prepared, stateStore) match
         case Left(error)               => InstallerResult(Vector(renderStateError(error)), 1)
         case Right((statePath, state)) =>
@@ -879,6 +982,7 @@ private object StatefulApplyRunner:
     val result       = installer.installPlanWithObserver(
       pendingPlan,
       options.applyConfirmation,
+      options.verboseOutput,
       terminal =>
         currentState = updateState(currentState, terminal)
         stateStore.save(path, currentState).left.map(renderStateError)
@@ -1141,7 +1245,7 @@ private final class ResolvingBinaryInstallerService(
       )
 
   def versions(options: InstallerOptions): InstallerResult =
-    resolveFromOptions(options).fold(renderError, prepared => renderVersions(prepared.plan))
+    resolveFromOptions(options).fold(renderError, renderVersions)
 
   private def renderSelectedPlan(
       options: InstallerOptions,
@@ -1166,23 +1270,59 @@ private final class ResolvingBinaryInstallerService(
     case Right(profile) => PlanResolver.resolve(profile, resolutionOptions, httpTextClient).map:
         plan =>
           PreparedPlan(
+            profile,
             profile.metadata.name,
             ManifestFingerprint.profile(profile),
             plan
           )
 
-  private def renderVersions(plan: ResolvedPlan): InstallerResult = InstallerResult(
-    plan.tools.map(tool => s"${tool.name} ${ResolvedVersion.render(tool.version)}"),
-    0
-  )
+  private def renderVersions(prepared: PreparedPlan): InstallerResult =
+    val references = versionReferences(prepared.profile)
+    val resolved   = prepared.plan.tools.map(tool => tool.name -> tool.version).toMap
+    val lines      = prepared.profile.spec.versions.toVector.sortBy(_._1).map:
+      case (name, source) =>
+        val tools = references.getOrElse(name, Vector.empty)
+        renderVersionSource(name, source, resolved.get(name), tools)
+    InstallerResult("binstaller versions" +: lines, 0)
+
+  private def versionReferences(
+      profile: BinaryDistributionProfile
+  ): Map[String, Vector[String]] = profile.spec.plan
+    .groupBy(_.spec.versionRef)
+    .view
+    .mapValues(_.map(_.name))
+    .toMap
+
+  private def renderVersionSource(
+      name: String,
+      source: VersionSource,
+      resolved: Option[ResolvedVersion],
+      tools: Vector[String]
+  ): String =
+    val toolList = if tools.isEmpty then "none" else tools.mkString(", ")
+    source match
+      case VersionSource.Pinned(value) => s"pinned $name: $value (tools: $toolList)"
+      case VersionSource.Dynamic(DynamicVersionKind.LatestUrl, note) =>
+        val suffix = note.map(value => s" - $value").getOrElse("")
+        s"dynamic $name: dynamic latest-url (tools: $toolList)$suffix"
+      case VersionSource.Resolver(VersionResolverKind.HttpText, url) =>
+        val value = resolved.map(ResolvedVersion.render).getOrElse("<unresolved>")
+        s"resolved $name: $value from $url (tools: $toolList)"
 
   private def renderError(error: ResolvePlanError): InstallerResult = error match
-    case ResolvePlanError.ConfigLoadFailed(loadError) =>
-      InstallerResult(Vector(s"config load failed: $loadError"), 1)
-    case ResolvePlanError.ValidationFailed(errors) =>
+    case ResolvePlanError.ConfigLoadFailed(loadError) => renderConfigLoadError(loadError)
+    case ResolvePlanError.ValidationFailed(errors)    =>
       InstallerResult(errors.map(error => s"${error.path}: ${error.message}"), 1)
     case ResolvePlanError.SelectionFailed(messages) =>
       InstallerResult(messages.map(message => s"selection: $message"), 1)
+
+  private def renderConfigLoadError(error: ConfigLoadError): InstallerResult = error match
+    case ConfigLoadError.ValidationFailed(errors) =>
+      InstallerResult(errors.map(error => s"${error.path}: ${error.message}"), 1)
+    case ConfigLoadError.ReadFailed(path, message) =>
+      InstallerResult(Vector(s"config read failed for $path: $message"), 1)
+    case ConfigLoadError.ParseFailed(message) =>
+      InstallerResult(Vector(s"config parse failed: $message"), 1)
 
 private object ToolSelector:
 
@@ -1370,7 +1510,13 @@ private final class ResolutionBuilder(
       case None        => ResolvedValue.valid(None)
 
     ResolvedValue(
-      ResolvedPolicy(appsDir.value, stateFile.value, profile.spec.policy.allowSudoSymlinks),
+      ResolvedPolicy(
+        appsDir.value,
+        stateFile.value,
+        profile.spec.policy.allowSudoSymlinks,
+        RequireConfirmation.fromBoolean(profile.spec.policy.requireConfirmation),
+        ContinueOnError.fromBoolean(profile.spec.policy.continueOnError)
+      ),
       appsDir.errors ++ stateFile.errors
     )
 
