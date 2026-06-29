@@ -266,6 +266,14 @@ kind: BinaryDistributionProfile
   and must-fix review status scan. Native-image remains locally blocked because
   `native-image` is not on `PATH`; this shell is not an interactive TTY for live
   raw-terminal TUI smoke.
+- 2026-06-29: T001 of the follow-up hardening queue recorded redirect
+  provenance for `http-text` version resolution and binary downloads. JDK HTTP
+  clients now expose initial URL, final URL, and followed redirect hops while
+  preserving HTTPS validation, normal redirect policy, request timeout, download
+  size limit, and body-timeout behavior. Plan/versions/apply output and TUI
+  details render final URL provenance only when redirects occur, with terminal
+  scrubbing and sensitive-value redaction applied. Apply state now stores
+  successful download provenance for future lock-ready data use.
 
 ## Current Agent Loop State
 
@@ -297,30 +305,32 @@ is:
 
 ## Agent Loop Tasks
 
-The next agent loop should execute this ordered pending queue:
+The resumable implementation queue is stored in `.agent-loop/tasks.json`.
+The next loop continues after the completed TUI/readiness milestone and
+prioritizes remaining production hardening before new lock/provenance features:
 
-- T001: Choose TUI stack - decide whether Tamboui is direct dependency or visual reference only, and record the explicit TUI entrypoint.
-- T002: Add TUI module shell - add the `tui` module and wire explicit plan/apply TUI entrypoints without changing default script-friendly CLI output.
-- T003: Introduce apply events - make core emit structured renderer-agnostic plan/apply events for CLI and TUI.
-- T004: Checkpoint TUI foundation - validate the module shell and event model before terminal rendering work.
-- T005: Render planning TUI - completed deterministic header, plan table, details, logs, footer, keybar, colors, truncation, and renderer/model tests.
-- T006: Add TUI navigation - completed focus cycling, selection movement, log/detail scrolling, filtering, help, resize handling, and clean quit.
-- T007: Render execution TUI - completed the active apply screen with spinner/progress, recent logs, completed/failed rows, dry-run operation fidelity, and terminal cleanup tests.
-- T008: Checkpoint TUI experience - automated validation passed; live raw-terminal smoke remains blocked until a real interactive TTY is available.
-- T009: Document TUI smoke workflow - completed durable no-network, narrow-terminal, resize, focus, scroll, execution, and cleanup smoke instructions in `docs/tui-smoke.md`.
-- T010: Review post-TUI readiness - completed mandatory architecture, security, maintainability, test, and native-image review in `docs/post-tui-readiness-review.md`.
-- T011: Fix must-fix readiness issues - completed bounded downloads, archive
-  metadata hardening/deferrals, render scrubbing/redaction, checksum value
-  validation, honest apply TUI keybar behavior, and replacement rollback tests.
-- T012: Document public contracts - completed ScalaDoc and intent/risk comments for public and security-sensitive contracts.
-- T013: Checkpoint production readiness - completed broad validation after
-  hardening and public contract documentation. The default Mill daemon was busy
-  with a separate non-dry-run apply, so validation used `--no-daemon` with an
-  isolated `MILL_OUTPUT_DIR`; this exposed and fixed test fixture lookup for
-  `config.example.yaml` when Mill output is outside the checkout.
-- T014: Write maintainer docs - completed architecture, manifest, security, TUI, testing, and release guides.
-- T015: Finalize README - completed the concise user-facing entry point linking deeper docs.
-- T016: Run final validation - completed final configured validation and recorded the local native-image blocker.
+| Task | Type | Complexity | Title |
+| --- | --- | --- | --- |
+| T001 | improvement | complex | Record redirect provenance |
+| T002 | fix | moderate | Replace TUI stty shell boundary |
+| T003 | improvement | moderate | Emit TUI resize events |
+| T004 | fix | complex | Revalidate interpolated paths |
+| T005 | validation | simple | Checkpoint hardening fixes |
+| T006 | improvement | moderate | Smoke TUI in release workflow |
+| T007 | improvement | complex | Extract resolution and download code |
+| T008 | improvement | complex | Extract archive and filesystem code |
+| T009 | improvement | complex | Extract state events and render safety |
+| T010 | validation | simple | Checkpoint maintainability split |
+| T011 | feature | complex | Add lock command |
+| T012 | feature | complex | Enforce locked apply |
+| T013 | feature | complex | Add strict policy profiles |
+| T014 | validation | simple | Checkpoint lock and policy |
+| T015 | improvement | complex | Discover published checksums |
+| T016 | validation | simple | Run final validation |
+
+All tasks start as `pending`. Validation checkpoints are inserted after the
+network/terminal/path hardening cluster, after the core maintainability split,
+after lock/policy work, and at final completion.
 
 ## Next Phase Development Plan
 
@@ -1827,74 +1837,29 @@ Acceptance checks:
 
 ## Agent Loop Tasks
 
-The resumable implementation queue is stored in `.agent-loop/tasks.json`. All
-tasks start as `pending`; validation checkpoints are inserted before riskier
-phases continue.
+The authoritative resumable implementation queue is stored in
+`.agent-loop/tasks.json`. The prior bootstrap, executor, TUI, readiness,
+documentation, and README phases are complete and recorded in the progress
+history above. The active pending queue is:
 
 | Task | Type | Complexity | Title |
 | --- | --- | --- | --- |
-| T001 | chore | moderate | Scaffold Mill modules |
-| T002 | improvement | moderate | Add binstaller CLI shell |
-| T003 | feature | complex | Model and validate manifests |
-| T004 | validation | simple | Checkpoint config and CLI |
-| T005 | feature | complex | Resolve variables and versions |
-| T006 | feature | moderate | Render plans and selection |
-| T007 | validation | simple | Checkpoint resolution and planning |
-| T008 | feature | complex | Execute direct binary installs |
-| T009 | feature | complex | Extract archives safely from Scala |
-| T010 | feature | complex | Emit download and install progress events |
-| T011 | feature | complex | Apply symlinks and executor completion |
-| T012 | improvement | complex | Structured errors root causes and suggestions |
-| T013 | validation | simple | Checkpoint executor safety |
-| T014 | improvement | moderate | Lock config example coverage |
-| T015 | feature | complex | Persist state and resume |
-| T016 | improvement | moderate | Polish fancy CLI reporting and progress |
-| T017 | validation | simple | Checkpoint apply workflow |
-| T018 | improvement | moderate | Update docs and release workflow |
-| T019 | review | complex | Security threat model and hardening report |
-| T020 | improvement | complex | Harden command boundaries and process fallbacks |
-| T021 | improvement | complex | Harden paths archives symlinks and atomic writes |
-| T022 | improvement | moderate | Harden checksums provenance redaction and state |
-| T023 | validation | moderate | Security regression suite and final validation |
-| T024 | feature | complex | Add Tamboui-inspired TUI module and command |
-| T025 | improvement | complex | TUI focus logs scrolling and active execution view |
-| T026 | improvement | moderate | TUI styling polish with tables spinners scrollbar and summary |
-| T027 | validation | moderate | TUI regression tests and terminal smoke checkpoint |
-| T028 | review | complex | Post-TUI code review architecture and security audit |
-| T029 | improvement | complex | Refactor codebase for maintainability readability and ScalaDoc |
-| T030 | improvement | complex | Expand security regression checks and typed suggestions |
-| T031 | docs | moderate | Developer architecture security testing and TUI docs |
-| T032 | docs | simple | Final README refresh after docs and review |
-
-Current progress:
-
-- 2026-06-29: T001 is complete. The repository now has a Scala 3 Mill
-  skeleton with `app -> cli -> core -> config`, centralized dependency
-  coordinates, uTest module test layouts, and an `app` NativeImageModule
-  configured with `--no-fallback` and `-Os`.
-- Native-image packaging was configured but not built during T001; normal JVM
-  compile/test validation passed through the checked-in `./mill` launcher.
-- 2026-06-29: T006 is complete. The CLI now uses the resolving service by
-  default for `plan`, and `apply --dry-run` shares the same selector and
-  renderer without creating install directories, temp install files, or state
-  files.
-- 2026-06-29: T009 is complete. The executor now extracts `zip` and `tar.gz`
-  archives natively, routes `tar.xz` through a structured `tar` command
-  boundary, rejects unsafe archive paths, supports file and directory mappings,
-  and preserves previous installs when extraction fails before replacement.
-- 2026-06-29: Agent-loop follow-up should resume at T024 unless a blocking
-  bug appears first. T024-T027 are the TUI implementation phase. T028-T030 are
-  the mandatory post-TUI review, refactoring, and security phase. T031 writes
-  developer docs. T032 updates README last.
-- 2026-06-29: T014 of the current TUI/production-readiness loop added
-  maintainer documentation under `docs/`: architecture, manifest reference,
-  security model, TUI guide, testing guide, and release guide. README remains
-  intentionally unchanged until the final README task.
-- 2026-06-29: T015 of the current TUI/production-readiness loop finalized the
-  README as the concise user-facing entry point. It now describes the current
-  narrow Linux amd64 binary-installer scope, CLI commands, explicit TUI
-  entrypoints, state/resume behavior, release artifacts, and links to the
-  maintainer docs instead of duplicating internal details.
+| T001 | improvement | complex | Record redirect provenance |
+| T002 | fix | moderate | Replace TUI stty shell boundary |
+| T003 | improvement | moderate | Emit TUI resize events |
+| T004 | fix | complex | Revalidate interpolated paths |
+| T005 | validation | simple | Checkpoint hardening fixes |
+| T006 | improvement | moderate | Smoke TUI in release workflow |
+| T007 | improvement | complex | Extract resolution and download code |
+| T008 | improvement | complex | Extract archive and filesystem code |
+| T009 | improvement | complex | Extract state events and render safety |
+| T010 | validation | simple | Checkpoint maintainability split |
+| T011 | feature | complex | Add lock command |
+| T012 | feature | complex | Enforce locked apply |
+| T013 | feature | complex | Add strict policy profiles |
+| T014 | validation | simple | Checkpoint lock and policy |
+| T015 | improvement | complex | Discover published checksums |
+| T016 | validation | simple | Run final validation |
 
 ## Verification Strategy
 

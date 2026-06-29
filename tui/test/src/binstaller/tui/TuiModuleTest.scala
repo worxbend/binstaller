@@ -12,8 +12,12 @@ import binstaller.core.InstallerOptions
 import binstaller.core.ResetState
 import binstaller.core.ResolutionOptions
 import binstaller.core.ResolvedPlanSnapshot
+import binstaller.core.ResolvedVersion
+import binstaller.core.SensitiveValueRedactions
 import binstaller.core.ToolResultStatus
 import binstaller.core.ToolSelection
+import binstaller.core.UrlProvenance
+import binstaller.core.UrlRedirectHop
 import binstaller.core.VerboseOutput
 import utest.*
 
@@ -259,6 +263,43 @@ object TuiModuleTest extends TestSuite:
       PlanningTuiStatus.legendOrder.foreach: status =>
         assert(plain.contains(status.label))
       assert(first.contains("\u001b["))
+
+    test("planning TUI redacts redirected resolver final URLs"):
+      val fixture    = writeFixture()
+      val snapshot   = snapshotFor(fixture.options)
+      val secret     = "secret-token-value"
+      val provenance = UrlProvenance(
+        "https://example.invalid/stable.txt",
+        s"https://cdn.example.invalid/$secret/stable.txt",
+        Vector(UrlRedirectHop(
+          "https://example.invalid/stable.txt",
+          s"https://cdn.example.invalid/$secret/stable.txt",
+          302
+        ))
+      )
+      val plan = snapshot.plan.copy(
+        tools = snapshot.plan.tools.map(tool =>
+          tool.copy(version = ResolvedVersion.Concrete("1.2.3", Some(provenance)))
+        ),
+        redactions = SensitiveValueRedactions(Vector(secret))
+      )
+      val model = PlanningTuiModel.fromSnapshot(
+        snapshot.copy(plan = plan),
+        TuiRequest(TuiMode.Plan, fixture.options),
+        testSettings(width = 100, height = 50).copy(detailScroll = 6)
+      )
+
+      val plain = stripAnsi(PlanningTuiRenderer.render(model).mkString("\n"))
+
+      assert(plain.contains(
+        "version resolver final url: https://cdn.example.invalid/<redacted>/stable.txt"
+      ))
+      assert(model.detail.exists(_.lines.contains(
+        "version resolver redirects: 302 https://example.invalid/stable.txt -> " +
+          "https://cdn.example.invalid/<redacted>/stable.txt"
+      )))
+      assert(plain.contains("version resolver redirects: 302 https://example.invalid/stable.txt"))
+      assert(!plain.contains(secret))
 
     test("tab and documented backward equivalent cycle pane focus"):
       val state        = sessionState(writeFixture())

@@ -8,11 +8,14 @@ import binstaller.core.BinaryDownloadProgressObserver
 import binstaller.core.DirectBinaryInstaller
 import binstaller.core.HttpTextClient
 import binstaller.core.HttpTextError
+import binstaller.core.HttpTextResponse
 import binstaller.core.InstallFileSystem
 import binstaller.core.InstallerEventObserver
 import binstaller.core.InstallerOptions
 import binstaller.core.InstallerResult
 import binstaller.core.ResetState
+import binstaller.core.UrlProvenance
+import binstaller.core.UrlRedirectHop
 import utest.*
 
 import java.io.PrintWriter
@@ -156,6 +159,34 @@ object CliModuleTest extends TestSuite:
       assert(result.exitCode == 0)
       assert(result.out.contains("sudo risk: YES"))
       assert(result.out.linesIterator.count(_.contains("sudo ln -sfn")) == 5)
+
+    test("versions output shows final URL provenance for redirected resolvers"):
+      val service = BinaryInstallerService.resolving(
+        RedirectingHttpTextClient(
+          "v1.34.0",
+          UrlProvenance(
+            "https://dl.k8s.io/release/stable.txt",
+            "https://cdn.example.invalid/kubernetes/stable.txt",
+            Vector(UrlRedirectHop(
+              "https://dl.k8s.io/release/stable.txt",
+              "https://cdn.example.invalid/kubernetes/stable.txt",
+              302
+            ))
+          )
+        )
+      )
+
+      val result = runCli(Vector("versions", "--config", configExamplePath.toString), service)
+
+      assert(result.exitCode == 0)
+      assert(result.out.contains(
+        "resolved kubectl: v1.34.0 from https://dl.k8s.io/release/stable.txt " +
+          "(final url: https://cdn.example.invalid/kubernetes/stable.txt;"
+      ))
+      assert(result.out.contains(
+        "redirects: 302 https://dl.k8s.io/release/stable.txt -> " +
+          "https://cdn.example.invalid/kubernetes/stable.txt"
+      ))
 
     test("apply dry-run renders local and sudo symlink actions without executing them"):
       val tempRoot = Files.createTempDirectory("binstaller-cli-dry-symlinks")
@@ -357,6 +388,15 @@ private final class FakeHttpTextClient(text: String) extends HttpTextClient:
 
   def getText(url: String): Either[HttpTextError, String] =
     if url == "https://dl.k8s.io/release/stable.txt" then Right(text)
+    else Left(HttpTextError(url, s"unexpected URL $url"))
+
+private final class RedirectingHttpTextClient(text: String, provenance: UrlProvenance)
+    extends HttpTextClient:
+
+  def getText(url: String): Either[HttpTextError, String] = getTextWithProvenance(url).map(_.text)
+
+  override def getTextWithProvenance(url: String): Either[HttpTextError, HttpTextResponse] =
+    if url == provenance.initialUrl then Right(HttpTextResponse(text, provenance))
     else Left(HttpTextError(url, s"unexpected URL $url"))
 
 private final class ProgressBinaryDownloadClient(bytes: Array[Byte]) extends BinaryDownloadClient:

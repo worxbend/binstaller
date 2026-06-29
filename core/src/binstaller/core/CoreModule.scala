@@ -266,12 +266,23 @@ object RenderSafety:
     case ch                                  => ch
 
 /** Expected failure from a text version resolver. */
-final case class HttpTextError(url: String, message: String)
+final case class HttpTextError(
+    url: String,
+    message: String,
+    provenance: Option[UrlProvenance] = None
+)
+
+/** Text response paired with the effective URL metadata observed by the HTTP client. */
+final case class HttpTextResponse(text: String, provenance: UrlProvenance)
 
 /** Boundary for fetching small text values such as version resolver endpoints. */
 trait HttpTextClient:
   /** Fetch text from a URL, returning domain errors rather than throwing expected failures. */
   def getText(url: String): Either[HttpTextError, String]
+
+  /** Fetch text and report the initial URL, final URL, and redirect chain. */
+  def getTextWithProvenance(url: String): Either[HttpTextError, HttpTextResponse] =
+    getText(url).map(text => HttpTextResponse(text, UrlProvenance.direct(url)))
 
 /** HTTP text client constructors. */
 object HttpTextClient:
@@ -279,7 +290,85 @@ object HttpTextClient:
   def jdk: HttpTextClient = JdkHttpTextClient(RuntimeHttpClient.create())
 
 /** Expected failure from a binary download. */
-final case class BinaryDownloadError(url: String, message: String)
+final case class BinaryDownloadError(
+    url: String,
+    message: String,
+    provenance: Option[UrlProvenance] = None
+)
+
+/** Downloaded artifact bytes paired with effective URL metadata. */
+final case class BinaryDownloadResult(bytes: Array[Byte], provenance: UrlProvenance)
+
+/** One followed HTTP redirect from a response URL to the next request URL. */
+final case class UrlRedirectHop(from: String, to: String, statusCode: Int)
+
+/** Initial and final effective URLs observed at an HTTP boundary. */
+final case class UrlProvenance(
+    initialUrl: String,
+    finalUrl: String,
+    redirects: Vector[UrlRedirectHop]
+):
+  /** Whether the final URL differs from the request URL through a followed redirect. */
+  def redirected: Boolean = redirects.nonEmpty || initialUrl != finalUrl
+
+/** URL provenance constructors and rendering helpers. */
+object UrlProvenance:
+  /** Provenance for a response that did not follow redirects. */
+  def direct(url: String): UrlProvenance = UrlProvenance(url, url, Vector.empty)
+
+  /** Derive provenance from a JDK HTTP response and its previous-response chain. */
+  def fromResponse(initialUrl: String, response: HttpResponse[?]): UrlProvenance =
+    val previous  = previousResponses(response)
+    val nextUrls  = previous.drop(1).map(_.uri().toString) :+ response.uri().toString
+    val redirects = previous.zip(nextUrls).map:
+      case (redirectResponse, nextUrl) =>
+        UrlRedirectHop(redirectResponse.uri().toString, nextUrl, redirectResponse.statusCode())
+    UrlProvenance(initialUrl, response.uri().toString, redirects)
+
+  /** Render a compact parenthetical suffix only when redirects occurred. */
+  def redirectSuffix(
+      provenance: Option[UrlProvenance],
+      redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
+  ): String = provenance.filter(_.redirected) match
+    case Some(value) => s" (${RenderSafety.display(redirectSummary(value), redactions)})"
+    case None        => ""
+
+  /** Render detailed provenance lines only when redirects occurred. */
+  def redirectDetailLines(
+      label: String,
+      provenance: Option[UrlProvenance],
+      redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
+  ): Vector[String] = provenance.filter(_.redirected) match
+    case Some(value) => RenderSafety.displayLines(
+        Vector(
+          s"$label initial url: ${value.initialUrl}",
+          s"$label final url: ${value.finalUrl}",
+          s"$label redirects: ${redirectChain(value)}"
+        ),
+        redactions
+      )
+    case None => Vector.empty
+
+  /** Render the redirect chain without applying terminal safety; callers scrub at the boundary. */
+  def redirectChainForDisplay(provenance: UrlProvenance): String = redirectChain(provenance)
+
+  given ReadWriter[UrlRedirectHop] = macroRW
+  given ReadWriter[UrlProvenance]  = macroRW
+
+  private def previousResponses(response: HttpResponse[?]): Vector[HttpResponse[?]] =
+    val previous = response.previousResponse()
+    if previous.isPresent then previousResponses(previous.get()) :+ previous.get()
+    else Vector.empty
+
+  private def redirectSummary(provenance: UrlProvenance): String =
+    s"final url: ${provenance.finalUrl}; redirects: ${redirectChain(provenance)}"
+
+  private def redirectChain(provenance: UrlProvenance): String =
+    if provenance.redirects.isEmpty then s"${provenance.initialUrl} -> ${provenance.finalUrl}"
+    else
+      provenance.redirects
+        .map(hop => s"${hop.statusCode} ${hop.from} -> ${hop.to}")
+        .mkString(", ")
 
 /** Download progress events emitted by binary download clients. */
 enum BinaryDownloadProgress:
@@ -308,6 +397,18 @@ trait BinaryDownloadClient:
       progressObserver: BinaryDownloadProgressObserver
   ): Either[BinaryDownloadError, Array[Byte]] = progressObserver match
     case _ => download(url)
+
+  /** Download bytes and report the initial URL, final URL, and redirect chain. */
+  def downloadWithProvenance(url: String): Either[BinaryDownloadError, BinaryDownloadResult] =
+    downloadWithProvenance(url, BinaryDownloadProgressObserver.none)
+
+  /** Download bytes with progress callbacks and effective URL metadata. */
+  def downloadWithProvenance(
+      url: String,
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[BinaryDownloadError, BinaryDownloadResult] = download(url, progressObserver).map(
+    bytes => BinaryDownloadResult(bytes, UrlProvenance.direct(url))
+  )
 
 /** Binary download client constructors. */
 object BinaryDownloadClient:
@@ -559,7 +660,7 @@ final case class ResolvedTool(
 
 /** Tool version after resolution. */
 enum ResolvedVersion:
-  case Concrete(value: String)
+  case Concrete(value: String, provenance: Option[UrlProvenance] = None)
   case DynamicLatestUrl(note: Option[String])
 
 /** Rendering helpers for resolved versions. */
@@ -567,7 +668,7 @@ object ResolvedVersion:
 
   /** Render a resolved version for CLI/TUI display. */
   def render(version: ResolvedVersion): String = version match
-    case ResolvedVersion.Concrete(value)     => value
+    case ResolvedVersion.Concrete(value, _)  => value
     case ResolvedVersion.DynamicLatestUrl(_) => "dynamic latest-url"
 
 /** Resolved download fields after interpolation and URL validation. */
@@ -688,7 +789,8 @@ final case class ApplyStateTool(
     name: String,
     status: String,
     installDir: Option[String],
-    message: Option[String]
+    message: Option[String],
+    download: Option[UrlProvenance] = None
 )
 
 /** Apply-state JSON codecs and constructors. */
@@ -731,11 +833,15 @@ object ApplyStateStore:
     NioApplyStateStore(directory.toAbsolutePath.normalize())
 
 /** Successful installation of a single tool. */
-final case class ToolInstallSuccess(toolName: String, installDir: String)
+final case class ToolInstallSuccess(
+    toolName: String,
+    installDir: String,
+    download: Option[UrlProvenance] = None
+)
 
 /** Terminal result emitted for state persistence and renderer summaries. */
 enum TerminalToolResult:
-  case Completed(toolName: String, installDir: String)
+  case Completed(toolName: String, installDir: String, download: Option[UrlProvenance] = None)
   case Failed(toolName: String, message: String)
 
 /** Rendering helpers for terminal tool results. */
@@ -746,7 +852,7 @@ object TerminalToolResult:
       result: TerminalToolResult,
       redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
   ): String = result match
-    case TerminalToolResult.Completed(toolName, installDir) =>
+    case TerminalToolResult.Completed(toolName, installDir, _) =>
       RenderSafety.display(s"installed $toolName to $installDir", redactions)
     case TerminalToolResult.Failed(toolName, message) =>
       RenderSafety.display(s"failed $toolName: $message", redactions)
@@ -778,7 +884,14 @@ enum ApplyPreflightError:
 
 /** Expected failure while installing one tool. */
 enum ToolInstallError:
-  case DownloadFailed(toolName: String, url: String, message: String)
+
+  case DownloadFailed(
+      toolName: String,
+      url: String,
+      message: String,
+      provenance: Option[UrlProvenance] = None
+  )
+
   case ChecksumMismatch(toolName: String, expected: String, actual: String)
   case StagingFailed(toolName: String, message: String)
   case ModeApplicationFailed(toolName: String, path: String, mode: String, message: String)
@@ -975,16 +1088,17 @@ final class DirectBinaryInstaller(
       val result   = installTool(policy, tool, eventContext, redactions)
       val terminal = terminalResult(result, redactions)
       eventContext.emit(toolResultEvent(terminal))
+      val terminalLines = renderedTerminalLines(terminal, redactions)
       terminalObserver(terminal) match
         case Left(message) => ObservedInstallResults(
-            verbose :+ TerminalToolResult.line(terminal, redactions),
+            verbose ++ terminalLines,
             Vector(terminal),
             Some(RenderSafety.display(message, redactions))
           )
         case Right(()) => result match
             case Left(_) if policy.continueOnError == ContinueOnError.Disabled =>
               ObservedInstallResults(
-                verbose :+ TerminalToolResult.line(terminal, redactions),
+                verbose ++ terminalLines,
                 Vector(terminal),
                 None
               )
@@ -999,7 +1113,7 @@ final class DirectBinaryInstaller(
               )
               rest.copy(
                 lines = verbose ++
-                  (TerminalToolResult.line(terminal, redactions) +: rest.lines),
+                  (terminalLines ++ rest.lines),
                 results = terminal +: rest.results
               )
             case Right(_) =>
@@ -1013,9 +1127,18 @@ final class DirectBinaryInstaller(
               )
               rest.copy(
                 lines = verbose ++
-                  (TerminalToolResult.line(terminal, redactions) +: rest.lines),
+                  (terminalLines ++ rest.lines),
                 results = terminal +: rest.results
               )
+
+  private def renderedTerminalLines(
+      terminal: TerminalToolResult,
+      redactions: SensitiveValueRedactions
+  ): Vector[String] = terminal match
+    case TerminalToolResult.Completed(_, _, provenance) =>
+      UrlProvenance.redirectDetailLines("download", provenance, redactions) :+
+        TerminalToolResult.line(terminal, redactions)
+    case TerminalToolResult.Failed(_, _) => Vector(TerminalToolResult.line(terminal, redactions))
 
   /** Install a single tool without sudo symlink support. Intended for focused tests and helpers. */
   def installTool(tool: ResolvedTool): Either[ToolInstallError, ToolInstallSuccess] =
@@ -1048,8 +1171,9 @@ final class DirectBinaryInstaller(
       result: Either[ToolInstallError, ToolInstallSuccess],
       redactions: SensitiveValueRedactions
   ): TerminalToolResult = result match
-    case Right(success) => TerminalToolResult.Completed(success.toolName, success.installDir)
-    case Left(error)    => TerminalToolResult.Failed(
+    case Right(success) =>
+      TerminalToolResult.Completed(success.toolName, success.installDir, success.download)
+    case Left(error) => TerminalToolResult.Failed(
         toolName(error),
         renderInstallError(error, redactions)
       )
@@ -1057,7 +1181,7 @@ final class DirectBinaryInstaller(
   private def toolResultEvent(
       result: TerminalToolResult
   )(elapsedTime: Duration): InstallerEvent = result match
-    case TerminalToolResult.Completed(toolName, installDir) => InstallerEvent.ToolResult(
+    case TerminalToolResult.Completed(toolName, installDir, _) => InstallerEvent.ToolResult(
         toolName,
         ToolResultStatus.Completed,
         Some(installDir),
@@ -1105,7 +1229,8 @@ final class DirectBinaryInstaller(
       redactions: SensitiveValueRedactions
   ): Either[ToolInstallError, ToolInstallSuccess] =
     for
-      bytes <- download(tool, eventContext, redactions)
+      downloadResult <- download(tool, eventContext, redactions)
+      bytes = downloadResult.bytes
       // Integrity is checked before staging/replacement so a bad artifact cannot overwrite a
       // previously working install.
       _ <-
@@ -1122,20 +1247,21 @@ final class DirectBinaryInstaller(
       _ <- withPhase(tool, InstallerPhase.CreatingSymlinks, eventContext)(
         createSymlinks(policy, tool)
       )
-    yield ToolInstallSuccess(tool.name, tool.installDir)
+    yield ToolInstallSuccess(tool.name, tool.installDir, Some(downloadResult.provenance))
 
   private def download(
       tool: ResolvedTool,
       eventContext: InstallerEventContext,
       redactions: SensitiveValueRedactions
-  ): Either[ToolInstallError, Array[Byte]] = downloadClient.download(
+  ): Either[ToolInstallError, BinaryDownloadResult] = downloadClient.downloadWithProvenance(
     tool.download.url,
     downloadProgressObserver(tool, eventContext, redactions)
   ).left.map: error =>
     ToolInstallError.DownloadFailed(
       tool.name,
       RenderSafety.display(error.url, redactions),
-      RenderSafety.display(error.message, redactions)
+      RenderSafety.display(error.message, redactions),
+      error.provenance
     )
 
   private def downloadProgressObserver(
@@ -1379,7 +1505,7 @@ final class DirectBinaryInstaller(
       else Left(ToolInstallError.StagingFailed(tool.name, s"path escapes installDir: $relative"))
 
   private def toolName(error: ToolInstallError): String = error match
-    case ToolInstallError.DownloadFailed(toolName, _, _)            => toolName
+    case ToolInstallError.DownloadFailed(toolName, _, _, _)         => toolName
     case ToolInstallError.ChecksumMismatch(toolName, _, _)          => toolName
     case ToolInstallError.StagingFailed(toolName, _)                => toolName
     case ToolInstallError.ModeApplicationFailed(toolName, _, _, _)  => toolName
@@ -1394,9 +1520,10 @@ final class DirectBinaryInstaller(
       error: ToolInstallError,
       redactions: SensitiveValueRedactions
   ): String = error match
-    case ToolInstallError.DownloadFailed(toolName, url, message) => detailBlock(
+    case ToolInstallError.DownloadFailed(toolName, url, message, provenance) => detailBlock(
         s"download: $url: $message",
-        Vector("tool" -> toolName, "url" -> url, "message" -> message),
+        Vector("tool" -> toolName, "url" -> url, "message" -> message) ++
+          redirectDetailPairs("download", provenance),
         redactions
       )
     case ToolInstallError.ChecksumMismatch(toolName, expected, actual) => detailBlock(
@@ -1451,6 +1578,17 @@ final class DirectBinaryInstaller(
   ): String =
     val lines = summary +: details.map((name, value) => s"  $name: $value")
     RenderSafety.displayLines(lines, redactions).mkString("\n")
+
+  private def redirectDetailPairs(
+      label: String,
+      provenance: Option[UrlProvenance]
+  ): Vector[(String, String)] = provenance.filter(_.redirected) match
+    case Some(value) => Vector(
+        s"$label initial url" -> value.initialUrl,
+        s"$label final url"   -> value.finalUrl,
+        s"$label redirects"   -> UrlProvenance.redirectChainForDisplay(value)
+      )
+    case None => Vector.empty
 
   private def renderPreflightError(error: ApplyPreflightError): String = error match
     case ApplyPreflightError.ConfirmationRequired =>
@@ -1635,15 +1773,15 @@ private object StatefulApplyRunner:
 
   private def updateState(state: ApplyState, result: TerminalToolResult): ApplyState =
     val updatedTool = result match
-      case TerminalToolResult.Completed(toolName, installDir) =>
-        ApplyStateTool(toolName, "completed", Some(installDir), None)
+      case TerminalToolResult.Completed(toolName, installDir, download) =>
+        ApplyStateTool(toolName, "completed", Some(installDir), None, download)
       case TerminalToolResult.Failed(toolName, message) =>
         ApplyStateTool(toolName, "failed", None, Some(message))
     state.copy(tools = replaceTool(state.tools, updatedTool))
 
   private def toolName(result: TerminalToolResult): String = result match
-    case TerminalToolResult.Completed(toolName, _) => toolName
-    case TerminalToolResult.Failed(toolName, _)    => toolName
+    case TerminalToolResult.Completed(toolName, _, _) => toolName
+    case TerminalToolResult.Failed(toolName, _)       => toolName
 
   private def replaceTool(
       tools: Vector[ApplyStateTool],
@@ -2009,8 +2147,12 @@ private final class ResolvingBinaryInstallerService(
         val suffix = note.map(value => s" - $value").getOrElse("")
         s"dynamic $name: dynamic latest-url (tools: $toolList)$suffix"
       case VersionSource.Resolver(VersionResolverKind.HttpText, url) =>
-        val value = resolved.map(ResolvedVersion.render).getOrElse("<unresolved>")
-        s"resolved $name: $value from $url (tools: $toolList)"
+        val value      = resolved.map(ResolvedVersion.render).getOrElse("<unresolved>")
+        val provenance = resolved.flatMap:
+          case ResolvedVersion.Concrete(_, value)  => value
+          case ResolvedVersion.DynamicLatestUrl(_) => None
+        s"resolved $name: $value from $url${UrlProvenance.redirectSuffix(provenance)} " +
+          s"(tools: $toolList)"
 
   private def renderError(error: ResolvePlanError): InstallerResult =
     InstallerResult(ResolvePlanError.renderLines(error), 1)
@@ -2092,7 +2234,8 @@ private object PlanRenderer:
       renderSymlinks(tool)
 
   private def renderVersion(version: ResolvedVersion): String = version match
-    case ResolvedVersion.Concrete(value)     => s"concrete $value"
+    case ResolvedVersion.Concrete(value, provenance) =>
+      s"concrete $value${UrlProvenance.redirectSuffix(provenance)}"
     case ResolvedVersion.DynamicLatestUrl(_) => "dynamic latest-url"
 
   private def renderChecksum(checksum: Option[ChecksumSpec]): String = checksum match
@@ -2228,7 +2371,7 @@ private final class ResolutionBuilder(
       val path     = s"spec.versions.$name"
       val resolved = interpolate(value, path, vars)
       val errors   = resolved.errors ++ missingConcreteVersionErrors(resolved.value, path, name)
-      ResolvedValue(ResolvedVersion.Concrete(resolved.value), errors)
+      ResolvedValue(ResolvedVersion.Concrete(resolved.value, None), errors)
     case VersionSource.Dynamic(DynamicVersionKind.LatestUrl, note) =>
       ResolvedValue.valid(ResolvedVersion.DynamicLatestUrl(note))
     case VersionSource.Resolver(VersionResolverKind.HttpText, url) =>
@@ -2242,18 +2385,26 @@ private final class ResolutionBuilder(
     val path        = s"spec.versions.$name.resolver.url"
     val resolvedUrl = interpolate(url, path, vars)
     val fetched     =
-      if resolvedUrl.errors.nonEmpty then ResolvedValue.valid("")
-      else if httpsUrlErrors(resolvedUrl.value, path).nonEmpty then ResolvedValue.valid("")
+      if resolvedUrl.errors.nonEmpty then
+        ResolvedValue.valid(HttpTextResponse("", UrlProvenance.direct(resolvedUrl.value)))
+      else if httpsUrlErrors(resolvedUrl.value, path).nonEmpty then
+        ResolvedValue.valid(HttpTextResponse("", UrlProvenance.direct(resolvedUrl.value)))
       else
-        httpTextClient.getText(resolvedUrl.value) match
-          case Right(text) => ResolvedValue.valid(text.trim)
-          case Left(error) =>
-            ResolvedValue.invalid("", path, s"http-text resolver failed: ${error.message}")
+        httpTextClient.getTextWithProvenance(resolvedUrl.value) match
+          case Right(response) => ResolvedValue.valid(response.copy(text = response.text.trim))
+          case Left(error)     => ResolvedValue.invalid(
+              HttpTextResponse(
+                "",
+                error.provenance.getOrElse(UrlProvenance.direct(resolvedUrl.value))
+              ),
+              path,
+              s"http-text resolver failed: ${error.message}"
+            )
 
     ResolvedValue(
-      ResolvedVersion.Concrete(fetched.value),
+      ResolvedVersion.Concrete(fetched.value.text, Some(fetched.value.provenance)),
       resolvedUrl.errors ++ httpsUrlErrors(resolvedUrl.value, path) ++ fetched.errors ++
-        missingConcreteVersionErrors(fetched.value, path, name)
+        missingConcreteVersionErrors(fetched.value.text, path, name)
     )
 
   private def missingConcreteVersionErrors(
@@ -2319,8 +2470,8 @@ private final class ResolutionBuilder(
     )
 
   private def concreteVersionVars(version: ResolvedVersion): Map[String, String] = version match
-    case ResolvedVersion.Concrete(value) if value.nonEmpty => Map("version" -> value)
-    case _                                                 => Map.empty
+    case ResolvedVersion.Concrete(value, _) if value.nonEmpty => Map("version" -> value)
+    case _                                                    => Map.empty
 
   private def resolveDownload(
       download: DownloadSpec,
@@ -2438,7 +2589,7 @@ private final class ResolutionBuilder(
       path: String,
       version: ResolvedVersion
   ): Vector[ValidationError] = version match
-    case ResolvedVersion.Concrete(value) if value.nonEmpty => Vector.empty
+    case ResolvedVersion.Concrete(value, _) if value.nonEmpty => Vector.empty
     case _ => TemplateInterpolator.variableNames(value).collect:
         case "version" => ValidationError(
             path,
@@ -2516,18 +2667,27 @@ private object TemplateInterpolator:
   def variableNames(value: String): Vector[String] =
     Variable.findAllMatchIn(value).map(_.group(1)).toVector
 
-private final class JdkHttpTextClient(client: HttpClient) extends HttpTextClient:
+private[core] final class JdkHttpTextClient(client: HttpClient) extends HttpTextClient:
 
-  def getText(url: String): Either[HttpTextError, String] = RuntimeUrl.httpsUri(url) match
+  def getText(url: String): Either[HttpTextError, String] = getTextWithProvenance(url).map(_.text)
+
+  override def getTextWithProvenance(
+      url: String
+  ): Either[HttpTextError, HttpTextResponse] = RuntimeUrl.httpsUri(url) match
     case Left(message) => Left(HttpTextError(url, message))
     case Right(uri)    =>
       val request = HttpRequest.newBuilder(uri).timeout(RuntimeHttpClient.requestTimeout).GET()
         .build()
       Try(client.send(request, HttpResponse.BodyHandlers.ofString())) match
         case Success(response) if response.statusCode() >= 200 && response.statusCode() < 300 =>
-          Right(response.body())
-        case Success(response) => Left(HttpTextError(url, s"HTTP ${response.statusCode()}"))
-        case Failure(error)    => Left(HttpTextError(url, error.getMessage))
+          val provenance = UrlProvenance.fromResponse(url, response)
+          RuntimeUrl.httpsUri(provenance.finalUrl) match
+            case Right(_)      => Right(HttpTextResponse(response.body(), provenance))
+            case Left(message) => Left(HttpTextError(url, message, Some(provenance)))
+        case Success(response) =>
+          val provenance = UrlProvenance.fromResponse(url, response)
+          Left(HttpTextError(url, s"HTTP ${response.statusCode()}", Some(provenance)))
+        case Failure(error) => Left(HttpTextError(url, error.getMessage))
 
 private[core] final class JdkBinaryDownloadClient(
     client: HttpClient,
@@ -2540,22 +2700,33 @@ private[core] final class JdkBinaryDownloadClient(
   override def download(
       url: String,
       progressObserver: BinaryDownloadProgressObserver
-  ): Either[BinaryDownloadError, Array[Byte]] = RuntimeUrl.httpsUri(url) match
+  ): Either[BinaryDownloadError, Array[Byte]] =
+    downloadWithProvenance(url, progressObserver).map(_.bytes)
+
+  override def downloadWithProvenance(
+      url: String,
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[BinaryDownloadError, BinaryDownloadResult] = RuntimeUrl.httpsUri(url) match
     case Left(message) => Left(BinaryDownloadError(url, message))
     case Right(uri)    =>
       val request = HttpRequest.newBuilder(uri).timeout(RuntimeHttpClient.requestTimeout).GET()
         .build()
       Try(client.send(request, HttpResponse.BodyHandlers.ofInputStream())) match
         case Success(response) if response.statusCode() >= 200 && response.statusCode() < 300 =>
-          readBody(url, response, progressObserver)
-        case Success(response) => Left(BinaryDownloadError(url, s"HTTP ${response.statusCode()}"))
-        case Failure(error)    => Left(BinaryDownloadError(url, error.getMessage))
+          val provenance = UrlProvenance.fromResponse(url, response)
+          RuntimeUrl.httpsUri(provenance.finalUrl) match
+            case Left(message) => Left(BinaryDownloadError(url, message, Some(provenance)))
+            case Right(_)      => readBody(provenance, response, progressObserver)
+        case Success(response) =>
+          val provenance = UrlProvenance.fromResponse(url, response)
+          Left(BinaryDownloadError(url, s"HTTP ${response.statusCode()}", Some(provenance)))
+        case Failure(error) => Left(BinaryDownloadError(url, error.getMessage))
 
   private def readBody(
-      url: String,
+      provenance: UrlProvenance,
       response: HttpResponse[InputStream],
       progressObserver: BinaryDownloadProgressObserver
-  ): Either[BinaryDownloadError, Array[Byte]] =
+  ): Either[BinaryDownloadError, BinaryDownloadResult] =
     val totalBytes = response.headers().firstValueAsLong("Content-Length") match
       case value if value.isPresent && value.getAsLong >= 0L => Some(value.getAsLong)
       case _                                                 => None
@@ -2564,10 +2735,20 @@ private[core] final class JdkBinaryDownloadClient(
       Using.resource(response.body()): input =>
         // The whole artifact is currently materialized because checksum and archive extraction
         // operate on bytes; size and body-time limits bound that risk until streaming exists.
-        BoundedBinaryBodyReader.read(url, input, totalBytes, limits, progressObserver)
+        BoundedBinaryBodyReader.read(
+          provenance.finalUrl,
+          input,
+          totalBytes,
+          limits,
+          progressObserver
+        )
     match
       case Success(result) => result
-      case Failure(error)  => Left(BinaryDownloadError(url, error.getMessage))
+          .map(bytes => BinaryDownloadResult(bytes, provenance))
+          .left
+          .map(error => error.copy(url = provenance.initialUrl, provenance = Some(provenance)))
+      case Failure(error) =>
+        Left(BinaryDownloadError(provenance.initialUrl, error.getMessage, Some(provenance)))
 
 private[core] object BoundedBinaryBodyReader:
 

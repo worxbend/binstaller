@@ -20,7 +20,9 @@ import binstaller.core.ResolvedTool
 import binstaller.core.ResolvedVersion
 import binstaller.core.RenderSafety
 import binstaller.core.ResolvePlanError
+import binstaller.core.SensitiveValueRedactions
 import binstaller.core.ToolResultStatus
+import binstaller.core.UrlProvenance
 
 import java.io.FileInputStream
 import java.io.InputStream
@@ -241,7 +243,8 @@ object PlanningTuiModel:
     val selectedIndex = clampedIndex(settings.selectedIndex, visibleTools)
     val selectedTool  = visibleTools.lift(selectedIndex)
     val rows          = visibleTools.zipWithIndex.map:
-      case (tool, index) => rowForTool(index, selected = index == selectedIndex, tool)
+      case (tool, index) =>
+        rowForTool(index, selected = index == selectedIndex, tool, snapshot.plan.redactions)
     val header = PlanningTuiHeader(
       appName = "binstaller",
       appVersion = settings.appVersion,
@@ -261,10 +264,10 @@ object PlanningTuiModel:
       header = header,
       focusedPane = settings.focusedPane,
       rows = rows,
-      detail = selectedTool.map(detailForTool),
+      detail = selectedTool.map(detailForTool(_, snapshot.plan.redactions)),
       detailScroll = clampScroll(
         settings.detailScroll,
-        selectedTool.map(detailForTool).fold(0)(_.lines.size),
+        selectedTool.map(detailForTool(_, snapshot.plan.redactions)).fold(0)(_.lines.size),
         layout.detailBodyHeight
       ),
       logs = logs,
@@ -303,7 +306,12 @@ object PlanningTuiModel:
   private def clampScroll(offset: Int, total: Int, window: Int): Int =
     offset.max(0).min((total - window).max(0))
 
-  private def rowForTool(index: Int, selected: Boolean, tool: ResolvedTool): PlanningTuiRow =
+  private def rowForTool(
+      index: Int,
+      selected: Boolean,
+      tool: ResolvedTool,
+      redactions: SensitiveValueRedactions
+  ): PlanningTuiRow =
     val risks  = riskMarkers(tool)
     val status =
       if selected then PlanningTuiStatus.Active
@@ -313,26 +321,46 @@ object PlanningTuiModel:
       index = index + 1,
       selected = selected,
       status = status,
-      name = tool.name,
+      name = safe(tool.name, redactions),
       kind = "binary-tool",
-      version = ResolvedVersion.render(tool.version),
-      installDir = tool.installDir,
+      version = safe(ResolvedVersion.render(tool.version), redactions),
+      installDir = safe(tool.installDir, redactions),
       checksumState = checksumState(tool.download),
       riskMarkers = risks
     )
 
-  private def detailForTool(tool: ResolvedTool): PlanningTuiDetail = PlanningTuiDetail(
-    name = tool.name,
-    lines = Vector(
-      s"name: ${tool.name}",
-      s"description: ${tool.description.getOrElse("not provided")}",
-      s"version: ${ResolvedVersion.render(tool.version)}",
-      s"install dir: ${tool.installDir}",
-      s"download url: ${tool.download.url}",
-      s"download file: ${joinPath(tool.installDir, tool.download.filename)}",
-      s"checksum: ${checksumDetail(tool.download)}"
-    ) ++ archiveLines(tool.download.archive) ++ symlinkLines(tool) ++ dryRunPreview(tool)
+  private def detailForTool(
+      tool: ResolvedTool,
+      redactions: SensitiveValueRedactions
+  ): PlanningTuiDetail = PlanningTuiDetail(
+    name = safe(tool.name, redactions),
+    lines = safeLines(
+      Vector(
+        s"name: ${tool.name}",
+        s"description: ${tool.description.getOrElse("not provided")}",
+        s"version: ${ResolvedVersion.render(tool.version)}",
+        s"install dir: ${tool.installDir}",
+        s"download url: ${tool.download.url}",
+        s"download file: ${joinPath(tool.installDir, tool.download.filename)}",
+        s"checksum: ${checksumDetail(tool.download)}"
+      ) ++ versionProvenanceLines(tool.version) ++ archiveLines(tool.download.archive) ++
+        symlinkLines(tool) ++ dryRunPreview(tool),
+      redactions
+    )
   )
+
+  private def safe(value: String, redactions: SensitiveValueRedactions): String =
+    RenderSafety.display(value, redactions)
+
+  private def safeLines(
+      lines: Vector[String],
+      redactions: SensitiveValueRedactions
+  ): Vector[String] = RenderSafety.displayLines(lines, redactions)
+
+  private def versionProvenanceLines(version: ResolvedVersion): Vector[String] = version match
+    case ResolvedVersion.Concrete(_, provenance) =>
+      UrlProvenance.redirectDetailLines("version resolver", provenance)
+    case ResolvedVersion.DynamicLatestUrl(_) => Vector.empty
 
   private def archiveLines(archive: Option[ResolvedArchive]): Vector[String] = archive match
     case None        => Vector("archive: none")
@@ -402,7 +430,7 @@ object PlanningTuiModel:
     checksumRisk ++ dynamicVersionRisk(tool.version) ++ sudoRisk(tool)
 
   private def dynamicVersionRisk(version: ResolvedVersion): Vector[String] = version match
-    case ResolvedVersion.Concrete(_)         => Vector.empty
+    case ResolvedVersion.Concrete(_, _)      => Vector.empty
     case ResolvedVersion.DynamicLatestUrl(_) => Vector("dynamic-version")
 
   private def sudoRisk(tool: ResolvedTool): Vector[String] =

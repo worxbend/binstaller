@@ -15,14 +15,29 @@ import utest.*
 
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.net.Authenticator
+import java.net.CookieHandler
+import java.net.ProxySelector
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpHeaders
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.net.http.WebSocket
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
+import java.util.Optional
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executor
 import java.util.zip.GZIPOutputStream
 import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLParameters
+import javax.net.ssl.SSLSession
 import scala.jdk.CollectionConverters.*
 import scala.util.Using
 
@@ -45,8 +60,66 @@ object CoreModuleTest extends TestSuite:
       val plan = resolve(kubectlResolverYaml, FakeHttpTextClient("v1.33.0"))
 
       val tool = onlyTool(plan)
-      assert(tool.version == ResolvedVersion.Concrete("v1.33.0"))
+      assert(ResolvedVersion.render(tool.version) == "v1.33.0")
       assert(tool.download.url == "https://dl.k8s.io/release/v1.33.0/bin/linux/amd64/kubectl")
+
+    test("JDK http-text client records direct no-redirect provenance"):
+      val response = FakeHttpResponse[String](
+        responseUri = "https://example.invalid/stable.txt",
+        responseStatusCode = 200,
+        responseBody = "v1.0.0"
+      )
+      val client = JdkHttpTextClient(StaticHttpClient(response))
+
+      val result = client.getTextWithProvenance("https://example.invalid/stable.txt")
+
+      result match
+        case Right(value) =>
+          assert(value.text == "v1.0.0")
+          assert(value.provenance.initialUrl == "https://example.invalid/stable.txt")
+          assert(value.provenance.finalUrl == "https://example.invalid/stable.txt")
+          assert(value.provenance.redirects.isEmpty)
+        case Left(error) => abort(s"expected text response, got $error")
+
+    test("JDK http-text client records multiple redirects"):
+      val first = FakeHttpResponse[String](
+        responseUri = "https://example.invalid/stable.txt",
+        responseStatusCode = 302,
+        responseBody = ""
+      )
+      val second = FakeHttpResponse[String](
+        responseUri = "https://cdn.example.invalid/releases/stable.txt",
+        responseStatusCode = 301,
+        responseBody = "",
+        previous = Some(first)
+      )
+      val finalResponse = FakeHttpResponse[String](
+        responseUri = "https://mirror.example.invalid/releases/stable.txt",
+        responseStatusCode = 200,
+        responseBody = "v1.0.1",
+        previous = Some(second)
+      )
+      val client = JdkHttpTextClient(StaticHttpClient(finalResponse))
+
+      val result = client.getTextWithProvenance("https://example.invalid/stable.txt")
+
+      result match
+        case Right(value) =>
+          assert(value.text == "v1.0.1")
+          assert(value.provenance.initialUrl == "https://example.invalid/stable.txt")
+          assert(value.provenance.finalUrl == "https://mirror.example.invalid/releases/stable.txt")
+          assert(value.provenance.redirects.map(_.statusCode) == Vector(302, 301))
+          assert(value.provenance.redirects.map(_.from) ==
+            Vector(
+              "https://example.invalid/stable.txt",
+              "https://cdn.example.invalid/releases/stable.txt"
+            ))
+          assert(value.provenance.redirects.map(_.to) ==
+            Vector(
+              "https://cdn.example.invalid/releases/stable.txt",
+              "https://mirror.example.invalid/releases/stable.txt"
+            ))
+        case Left(error) => abort(s"expected text response, got $error")
 
     test("dynamic latest-url remains dynamic without a concrete version"):
       val plan = resolve(dynamicLatestUrlYaml)
@@ -113,7 +186,7 @@ object CoreModuleTest extends TestSuite:
 
       val result = installer.installTool(directTool(installDir))
 
-      assert(result == Right(ToolInstallSuccess("alpha", installDir.toString)))
+      assertInstallSuccess(result, installDir.toString)
       assert(Files.readString(installDir.resolve("bin/alpha")) == "alpha-binary")
 
     test("sha256 mismatch fails before replacing an existing install"):
@@ -153,7 +226,7 @@ object CoreModuleTest extends TestSuite:
 
       val result = installer.installTool(tool)
 
-      assert(result == Right(ToolInstallSuccess("alpha", "/tmp/alpha")))
+      assertInstallSuccess(result, "/tmp/alpha")
       assert(fileSystem.recordedModes.map(request => request.path -> request.mode.octal) ==
         Vector("bin/alpha" -> "0700", "bin/helper" -> "0755"))
       assert(fileSystem.recordedModes.map(_.mode.numeric) == Vector(448, 493))
@@ -180,6 +253,55 @@ object CoreModuleTest extends TestSuite:
           )
         ))
       assert(Files.readString(existingFile) == "existing")
+
+    test("JDK binary download client records direct no-redirect provenance"):
+      val response = FakeHttpResponse[ByteArrayInputStream](
+        responseUri = "https://example.invalid/alpha",
+        responseStatusCode = 200,
+        responseBody = ByteArrayInputStream("alpha".getBytes(StandardCharsets.UTF_8)),
+        responseHeaders = Map("Content-Length" -> Vector("5"))
+      )
+      val client = JdkBinaryDownloadClient(StaticHttpClient(response))
+
+      val result = client.downloadWithProvenance("https://example.invalid/alpha")
+
+      result match
+        case Right(value) =>
+          assert(String(value.bytes, StandardCharsets.UTF_8) == "alpha")
+          assert(value.provenance == UrlProvenance.direct("https://example.invalid/alpha"))
+        case Left(error) => abort(s"expected binary response, got $error")
+
+    test("JDK binary download client records redirects and emits final URL progress"):
+      val first = FakeHttpResponse[ByteArrayInputStream](
+        responseUri = "https://example.invalid/alpha",
+        responseStatusCode = 302,
+        responseBody = ByteArrayInputStream(Array.emptyByteArray)
+      )
+      val finalResponse = FakeHttpResponse[ByteArrayInputStream](
+        responseUri = "https://cdn.example.invalid/alpha",
+        responseStatusCode = 200,
+        responseBody = ByteArrayInputStream("alpha".getBytes(StandardCharsets.UTF_8)),
+        previous = Some(first),
+        responseHeaders = Map("Content-Length" -> Vector("5"))
+      )
+      val progress = RecordingBinaryDownloadProgressObserver()
+      val client   = JdkBinaryDownloadClient(StaticHttpClient(finalResponse))
+
+      val result = client.downloadWithProvenance("https://example.invalid/alpha", progress)
+
+      result match
+        case Right(value) =>
+          assert(String(value.bytes, StandardCharsets.UTF_8) == "alpha")
+          assert(value.provenance.initialUrl == "https://example.invalid/alpha")
+          assert(value.provenance.finalUrl == "https://cdn.example.invalid/alpha")
+          assert(value.provenance.redirects ==
+            Vector(UrlRedirectHop(
+              "https://example.invalid/alpha",
+              "https://cdn.example.invalid/alpha",
+              302
+            )))
+          assert(progress.urls.distinct == Vector("https://cdn.example.invalid/alpha"))
+        case Left(error) => abort(s"expected binary response, got $error")
 
     test("bounded body reader rejects oversized content length before buffering"):
       val result = BoundedBinaryBodyReader.read(
@@ -393,7 +515,7 @@ object CoreModuleTest extends TestSuite:
         files = Vector("pkg/alpha" -> "bin/alpha")
       ))
 
-      assert(result == Right(ToolInstallSuccess("alpha", installDir.toString)))
+      assertInstallSuccess(result, installDir.toString)
       assert(Files.readString(installDir.resolve("bin/alpha")) == "zip-alpha")
 
     test("tar.gz archive file mapping lands at configured relative target path"):
@@ -410,7 +532,7 @@ object CoreModuleTest extends TestSuite:
         files = Vector("pkg/alpha" -> "bin/alpha")
       ))
 
-      assert(result == Right(ToolInstallSuccess("alpha", installDir.toString)))
+      assertInstallSuccess(result, installDir.toString)
       assert(Files.readString(installDir.resolve("bin/alpha")) == "tar-alpha")
 
     test("tar.gz directory mapping moves extracted root directory into install root"):
@@ -430,7 +552,7 @@ object CoreModuleTest extends TestSuite:
         directories = Vector("alpha-root" -> ".")
       ))
 
-      assert(result == Right(ToolInstallSuccess("alpha", installDir.toString)))
+      assertInstallSuccess(result, installDir.toString)
       assert(Files.readString(installDir.resolve("bin/alpha")) == "alpha")
       assert(Files.readString(installDir.resolve("share/readme")) == "docs")
 
@@ -452,7 +574,7 @@ object CoreModuleTest extends TestSuite:
         executable = "bin/jj"
       ))
 
-      assert(result == Right(ToolInstallSuccess("alpha", installDir.toString)))
+      assertInstallSuccess(result, installDir.toString)
       assert(Files.readString(installDir.resolve("bin/jj")) == "jujutsu")
 
     test("archive entries that escape staging are rejected and preserve existing install"):
@@ -543,7 +665,7 @@ object CoreModuleTest extends TestSuite:
         executable = "bin/zig"
       ))
 
-      assert(result == Right(ToolInstallSuccess("alpha", installDir.toString)))
+      assertInstallSuccess(result, installDir.toString)
       assert(Files.readString(installDir.resolve("bin/zig")) == "zig")
       assert(commandExecutor.commands.map(_.argv.take(2)) == Vector(Vector("tar", "-xJf")))
       assert(commandExecutor.commands.exists(_.argv.contains("-C")))
@@ -610,6 +732,69 @@ object CoreModuleTest extends TestSuite:
       assert(!output.contains("\u001b"))
       assert(output.contains("<redacted>"))
 
+    test("apply output and state record redirected download provenance"):
+      val tempRoot   = Files.createTempDirectory("binstaller-core-download-redirect-state")
+      val config     = writeConfig(tempRoot, directBinaryYaml(tempRoot.resolve("alpha")))
+      val stateStore = RecordingApplyStateStore(ApplyStateStore.nio(tempRoot))
+      val download   = UrlProvenance(
+        "https://example.invalid/alpha",
+        "https://cdn.example.invalid/alpha",
+        Vector(UrlRedirectHop(
+          "https://example.invalid/alpha",
+          "https://cdn.example.invalid/alpha",
+          302
+        ))
+      )
+      val service = BinaryInstallerService.resolving(
+        FakeHttpTextClient(""),
+        DirectBinaryInstaller(RedirectingBinaryDownloadClient(download), InstallFileSystem.nio),
+        stateStore
+      )
+
+      val result = service.apply(applyOptions(config).copy(statePath = Some("redirect.state.json")))
+
+      assert(result.exitCode == 0)
+      assert(result.lines.exists(_ == "download final url: https://cdn.example.invalid/alpha"))
+      assert(result.lines.exists(_.contains(
+        "download redirects: 302 https://example.invalid/alpha -> https://cdn.example.invalid/alpha"
+      )))
+      assert(stateStore.savedStates.last.tools.head.download.contains(download))
+
+    test("apply output redacts sensitive redirected URLs"):
+      val secret   = "secret-token-value"
+      val download = UrlProvenance(
+        "https://example.invalid/alpha",
+        s"https://cdn.example.invalid/$secret/alpha",
+        Vector(UrlRedirectHop(
+          "https://example.invalid/alpha",
+          s"https://cdn.example.invalid/$secret/alpha",
+          302
+        ))
+      )
+      val plan = ResolvedPlan(
+        ResolvedPolicy(
+          "/tmp/apps",
+          None,
+          AllowSudoSymlinks.Disabled,
+          RequireConfirmation.Disabled,
+          ContinueOnError.Disabled
+        ),
+        Vector(directTool(Path.of("/tmp/apps/alpha"))),
+        SensitiveValueRedactions(Vector(secret))
+      )
+      val installer = DirectBinaryInstaller(
+        RedirectingBinaryDownloadClient(download),
+        RecordingInstallFileSystem(stagedFiles = Vector("bin/alpha"))
+      )
+
+      val result = installer.installPlan(plan, ApplyConfirmation.Enabled)
+      val output = result.lines.mkString("\n")
+
+      assert(result.exitCode == 0)
+      assert(output.contains("download final url: https://cdn.example.invalid/<redacted>/alpha"))
+      assert(!output.contains(secret))
+      assert(output.contains("<redacted>"))
+
     test("failed replacement restores previous install directory"):
       val tempRoot     = Files.createTempDirectory("binstaller-core-rollback")
       val installDir   = tempRoot.resolve("alpha")
@@ -657,7 +842,7 @@ object CoreModuleTest extends TestSuite:
 
       val result = installer.installTool(tool)
 
-      assert(result == Right(ToolInstallSuccess("alpha", installDir.toString)))
+      assertInstallSuccess(result, installDir.toString)
       assert(Files.isSymbolicLink(installDir.resolve("bin/a")))
       assert(Files.readSymbolicLink(installDir.resolve("bin/a")) ==
         installDir.toAbsolutePath.normalize().resolve("bin/alpha"))
@@ -1037,6 +1222,15 @@ object CoreModuleTest extends TestSuite:
   private def onlyTool(plan: ResolvedPlan): ResolvedTool = plan.tools match
     case Vector(tool) => tool
     case other        => abort(s"expected one tool, got ${other.size}")
+
+  private def assertInstallSuccess(
+      result: Either[ToolInstallError, ToolInstallSuccess],
+      installDir: String
+  ): Unit = result match
+    case Right(success) =>
+      assert(success.toolName == "alpha")
+      assert(success.installDir == installDir)
+    case Left(error) => abort(s"expected install success, got $error")
 
   private def errorAt(path: String)(error: ValidationError): Boolean = error.path == path
 
@@ -1647,6 +1841,34 @@ private final class ProgressingBinaryDownloadClient(bytes: Array[Byte])
     progressObserver.onProgress(BinaryDownloadProgress.Finished(url, bytes.length.toLong, total))
     Right(bytes)
 
+private final class RedirectingBinaryDownloadClient(provenance: UrlProvenance)
+    extends BinaryDownloadClient:
+
+  def download(url: String): Either[BinaryDownloadError, Array[Byte]] =
+    Right("alpha".getBytes(StandardCharsets.UTF_8))
+
+  override def downloadWithProvenance(
+      url: String,
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[BinaryDownloadError, BinaryDownloadResult] =
+    val bytes = "alpha".getBytes(StandardCharsets.UTF_8)
+    progressObserver.onProgress(BinaryDownloadProgress.Started(provenance.finalUrl, Some(5L)))
+    progressObserver.onProgress(BinaryDownloadProgress.Advanced(provenance.finalUrl, 5L, Some(5L)))
+    progressObserver.onProgress(BinaryDownloadProgress.Finished(provenance.finalUrl, 5L, Some(5L)))
+    Right(BinaryDownloadResult(bytes, provenance))
+
+private final class RecordingBinaryDownloadProgressObserver extends BinaryDownloadProgressObserver:
+  private var recordedUrls: Vector[String] = Vector.empty
+
+  def urls: Vector[String] = recordedUrls
+
+  def onProgress(progress: BinaryDownloadProgress): Unit =
+    val url = progress match
+      case BinaryDownloadProgress.Started(value, _)     => value
+      case BinaryDownloadProgress.Advanced(value, _, _) => value
+      case BinaryDownloadProgress.Finished(value, _, _) => value
+    recordedUrls = recordedUrls :+ url
+
 private final class RoutingBinaryDownloadClient(
     results: Map[String, Either[String, Array[Byte]]]
 ) extends BinaryDownloadClient:
@@ -1684,6 +1906,76 @@ private final class RecordingApplyStateStore(delegate: ApplyStateStore) extends 
   def save(path: Path, state: ApplyState): Either[ApplyStateError, Unit] =
     states = states :+ state
     delegate.save(path, state)
+
+private final class StaticHttpClient[T](response: HttpResponse[T]) extends HttpClient:
+
+  override def cookieHandler(): Optional[CookieHandler] = Optional.empty()
+
+  override def connectTimeout(): Optional[Duration] = Optional.empty()
+
+  override def followRedirects(): HttpClient.Redirect = HttpClient.Redirect.NORMAL
+
+  override def proxy(): Optional[ProxySelector] = Optional.empty()
+
+  override def sslContext(): SSLContext = SSLContext.getDefault
+
+  override def sslParameters(): SSLParameters = SSLParameters()
+
+  override def authenticator(): Optional[Authenticator] = Optional.empty()
+
+  override def version(): HttpClient.Version = HttpClient.Version.HTTP_1_1
+
+  override def executor(): Optional[Executor] = Optional.empty()
+
+  override def send[A](
+      request: HttpRequest,
+      responseBodyHandler: HttpResponse.BodyHandler[A]
+  ): HttpResponse[A] = response.asInstanceOf[HttpResponse[A]]
+
+  override def sendAsync[A](
+      request: HttpRequest,
+      responseBodyHandler: HttpResponse.BodyHandler[A]
+  ): CompletableFuture[HttpResponse[A]] =
+    CompletableFuture.completedFuture(send(request, responseBodyHandler))
+
+  override def sendAsync[A](
+      request: HttpRequest,
+      responseBodyHandler: HttpResponse.BodyHandler[A],
+      pushPromiseHandler: HttpResponse.PushPromiseHandler[A]
+  ): CompletableFuture[HttpResponse[A]] =
+    CompletableFuture.completedFuture(send(request, responseBodyHandler))
+
+  override def newWebSocketBuilder(): WebSocket.Builder =
+    throw UnsupportedOperationException("websocket not used in tests")
+
+private final case class FakeHttpResponse[T](
+    responseUri: String,
+    responseStatusCode: Int,
+    responseBody: T,
+    previous: Option[HttpResponse[T]] = None,
+    responseHeaders: Map[String, Vector[String]] = Map.empty
+) extends HttpResponse[T]:
+
+  def statusCode(): Int = responseStatusCode
+
+  def request(): HttpRequest = HttpRequest.newBuilder(URI.create(responseUri)).build()
+
+  def previousResponse(): Optional[HttpResponse[T]] = previous match
+    case Some(response) => Optional.of(response)
+    case None           => Optional.empty()
+
+  def headers(): HttpHeaders = HttpHeaders.of(
+    responseHeaders.view.mapValues(_.asJava).toMap.asJava,
+    (_, _) => true
+  )
+
+  def body(): T = responseBody
+
+  def sslSession(): Optional[SSLSession] = Optional.empty()
+
+  def uri(): URI = URI.create(responseUri)
+
+  def version(): HttpClient.Version = HttpClient.Version.HTTP_1_1
 
 private final class FakeArchiveCommandExecutor(path: String, content: String)
     extends CommandExecutor:
