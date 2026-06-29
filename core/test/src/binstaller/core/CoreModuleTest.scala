@@ -7,8 +7,11 @@ import binstaller.config.ExecutableMode
 import binstaller.config.ArchiveExtract
 import binstaller.config.ArchiveSpec
 import binstaller.config.ArchiveType
+import binstaller.config.AllowSudoSymlinks
 import binstaller.config.ExtractMapping
+import binstaller.config.InstallerShell
 import binstaller.config.ValidationError
+import binstaller.config.SymlinkPrivilege
 import utest.*
 
 import java.io.ByteArrayOutputStream
@@ -309,6 +312,115 @@ object CoreModuleTest extends TestSuite:
       assert(commandExecutor.commands.map(_.argv.take(2)) == Vector(Vector("tar", "-xJf")))
       assert(commandExecutor.commands.exists(_.argv.contains("-C")))
 
+    test("installer script runs through configured shell args and explicit env"):
+      val tempRoot        = Files.createTempDirectory("binstaller-core-installer")
+      val installDir      = tempRoot.resolve("script-tool")
+      val scriptPath      = installDir.resolve("install.sh")
+      val commandExecutor = InstallingCommandExecutor("bin/script-tool")
+      val installer       = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success("script-bytes".getBytes(StandardCharsets.UTF_8)),
+        InstallFileSystem.nio,
+        commandExecutor
+      )
+      val tool = installerTool(
+        installDir,
+        Some(ResolvedInstaller(
+          InstallerShell.Zsh,
+          Vector(scriptPath.toString, "--flag"),
+          Vector(ResolvedInstallerEnv("CUSTOM", "value")),
+          cleanup = true
+        ))
+      )
+
+      val result = installer.installTool(tool)
+
+      assert(result == Right(ToolInstallSuccess("script-tool", installDir.toString)))
+      assert(commandExecutor.commands.map(_.argv) ==
+        Vector(Vector("zsh", scriptPath.toString, "--flag")))
+      assert(commandExecutor.commands.head.env("CUSTOM") == "value")
+      assert(commandExecutor.commands.head.env.keySet == Set("PATH", "CUSTOM"))
+      assert(!Files.exists(scriptPath))
+      assert(Files.isRegularFile(installDir.resolve("bin/script-tool")))
+
+    test("installer success verifies expected executables"):
+      val tempRoot        = Files.createTempDirectory("binstaller-core-installer-missing")
+      val installDir      = tempRoot.resolve("script-tool")
+      val commandExecutor = RecordingCommandExecutor()
+      val installer       = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success("script-bytes".getBytes(StandardCharsets.UTF_8)),
+        InstallFileSystem.nio,
+        commandExecutor
+      )
+
+      val result = installer.installTool(installerTool(installDir))
+
+      assert(result == Left(ToolInstallError.MissingExecutable("script-tool", "bin/script-tool")))
+
+    test("local symlinks are created under installDir with targets resolved from installDir"):
+      val tempRoot   = Files.createTempDirectory("binstaller-core-local-symlink")
+      val installDir = tempRoot.resolve("alpha")
+      val installer  = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success("alpha-binary".getBytes(StandardCharsets.UTF_8)),
+        InstallFileSystem.nio
+      )
+      val tool = directTool(
+        installDir,
+        symlinks = Vector(ResolvedSymlink("bin/a", "bin/alpha", SymlinkPrivilege.User))
+      )
+
+      val result = installer.installTool(tool)
+
+      assert(result == Right(ToolInstallSuccess("alpha", installDir.toString)))
+      assert(Files.isSymbolicLink(installDir.resolve("bin/a")))
+      assert(Files.readSymbolicLink(installDir.resolve("bin/a")) ==
+        installDir.toAbsolutePath.normalize().resolve("bin/alpha"))
+
+    test("sudo symlink apply requires policy and apply confirmation before writes"):
+      val tempRoot        = Files.createTempDirectory("binstaller-core-sudo-gate")
+      val installDir      = tempRoot.resolve("alpha")
+      val commandExecutor = RecordingCommandExecutor()
+      val installer       = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success("alpha-binary".getBytes(StandardCharsets.UTF_8)),
+        InstallFileSystem.nio,
+        commandExecutor
+      )
+      val plan = ResolvedPlan(
+        ResolvedPolicy(tempRoot.toString, None, AllowSudoSymlinks.Enabled),
+        Vector(sudoSymlinkTool(installDir))
+      )
+
+      val result = installer.installPlan(plan, ApplyConfirmation.Disabled)
+
+      assert(result.exitCode == 1)
+      assert(result.lines.exists(_.contains("--yes")))
+      assert(commandExecutor.commands.isEmpty)
+      assert(!Files.exists(installDir))
+
+    test("sudo symlink apply uses structured argv after policy and confirmation"):
+      val tempRoot        = Files.createTempDirectory("binstaller-core-sudo-apply")
+      val installDir      = tempRoot.resolve("alpha")
+      val commandExecutor = RecordingCommandExecutor()
+      val installer       = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success("alpha-binary".getBytes(StandardCharsets.UTF_8)),
+        InstallFileSystem.nio,
+        commandExecutor
+      )
+      val plan = ResolvedPlan(
+        ResolvedPolicy(tempRoot.toString, None, AllowSudoSymlinks.Enabled),
+        Vector(sudoSymlinkTool(installDir))
+      )
+
+      val result = installer.installPlan(plan, ApplyConfirmation.Enabled)
+
+      assert(result.exitCode == 0)
+      assert(commandExecutor.commands.map(_.argv) == Vector(Vector(
+        "sudo",
+        "ln",
+        "-sfn",
+        installDir.toAbsolutePath.normalize().resolve("bin/alpha").toString,
+        "/usr/local/bin/alpha"
+      )))
+
   private def resolve(
       yaml: String,
       httpTextClient: HttpTextClient = FakeHttpTextClient("")
@@ -342,7 +454,8 @@ object CoreModuleTest extends TestSuite:
   private def directTool(
       installDir: Path,
       checksum: Option[ChecksumSpec] = None,
-      executables: Vector[ResolvedExecutable] = Vector(ResolvedExecutable("bin/alpha", None))
+      executables: Vector[ResolvedExecutable] = Vector(ResolvedExecutable("bin/alpha", None)),
+      symlinks: Vector[ResolvedSymlink] = Vector.empty
   ): ResolvedTool = ResolvedTool(
     name = "alpha",
     description = None,
@@ -357,8 +470,44 @@ object CoreModuleTest extends TestSuite:
     ),
     installer = None,
     executables = executables,
-    symlinks = Vector.empty
+    symlinks = symlinks
   )
+
+  private def sudoSymlinkTool(installDir: Path): ResolvedTool = directTool(
+    installDir,
+    symlinks = Vector(
+      ResolvedSymlink("/usr/local/bin/alpha", "bin/alpha", SymlinkPrivilege.Sudo)
+    )
+  )
+
+  private def installerTool(
+      installDir: Path,
+      installer: Option[ResolvedInstaller] = None
+  ): ResolvedTool =
+    val resolvedInstaller = installer.getOrElse(
+      ResolvedInstaller(
+        InstallerShell.Sh,
+        Vector(installDir.resolve("install.sh").toString),
+        Vector.empty,
+        cleanup = true
+      )
+    )
+    ResolvedTool(
+      name = "script-tool",
+      description = None,
+      version = ResolvedVersion.Concrete("1.0.0"),
+      installDir = installDir.toString,
+      createDirectories = Vector("bin"),
+      download = ResolvedDownload(
+        url = "https://example.invalid/install.sh",
+        filename = "install.sh",
+        checksum = None,
+        archive = None
+      ),
+      installer = Some(resolvedInstaller),
+      executables = Vector(ResolvedExecutable("bin/script-tool", None)),
+      symlinks = Vector.empty
+    )
 
   private def archiveTool(
       installDir: Path,
@@ -660,6 +809,30 @@ private final class FakeArchiveCommandExecutor(path: String, content: String)
         Right(())
       case None => Left(CommandExecutionError(spec, "missing -C extraction directory", None))
 
+private final class RecordingCommandExecutor(result: Either[String, Unit] = Right(()))
+    extends CommandExecutor:
+
+  private var recordedCommands: Vector[CommandSpec] = Vector.empty
+
+  def commands: Vector[CommandSpec] = recordedCommands
+
+  def run(spec: CommandSpec): Either[CommandExecutionError, Unit] =
+    recordedCommands = recordedCommands :+ spec
+    result.left.map(message => CommandExecutionError(spec, message, None))
+
+private final class InstallingCommandExecutor(executablePath: String) extends CommandExecutor:
+
+  private var recordedCommands: Vector[CommandSpec] = Vector.empty
+
+  def commands: Vector[CommandSpec] = recordedCommands
+
+  def run(spec: CommandSpec): Either[CommandExecutionError, Unit] =
+    recordedCommands = recordedCommands :+ spec
+    val target = spec.cwd.resolve(executablePath)
+    Files.createDirectories(target.getParent)
+    Files.writeString(target, "installed")
+    Right(())
+
 private final class RecordingInstallFileSystem(
     stageFailure: Option[String] = None,
     modeFailure: Option[String] = None
@@ -712,6 +885,10 @@ private final class RecordingInstallFileSystem(
       stagedInstall: StagedInstall
   ): Either[InstallFileSystemError.ReplacementFailed, Unit] =
     replacements = replacements + 1
+    modes.foreach: mode =>
+      val target = stagedInstall.installDir.resolve(mode.path)
+      Files.createDirectories(target.getParent)
+      Files.writeString(target, "installed")
     Right(())
 
   def discardStaged(stagedInstall: StagedInstall): Unit = ()

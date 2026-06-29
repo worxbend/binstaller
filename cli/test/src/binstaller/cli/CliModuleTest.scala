@@ -94,6 +94,21 @@ object CliModuleTest extends TestSuite:
       assert(result.out.contains("sudo risk: YES"))
       assert(result.out.linesIterator.count(_.contains("sudo ln -sfn")) == 5)
 
+    test("apply dry-run renders local and sudo symlink actions without executing them"):
+      val tempRoot = Files.createTempDirectory("binstaller-cli-dry-symlinks")
+      val appsDir  = tempRoot.resolve("apps")
+      val config   = writeConfig(tempRoot, noWriteYaml(appsDir, tempRoot.resolve("state.json")))
+
+      val result = runCli(
+        Vector("apply", "--dry-run", "--config", config.toString),
+        resolvingService
+      )
+
+      assert(result.exitCode == 0)
+      assert(result.out.contains("[local] ln -sfn"))
+      assert(result.out.contains("[sudo risk] sudo ln -sfn"))
+      assert(!Files.exists(appsDir))
+
     test("plan and apply dry-run do not create install or state paths"):
       val tempRoot  = Files.createTempDirectory("binstaller-cli-test")
       val appsDir   = tempRoot.resolve("apps")
@@ -158,6 +173,8 @@ object CliModuleTest extends TestSuite:
        |        executables:
        |          - path: bin/alpha
        |        symlinks:
+       |          - path: bin/a
+       |            target: bin/alpha
        |          - path: /usr/local/bin/alpha
        |            target: "$appsDir/alpha/bin/alpha"
        |            sudo: true

@@ -79,6 +79,15 @@ kind: BinaryDistributionProfile
   installs are preserved for download, checksum, staging, and mode failures;
   archive extraction and installer scripts still return typed unsupported
   failures for later executor tasks.
+- 2026-06-29: T009 completed archive-backed installs for `zip`, `tar.gz`, and
+  structured-command `tar.xz`, including archive path safety checks and mapped
+  file/directory extraction before install replacement.
+- 2026-06-29: T010 completed constrained installer-script execution and symlink
+  application. Installer scripts run through typed `sh`/`bash`/`zsh` shells with
+  structured argv and a minimal explicit environment, cleanup removes downloaded
+  scripts when requested, expected executables are verified after install, local
+  symlinks resolve under `installDir`, sudo symlinks require policy plus
+  `--yes`, and dry-run renders local and sudo symlink actions without writes.
 
 ### User Experience Goals
 

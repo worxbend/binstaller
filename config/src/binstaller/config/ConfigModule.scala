@@ -143,6 +143,7 @@ final case class InstallerSpec(
 enum InstallerShell(val value: String):
   case Sh   extends InstallerShell("sh")
   case Bash extends InstallerShell("bash")
+  case Zsh  extends InstallerShell("zsh")
 
 final case class InstallerEnv(name: String, value: String)
 

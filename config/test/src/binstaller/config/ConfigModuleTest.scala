@@ -60,6 +60,14 @@ object ConfigModuleTest extends TestSuite:
       assert(rejected.exists(errorAt("spec.plan[0].spec.symlinks[0].sudo")))
       assert(accepted.isRight)
 
+    test("zsh is an allowed installer shell"):
+      val result = ConfigModule.loadString(installerShellYaml("zsh"))
+
+      result match
+        case Right(profile) =>
+          assert(profile.spec.plan.head.spec.installer.exists(_.shell == InstallerShell.Zsh))
+        case Left(error) => abort(s"expected zsh installer shell to load, got $error")
+
   private def validationErrors(yaml: String): Vector[ValidationError] =
     ConfigModule.loadString(yaml) match
       case Left(ConfigLoadError.ValidationFailed(errors)) => errors
@@ -106,7 +114,7 @@ object ConfigModuleTest extends TestSuite:
                                             |                - from: alpha
                                             |                  to: bin/alpha
                                             |        installer:
-                                            |          shell: zsh
+                                            |          shell: fish
                                             |          args: []
                                             |        executables:
                                             |          - path: bin/alpha
@@ -191,6 +199,35 @@ object ConfigModuleTest extends TestSuite:
                                              |        executables:
                                              |          - path: bin/alpha
                                              |""".stripMargin
+
+  private def installerShellYaml(shell: String): String =
+    s"""
+       |apiVersion: binstaller.io/v1alpha1
+       |kind: BinaryDistributionProfile
+       |metadata:
+       |  name: installer-shell
+       |spec:
+       |  policy:
+       |    appsDir: "$${HOME}/.apps"
+       |  vars: {}
+       |  versions:
+       |    alpha: "1.0.0"
+       |  plan:
+       |    - name: alpha
+       |      kind: binary-tool
+       |      spec:
+       |        versionRef: alpha
+       |        installDir: "$${appsDir}/alpha"
+       |        download:
+       |          url: https://example.invalid/install.sh
+       |          filename: install.sh
+       |        installer:
+       |          shell: $shell
+       |          args:
+       |            - "$${downloadPath}"
+       |        executables:
+       |          - path: bin/alpha
+       |""".stripMargin
 
   private def sudoSymlinkYaml(allowSudoSymlinks: Boolean): String =
     s"""

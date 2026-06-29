@@ -6,6 +6,7 @@ import binstaller.core.DryRunMode
 import binstaller.core.HttpTextClient
 import binstaller.core.InstallerOptions
 import binstaller.core.InstallerResult
+import binstaller.core.ApplyConfirmation
 import binstaller.core.ResetState
 import binstaller.core.ToolSelection
 import binstaller.core.VerboseOutput
@@ -190,7 +191,8 @@ private final class ApplyCommand(
     out: PrintWriter,
     err: PrintWriter
 ) extends SelectableCommand(root, out, err):
-  private var dryRun: DryRunMode = DryRunMode.Disabled
+  private var dryRun: DryRunMode                   = DryRunMode.Disabled
+  private var applyConfirmation: ApplyConfirmation = ApplyConfirmation.Disabled
 
   @CliOption(
     names = Array("--dry-run"),
@@ -198,8 +200,17 @@ private final class ApplyCommand(
   )
   def setDryRun(value: Boolean): Unit = dryRun = DryRunMode.fromFlag(value)
 
-  override def call(): Integer =
-    executeWithOptions(_.copy(selection = selection, dryRun = dryRun), service.apply)
+  @CliOption(
+    names = Array("--yes"),
+    description = Array("Confirm non-dry-run apply actions, including sudo symlinks.")
+  )
+  def setApplyConfirmation(value: Boolean): Unit =
+    applyConfirmation = ApplyConfirmation.fromFlag(value)
+
+  override def call(): Integer = executeWithOptions(
+    _.copy(selection = selection, dryRun = dryRun, applyConfirmation = applyConfirmation),
+    service.apply
+  )
 
 @Command(
   name = "versions",

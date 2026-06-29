@@ -2,6 +2,7 @@ package binstaller.core
 
 import binstaller.config.ArchiveSpec
 import binstaller.config.ArchiveType
+import binstaller.config.AllowSudoSymlinks
 import binstaller.config.BinaryDistributionProfile
 import binstaller.config.BinaryToolSpec
 import binstaller.config.ChecksumSpec
@@ -62,7 +63,8 @@ final case class InstallerOptions(
     resetState: ResetState,
     verboseOutput: VerboseOutput,
     selection: ToolSelection = ToolSelection.all,
-    dryRun: DryRunMode = DryRunMode.Disabled
+    dryRun: DryRunMode = DryRunMode.Disabled,
+    applyConfirmation: ApplyConfirmation = ApplyConfirmation.Disabled
 )
 
 final case class InstallerResult(lines: Vector[String], exitCode: Int)
@@ -77,6 +79,12 @@ enum DryRunMode:
 
 object DryRunMode:
   def fromFlag(value: Boolean): DryRunMode = if value then Enabled else Disabled
+
+enum ApplyConfirmation:
+  case Enabled, Disabled
+
+object ApplyConfirmation:
+  def fromFlag(value: Boolean): ApplyConfirmation = if value then Enabled else Disabled
 
 trait BinaryInstallerService:
   def plan(options: InstallerOptions): InstallerResult
@@ -134,7 +142,11 @@ final case class ResolvedPlan(
     tools: Vector[ResolvedTool]
 )
 
-final case class ResolvedPolicy(appsDir: String, stateFile: Option[String])
+final case class ResolvedPolicy(
+    appsDir: String,
+    stateFile: Option[String],
+    allowSudoSymlinks: AllowSudoSymlinks
+)
 
 final case class ResolvedTool(
     name: String,
@@ -200,8 +212,12 @@ enum ToolInstallError:
   case ModeApplicationFailed(toolName: String, path: String, mode: String, message: String)
   case ReplacementFailed(toolName: String, message: String)
   case ArchiveExtractionFailed(toolName: String, message: String)
-  case UnsupportedInstaller(toolName: String)
-  case MissingExecutable(toolName: String)
+  case InstallerExecutionFailed(toolName: String, argv: Vector[String], message: String)
+  case InstallerCleanupFailed(toolName: String, path: String, message: String)
+  case MissingExecutable(toolName: String, path: String)
+  case SymlinkFailed(toolName: String, path: String, target: String, message: String)
+  case SudoSymlinkNotAllowed(toolName: String)
+  case SudoSymlinkConfirmationRequired(toolName: String)
 
 final case class ExecutableInstallMode(octal: String, numeric: Int):
 
@@ -240,7 +256,7 @@ object ExecutableInstallMode:
     case Some(value) => fromOctal(value.value)
     case None        => default
 
-  private def fromOctal(value: String): ExecutableInstallMode =
+  def fromOctal(value: String): ExecutableInstallMode =
     ExecutableInstallMode(value, Integer.parseInt(value, 8))
 
 final case class ExecutableModeRequest(path: String, mode: ExecutableInstallMode)
@@ -289,35 +305,166 @@ final class DirectBinaryInstaller(
     commandExecutor: CommandExecutor = CommandExecutor.process
 ):
 
-  def installPlan(plan: ResolvedPlan): InstallerResult =
-    val results = installTools(plan.tools)
-    val lines   = results.map:
-      case Right(success) => s"installed ${success.toolName} to ${success.installDir}"
-      case Left(error)    => s"failed ${toolName(error)}: ${renderInstallError(error)}"
-    val exitCode = if results.exists(_.isLeft) then 1 else 0
+  def installPlan(
+      plan: ResolvedPlan,
+      applyConfirmation: ApplyConfirmation = ApplyConfirmation.Disabled
+  ): InstallerResult = sudoPreflight(plan, applyConfirmation) match
+    case Some(error) =>
+      InstallerResult(Vector(s"failed ${toolName(error)}: ${renderInstallError(error)}"), 1)
+    case None =>
+      val results = installTools(plan.policy, plan.tools)
+      val lines   = results.map:
+        case Right(success) => s"installed ${success.toolName} to ${success.installDir}"
+        case Left(error)    => s"failed ${toolName(error)}: ${renderInstallError(error)}"
+      val exitCode = if results.exists(_.isLeft) then 1 else 0
 
-    InstallerResult(lines, exitCode)
+      InstallerResult(lines, exitCode)
+
+  private def sudoPreflight(
+      plan: ResolvedPlan,
+      applyConfirmation: ApplyConfirmation
+  ): Option[ToolInstallError] = plan.tools
+    .find(_.symlinks.exists(_.privilege == SymlinkPrivilege.Sudo))
+    .flatMap: tool =>
+      plan.policy.allowSudoSymlinks match
+        case AllowSudoSymlinks.Disabled => Some(ToolInstallError.SudoSymlinkNotAllowed(tool.name))
+        case AllowSudoSymlinks.Enabled  => applyConfirmation match
+            case ApplyConfirmation.Enabled  => None
+            case ApplyConfirmation.Disabled =>
+              Some(ToolInstallError.SudoSymlinkConfirmationRequired(tool.name))
 
   private def installTools(
+      policy: ResolvedPolicy,
       tools: Vector[ResolvedTool]
   ): Vector[Either[ToolInstallError, ToolInstallSuccess]] = tools.headOption match
     case None       => Vector.empty
     case Some(tool) =>
-      val result = installTool(tool)
+      val result = installTool(policy, tool)
       result match
         case Left(_)  => Vector(result)
-        case Right(_) => result +: installTools(tools.tail)
+        case Right(_) => result +: installTools(policy, tools.tail)
 
   def installTool(tool: ResolvedTool): Either[ToolInstallError, ToolInstallSuccess] =
-    if tool.installer.nonEmpty then Left(ToolInstallError.UnsupportedInstaller(tool.name))
+    val policy = ResolvedPolicy(tool.installDir, None, AllowSudoSymlinks.Disabled)
+    sudoPreflight(ResolvedPlan(policy, Vector(tool)), ApplyConfirmation.Disabled) match
+      case Some(error) => Left(error)
+      case None        => installTool(policy, tool)
+
+  private def installTool(
+      policy: ResolvedPolicy,
+      tool: ResolvedTool
+  ): Either[ToolInstallError, ToolInstallSuccess] = installWithoutPreflight(policy, tool)
+
+  private def installWithoutPreflight(
+      policy: ResolvedPolicy,
+      tool: ResolvedTool
+  ): Either[ToolInstallError, ToolInstallSuccess] = tool.installer match
+    case Some(installer) => installWithScript(policy, tool, installer)
+    case None            => installDownloadedBinaryOrArchive(policy, tool)
+
+  private def installDownloadedBinaryOrArchive(
+      policy: ResolvedPolicy,
+      tool: ResolvedTool
+  ): Either[ToolInstallError, ToolInstallSuccess] =
+    for
+      bytes  <- download(tool)
+      _      <- verifyChecksum(tool, bytes)
+      staged <- stage(tool, bytes)
+      _      <- applyModes(tool, staged)
+      _      <- replace(tool, staged)
+      _      <- verifyExecutables(tool)
+      _      <- createSymlinks(policy, tool)
+    yield ToolInstallSuccess(tool.name, tool.installDir)
+
+  private def installWithScript(
+      policy: ResolvedPolicy,
+      tool: ResolvedTool,
+      installer: ResolvedInstaller
+  ): Either[ToolInstallError, ToolInstallSuccess] =
+    for
+      bytes      <- download(tool)
+      _          <- verifyChecksum(tool, bytes)
+      scriptPath <- writeInstallerScript(tool, bytes)
+      _          <- runInstallerWithCleanup(tool, installer, scriptPath)
+      _          <- verifyExecutables(tool)
+      _          <- applyInstalledModes(tool)
+      _          <- createSymlinks(policy, tool)
+    yield ToolInstallSuccess(tool.name, tool.installDir)
+
+  private def runInstallerWithCleanup(
+      tool: ResolvedTool,
+      installer: ResolvedInstaller,
+      scriptPath: Path
+  ): Either[ToolInstallError, Unit] =
+    val result  = runInstaller(tool, installer)
+    val cleanup = cleanupInstallerScript(tool, installer, scriptPath)
+    cleanup match
+      case Left(error) => Left(error)
+      case Right(())   => result
+
+  private def runInstaller(
+      tool: ResolvedTool,
+      installer: ResolvedInstaller
+  ): Either[ToolInstallError, Unit] =
+    val spec = CommandSpec(
+      Vector(installer.shell.value) ++ installer.args,
+      Path.of(tool.installDir).toAbsolutePath.normalize(),
+      CommandEnvironment.baseline ++ installer.env.map(env => env.name -> env.value).toMap
+    )
+    commandExecutor.run(spec).left.map: error =>
+      ToolInstallError.InstallerExecutionFailed(tool.name, error.spec.argv, error.message)
+
+  private def writeInstallerScript(
+      tool: ResolvedTool,
+      bytes: Array[Byte]
+  ): Either[ToolInstallError, Path] =
+    for
+      scriptPath <- resolveInsideInstall(tool, tool.download.filename)
+      _          <- createInstallDirectories(tool)
+      _          <- Try:
+        Option(scriptPath.getParent).foreach(parent => Files.createDirectories(parent))
+        val _ = Files.write(
+          scriptPath,
+          bytes,
+          StandardOpenOption.CREATE,
+          StandardOpenOption.TRUNCATE_EXISTING,
+          StandardOpenOption.WRITE
+        )
+        Files.setPosixFilePermissions(
+          scriptPath,
+          ExecutableInstallMode.fromOctal("0700").permissions.asJava
+        )
+      match
+        case Success(_)     => Right(())
+        case Failure(error) => Left(ToolInstallError.StagingFailed(tool.name, error.getMessage))
+    yield scriptPath
+
+  private def createInstallDirectories(tool: ResolvedTool): Either[ToolInstallError, Unit] =
+    val writes = tool.createDirectories.map: directory =>
+      resolveInsideInstall(tool, directory).flatMap: path =>
+        Try(Files.createDirectories(path)) match
+          case Success(_)     => Right(())
+          case Failure(error) => Left(ToolInstallError.StagingFailed(tool.name, error.getMessage))
+    writes.collectFirst:
+      case Left(error) => error
+    match
+      case Some(error) => Left(error)
+      case None        => Right(())
+
+  private def cleanupInstallerScript(
+      tool: ResolvedTool,
+      installer: ResolvedInstaller,
+      scriptPath: Path
+  ): Either[ToolInstallError, Unit] =
+    if !installer.cleanup then Right(())
     else
-      for
-        bytes  <- download(tool)
-        _      <- verifyChecksum(tool, bytes)
-        staged <- stage(tool, bytes)
-        _      <- applyModes(tool, staged)
-        _      <- replace(tool, staged)
-      yield ToolInstallSuccess(tool.name, tool.installDir)
+      Try(Files.deleteIfExists(scriptPath)) match
+        case Success(_)     => Right(())
+        case Failure(error) => Left(ToolInstallError.InstallerCleanupFailed(
+            tool.name,
+            scriptPath.toString,
+            error.getMessage
+          ))
 
   private def download(tool: ResolvedTool): Either[ToolInstallError, Array[Byte]] =
     downloadClient.download(tool.download.url).left.map: error =>
@@ -348,7 +495,7 @@ final class DirectBinaryInstaller(
         .left
         .map(error => ToolInstallError.ArchiveExtractionFailed(tool.name, error.message))
     case None => tool.executables.headOption match
-        case None                  => Left(ToolInstallError.MissingExecutable(tool.name))
+        case None                  => Left(ToolInstallError.MissingExecutable(tool.name, "<none>"))
         case Some(firstExecutable) => fileSystem
             .stageDirectBinary(
               Path.of(tool.installDir),
@@ -375,15 +522,144 @@ final class DirectBinaryInstaller(
   ): Either[ToolInstallError, Unit] = fileSystem.replaceInstall(stagedInstall).left.map: error =>
     ToolInstallError.ReplacementFailed(tool.name, error.message)
 
+  private def applyInstalledModes(tool: ResolvedTool): Either[ToolInstallError, Unit] =
+    val writes = tool.executables.map: executable =>
+      val mode = ExecutableInstallMode.fromConfig(executable.mode)
+      resolveInsideInstall(tool, executable.path).flatMap: path =>
+        Try(Files.setPosixFilePermissions(path, mode.permissions.asJava)) match
+          case Success(_)     => Right(())
+          case Failure(error) => Left(ToolInstallError.ModeApplicationFailed(
+              tool.name,
+              executable.path,
+              mode.octal,
+              error.getMessage
+            ))
+    writes.collectFirst:
+      case Left(error) => error
+    match
+      case Some(error) => Left(error)
+      case None        => Right(())
+
+  private def verifyExecutables(tool: ResolvedTool): Either[ToolInstallError, Unit] =
+    tool.executables
+      .map: executable =>
+        resolveInsideInstall(tool, executable.path).flatMap: path =>
+          if Files.isRegularFile(path) then Right(())
+          else Left(ToolInstallError.MissingExecutable(tool.name, executable.path))
+      .collectFirst:
+        case Left(error) => error
+    match
+      case Some(error) => Left(error)
+      case None        => Right(())
+
+  private def createSymlinks(
+      policy: ResolvedPolicy,
+      tool: ResolvedTool
+  ): Either[ToolInstallError, Unit] =
+    val writes = tool.symlinks.map: symlink =>
+      symlink.privilege match
+        case SymlinkPrivilege.User => createLocalSymlink(tool, symlink)
+        case SymlinkPrivilege.Sudo => createSudoSymlink(policy, tool, symlink)
+    writes.collectFirst:
+      case Left(error) => error
+    match
+      case Some(error) => Left(error)
+      case None        => Right(())
+
+  private def createLocalSymlink(
+      tool: ResolvedTool,
+      symlink: ResolvedSymlink
+  ): Either[ToolInstallError, Unit] =
+    for
+      path   <- resolveInsideInstall(tool, symlink.path)
+      target <- resolveSymlinkTarget(tool, symlink)
+      _      <- Try:
+        Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+        val _ = Files.deleteIfExists(path)
+        Files.createSymbolicLink(path, target)
+      match
+        case Success(_)     => Right(())
+        case Failure(error) => Left(ToolInstallError.SymlinkFailed(
+            tool.name,
+            path.toString,
+            target.toString,
+            error.getMessage
+          ))
+    yield ()
+
+  private def createSudoSymlink(
+      policy: ResolvedPolicy,
+      tool: ResolvedTool,
+      symlink: ResolvedSymlink
+  ): Either[ToolInstallError, Unit] = policy.allowSudoSymlinks match
+    case AllowSudoSymlinks.Disabled => Left(ToolInstallError.SudoSymlinkNotAllowed(tool.name))
+    case AllowSudoSymlinks.Enabled  =>
+      val path = Path.of(symlink.path)
+      if !path.isAbsolute then
+        Left(
+          ToolInstallError.SymlinkFailed(
+            tool.name,
+            symlink.path,
+            symlink.target,
+            "sudo symlink path must be absolute"
+          )
+        )
+      else
+        resolveSymlinkTarget(tool, symlink).flatMap: target =>
+          val spec = CommandSpec(
+            Vector("sudo", "ln", "-sfn", target.toString, path.toString),
+            Path.of(tool.installDir).toAbsolutePath.normalize(),
+            CommandEnvironment.baseline
+          )
+          commandExecutor.run(spec).left.map: error =>
+            ToolInstallError.SymlinkFailed(tool.name, path.toString, target.toString, error.message)
+
+  private def resolveSymlinkTarget(
+      tool: ResolvedTool,
+      symlink: ResolvedSymlink
+  ): Either[ToolInstallError, Path] =
+    val installDir = Path.of(tool.installDir).toAbsolutePath.normalize()
+    val rawTarget  = Path.of(symlink.target)
+    val target     =
+      if rawTarget.isAbsolute then rawTarget.toAbsolutePath.normalize()
+      else installDir.resolve(rawTarget).normalize()
+    if target.startsWith(installDir) then Right(target)
+    else
+      Left(
+        ToolInstallError.SymlinkFailed(
+          tool.name,
+          symlink.path,
+          symlink.target,
+          "symlink target must resolve inside installDir"
+        )
+      )
+
+  private def resolveInsideInstall(
+      tool: ResolvedTool,
+      relative: String
+  ): Either[ToolInstallError, Path] =
+    val input      = Path.of(relative)
+    val installDir = Path.of(tool.installDir).toAbsolutePath.normalize()
+    if input.isAbsolute then
+      Left(ToolInstallError.StagingFailed(tool.name, s"path must be relative: $relative"))
+    else
+      val resolved = installDir.resolve(input).normalize()
+      if resolved.startsWith(installDir) then Right(resolved)
+      else Left(ToolInstallError.StagingFailed(tool.name, s"path escapes installDir: $relative"))
+
   private def toolName(error: ToolInstallError): String = error match
-    case ToolInstallError.DownloadFailed(toolName, _, _)           => toolName
-    case ToolInstallError.ChecksumMismatch(toolName, _, _)         => toolName
-    case ToolInstallError.StagingFailed(toolName, _)               => toolName
-    case ToolInstallError.ModeApplicationFailed(toolName, _, _, _) => toolName
-    case ToolInstallError.ReplacementFailed(toolName, _)           => toolName
-    case ToolInstallError.ArchiveExtractionFailed(toolName, _)     => toolName
-    case ToolInstallError.UnsupportedInstaller(toolName)           => toolName
-    case ToolInstallError.MissingExecutable(toolName)              => toolName
+    case ToolInstallError.DownloadFailed(toolName, _, _)            => toolName
+    case ToolInstallError.ChecksumMismatch(toolName, _, _)          => toolName
+    case ToolInstallError.StagingFailed(toolName, _)                => toolName
+    case ToolInstallError.ModeApplicationFailed(toolName, _, _, _)  => toolName
+    case ToolInstallError.ReplacementFailed(toolName, _)            => toolName
+    case ToolInstallError.ArchiveExtractionFailed(toolName, _)      => toolName
+    case ToolInstallError.InstallerExecutionFailed(toolName, _, _)  => toolName
+    case ToolInstallError.InstallerCleanupFailed(toolName, _, _)    => toolName
+    case ToolInstallError.MissingExecutable(toolName, _)            => toolName
+    case ToolInstallError.SymlinkFailed(toolName, _, _, _)          => toolName
+    case ToolInstallError.SudoSymlinkNotAllowed(toolName)           => toolName
+    case ToolInstallError.SudoSymlinkConfirmationRequired(toolName) => toolName
 
   private def renderInstallError(error: ToolInstallError): String = error match
     case ToolInstallError.DownloadFailed(_, url, message) => s"download failed for $url: $message"
@@ -395,8 +671,17 @@ final class DirectBinaryInstaller(
     case ToolInstallError.ReplacementFailed(_, message)       => s"replacement failed: $message"
     case ToolInstallError.ArchiveExtractionFailed(_, message) =>
       s"archive extraction failed: $message"
-    case ToolInstallError.UnsupportedInstaller(_) => "installer execution is not implemented yet"
-    case ToolInstallError.MissingExecutable(_)    => "no executable path is configured"
+    case ToolInstallError.InstallerExecutionFailed(_, argv, message) =>
+      s"installer command failed (${argv.mkString(" ")}): $message"
+    case ToolInstallError.InstallerCleanupFailed(_, path, message) =>
+      s"installer cleanup failed for $path: $message"
+    case ToolInstallError.MissingExecutable(_, path) => s"expected executable is missing: $path"
+    case ToolInstallError.SymlinkFailed(_, path, target, message) =>
+      s"symlink failed $target -> $path: $message"
+    case ToolInstallError.SudoSymlinkNotAllowed(_) =>
+      "sudo symlinks are not allowed by policy.allowSudoSymlinks"
+    case ToolInstallError.SudoSymlinkConfirmationRequired(_) =>
+      "sudo symlinks require apply confirmation; rerun apply with --yes"
 
 object DirectBinaryInstaller:
 
@@ -439,7 +724,11 @@ private final class ResolvingBinaryInstallerService(
   def apply(options: InstallerOptions): InstallerResult =
     if options.dryRun == DryRunMode.Enabled then
       renderSelectedPlan(options, PlanRenderCommand.ApplyDryRun)
-    else resolveSelectedPlan(options).fold(renderError, installer.installPlan)
+    else
+      resolveSelectedPlan(options).fold(
+        renderError,
+        plan => installer.installPlan(plan, options.applyConfirmation)
+      )
 
   def versions(options: InstallerOptions): InstallerResult =
     resolveFromOptions(options).fold(renderError, renderVersions)
@@ -597,11 +886,10 @@ private object PlanRenderer:
 
   private def renderSymlinkCommand(tool: ResolvedTool, symlink: ResolvedSymlink): String =
     val destination = absoluteOrInstallPath(tool.installDir, symlink.path)
+    val target      = absoluteOrInstallPath(tool.installDir, symlink.target)
     val command     = symlink.privilege match
-      case SymlinkPrivilege.User =>
-        s"ln -sfn ${shellQuote(symlink.target)} ${shellQuote(destination)}"
-      case SymlinkPrivilege.Sudo =>
-        s"sudo ln -sfn ${shellQuote(symlink.target)} ${shellQuote(destination)}"
+      case SymlinkPrivilege.User => s"ln -sfn ${shellQuote(target)} ${shellQuote(destination)}"
+      case SymlinkPrivilege.Sudo => s"sudo ln -sfn ${shellQuote(target)} ${shellQuote(destination)}"
     val risk = symlink.privilege match
       case SymlinkPrivilege.User => "local"
       case SymlinkPrivilege.Sudo => "sudo risk"
@@ -661,7 +949,7 @@ private final class ResolutionBuilder(
       case None        => ResolvedValue.valid(None)
 
     ResolvedValue(
-      ResolvedPolicy(appsDir.value, stateFile.value),
+      ResolvedPolicy(appsDir.value, stateFile.value, profile.spec.policy.allowSudoSymlinks),
       appsDir.errors ++ stateFile.errors
     )
 
@@ -986,12 +1274,16 @@ private final class JdkBinaryDownloadClient(client: HttpClient) extends BinaryDo
       case Success(response) => Left(BinaryDownloadError(url, s"HTTP ${response.statusCode()}"))
       case Failure(error)    => Left(BinaryDownloadError(url, error.getMessage))
 
+private object CommandEnvironment:
+  val baseline: Map[String, String] = Map("PATH" -> sys.env.getOrElse("PATH", "/usr/bin:/bin"))
+
 private object ProcessCommandExecutor extends CommandExecutor:
 
   def run(spec: CommandSpec): Either[CommandExecutionError, Unit] = Try:
     val builder = ProcessBuilder(spec.argv.asJava)
     val _       = builder.directory(spec.cwd.toFile)
     val env     = builder.environment()
+    env.clear()
     spec.env.foreach:
       case (name, value) => val _ = env.put(name, value)
     val process = builder.start()
@@ -1093,7 +1385,7 @@ private object ArchiveExtractor:
     val spec = CommandSpec(
       Vector("tar", "-xJf", archiveFile.toString, "-C", extractDir.toString),
       stagingDir,
-      Map.empty
+      CommandEnvironment.baseline
     )
     commandExecutor.run(spec) match
       case Left(error) =>
