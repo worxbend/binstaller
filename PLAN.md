@@ -130,6 +130,14 @@ as part of this refactor.
   cleanup checks. Focused TUI tests, static `tui --config config.example.yaml`,
   recursive compile, scalafmt check, JSON validation, and whitespace checks
   passed.
+- 2026-06-30: Validation iteration 36 passed the T013 broad checkpoint after
+  T010-T012 modal/root-cause UI, layout polish, and terminal lifecycle
+  hardening. Focused config/core/CLI/TUI tests, recursive compile/test,
+  scalafmt, Mill resolution, first-class `tui` help/config smokes,
+  non-interactive plan/apply/version/lock smokes, and `git diff --check`
+  passed without production or test source fixes. Local blockers remain
+  environment-bound: `native-image` is not on `PATH`, and stdin is not a live
+  TTY for the manual raw-terminal smoke.
 
 ## Product Target
 
