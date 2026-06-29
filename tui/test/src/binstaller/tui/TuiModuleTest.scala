@@ -271,16 +271,16 @@ object TuiModuleTest extends TestSuite:
 
     test("state override is shown instead of manifest state file"):
       val fixture       = writeFixture()
-      val overrideState = fixture.root.resolve("override.state.json")
-      val snapshot = snapshotFor(fixture.options.copy(statePath = Some(overrideState.toString)))
-      val model    = PlanningTuiModel.fromSnapshot(
+      val overrideState = "override.state.json"
+      val snapshot      = snapshotFor(fixture.options.copy(statePath = Some(overrideState)))
+      val model         = PlanningTuiModel.fromSnapshot(
         snapshot,
         TuiRequest(TuiMode.Plan, fixture.options),
         testSettings()
       )
 
       val plain = stripAnsi(PlanningTuiRenderer.render(model).mkString("\n"))
-      assert(model.header.stateFilePath.contains(overrideState.toString))
+      assert(model.header.stateFilePath.contains(overrideState))
       assert(plain.contains(s"state $overrideState"))
 
     test("risk markers include missing checksums dynamic versions and sudo symlinks"):
@@ -591,7 +591,7 @@ object TuiModuleTest extends TestSuite:
   private def writeFixture(longValues: Boolean = false): TuiFixture =
     val root         = Files.createTempDirectory("binstaller-tui")
     val appsDir      = root.resolve("apps")
-    val stateFile    = root.resolve("tui.state.json")
+    val stateFile    = Path.of("tui.state.json")
     val config       = root.resolve("profile.yaml")
     val longSuffix   = "very-long-directory-name-for-truncation-checks"
     val alphaInstall =
@@ -671,7 +671,7 @@ object TuiModuleTest extends TestSuite:
   private def writeRiskFixture(): TuiFixture =
     val root      = Files.createTempDirectory("binstaller-tui-risk")
     val appsDir   = root.resolve("apps")
-    val stateFile = root.resolve("risk.state.json")
+    val stateFile = Path.of("risk.state.json")
     val config    = root.resolve("profile.yaml")
     val install   = appsDir.resolve("gamma")
     val url       = "https://example.invalid/releases/latest/gamma"

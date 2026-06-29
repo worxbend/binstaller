@@ -14,6 +14,7 @@ import binstaller.core.InstallerEventObserver
 import binstaller.core.InstallerOptions
 import binstaller.core.InstallerResult
 import binstaller.core.ResetState
+import binstaller.core.ApplyStateStore
 import binstaller.core.UrlProvenance
 import binstaller.core.UrlRedirectHop
 import utest.*
@@ -191,7 +192,7 @@ object CliModuleTest extends TestSuite:
     test("apply dry-run renders local and sudo symlink actions without executing them"):
       val tempRoot = Files.createTempDirectory("binstaller-cli-dry-symlinks")
       val appsDir  = tempRoot.resolve("apps")
-      val config   = writeConfig(tempRoot, noWriteYaml(appsDir, tempRoot.resolve("state.json")))
+      val config   = writeConfig(tempRoot, noWriteYaml(appsDir, "state.json"))
 
       val result = runCli(
         Vector("apply", "--dry-run", "--config", config.toString),
@@ -207,12 +208,13 @@ object CliModuleTest extends TestSuite:
       val tempRoot  = Files.createTempDirectory("binstaller-cli-test")
       val appsDir   = tempRoot.resolve("apps")
       val stateFile = tempRoot.resolve("state.json")
-      val config    = writeConfig(tempRoot, noWriteYaml(appsDir, stateFile))
+      val config    = writeConfig(tempRoot, noWriteYaml(appsDir, stateFile.getFileName.toString))
+      val service   = resolvingServiceWithStateRoot(tempRoot)
 
-      val planResult   = runCli(Vector("plan", "--config", config.toString), resolvingService)
+      val planResult   = runCli(Vector("plan", "--config", config.toString), service)
       val dryRunResult = runCli(
         Vector("apply", "--dry-run", "--config", config.toString),
-        resolvingService
+        service
       )
 
       assert(planResult.exitCode == 0)
@@ -224,11 +226,12 @@ object CliModuleTest extends TestSuite:
     test("non dry-run apply requires yes when confirmation policy is enabled"):
       val tempRoot = Files.createTempDirectory("binstaller-cli-confirm")
       val appsDir  = tempRoot.resolve("apps")
-      val config   = writeConfig(tempRoot, noWriteYaml(appsDir, tempRoot.resolve("state.json")))
+      val config   = writeConfig(tempRoot, noWriteYaml(appsDir, "state.json"))
+      val service  = resolvingServiceWithStateRoot(tempRoot)
 
       val result = runCli(
         Vector("apply", "--config", config.toString),
-        resolvingService
+        service
       )
 
       assert(result.exitCode == 1)
@@ -289,7 +292,7 @@ object CliModuleTest extends TestSuite:
     Files.writeString(path, content)
     path
 
-  private def noWriteYaml(appsDir: Path, stateFile: Path): String =
+  private def noWriteYaml(appsDir: Path, stateFile: String): String =
     s"""
        |apiVersion: binstaller.io/v1alpha1
        |kind: BinaryDistributionProfile
@@ -363,6 +366,13 @@ object CliModuleTest extends TestSuite:
 
   private val resolvingService: BinaryInstallerService =
     BinaryInstallerService.resolving(FakeHttpTextClient("v1.34.0"))
+
+  private def resolvingServiceWithStateRoot(stateRoot: Path): BinaryInstallerService =
+    BinaryInstallerService.resolving(
+      FakeHttpTextClient("v1.34.0"),
+      DirectBinaryInstaller.default,
+      ApplyStateStore.nio(stateRoot)
+    )
 
   private val exampleToolNames: Vector[String] = Vector(
     "yazi",

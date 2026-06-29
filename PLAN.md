@@ -307,6 +307,15 @@ kind: BinaryDistributionProfile
   according to each field's safety class before execution. Focused config and
   core tests cover malicious variables resolving into absolute, traversal, and
   control-character path values.
+- 2026-06-29: T005 validation checkpoint passed after updating stale CLI/TUI
+  test fixtures to use CWD-local state filenames under the stricter state-file
+  contract. Config, core, CLI, and TUI focused tests passed, along with
+  recursive compile/test, scalafmt, Mill module resolution, task JSON
+  validation, app-level `--help`, `plan`, `apply --dry-run`, `versions`,
+  static non-interactive `plan --tui` and `apply --dry-run --tui` smokes
+  against `config.example.yaml`, and git whitespace checks. Native-image
+  remains locally blocked because `native-image` is not on `PATH`;
+  `java -version` reports OpenJDK 25.0.3.
 
 ## Current Agent Loop State
 
