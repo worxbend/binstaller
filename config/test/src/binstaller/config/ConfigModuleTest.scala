@@ -19,7 +19,37 @@ object ConfigModuleTest extends TestSuite:
       assert(profile.metadata.name == "developer-binaries")
       assert(profile.spec.plan.size == 15)
       assert(profile.spec.versions.contains("kubectl"))
+      assert(profile.spec.policy.mode == PolicyMode.Developer)
       assert(profile.spec.policy.allowSudoSymlinks == AllowSudoSymlinks.Enabled)
+
+    test("policy defaults to developer behavior with overridable strict gates"):
+      val developer = ConfigModule.loadString(policyModeYaml(""))
+      val strict    = ConfigModule.loadString(policyModeYaml(
+        """mode: strict
+          |    allowDynamicLatestUrls: true
+          |    allowMissingChecksums: false
+          |    allowTarXzFallback: true
+          |    allowArchiveCandidateFallback: false""".stripMargin
+      ))
+
+      developer match
+        case Right(profile) =>
+          assert(profile.spec.policy.mode == PolicyMode.Developer)
+          assert(profile.spec.policy.allowDynamicLatestUrls.isEmpty)
+          assert(profile.spec.policy.allowMissingChecksums.isEmpty)
+          assert(profile.spec.policy.allowTarXzFallback.isEmpty)
+          assert(profile.spec.policy.allowArchiveCandidateFallback.isEmpty)
+        case Left(error) => abort(s"expected developer policy config, got $error")
+      strict match
+        case Right(profile) =>
+          assert(profile.spec.policy.mode == PolicyMode.Strict)
+          assert(profile.spec.policy.allowDynamicLatestUrls.contains(PolicyOverride.Enabled))
+          assert(profile.spec.policy.allowMissingChecksums.contains(PolicyOverride.Disabled))
+          assert(profile.spec.policy.allowTarXzFallback.contains(PolicyOverride.Enabled))
+          assert(
+            profile.spec.policy.allowArchiveCandidateFallback.contains(PolicyOverride.Disabled)
+          )
+        case Left(error) => abort(s"expected strict policy config, got $error")
 
     test("config example locks binary tool order and version sources"):
       val profile = exampleProfile
@@ -156,6 +186,15 @@ object ConfigModuleTest extends TestSuite:
 
       assert(rejected.exists(errorAt("spec.plan[0].spec.symlinks[0].sudo")))
       assert(accepted.isRight)
+
+    test("strict sudo symlink validation includes a typed policy suggestion"):
+      val errors = validationErrors(strictSudoSymlinkYaml)
+
+      assert(errors.exists(error =>
+        error.path == "spec.plan[0].spec.symlinks[0].sudo" &&
+          error.message.contains("strict-policy[sudo-symlink]") &&
+          error.message.contains("suggestion[allow-sudo-symlinks]")
+      ))
 
     test("installer blocks are rejected"):
       val errors = validationErrors(unsupportedInstallerYaml)
@@ -493,6 +532,32 @@ object ConfigModuleTest extends TestSuite:
       |          - path: bin/alpha
       |""".stripMargin
 
+  private def policyModeYaml(policyLines: String): String =
+    s"""
+       |apiVersion: binstaller.io/v1alpha1
+       |kind: BinaryDistributionProfile
+       |metadata:
+       |  name: policy-mode
+       |spec:
+       |  policy:
+       |    appsDir: "$${HOME}/.apps"
+       |    $policyLines
+       |  vars: {}
+       |  versions:
+       |    alpha: "1.0.0"
+       |  plan:
+       |    - name: alpha
+       |      kind: binary-tool
+       |      spec:
+       |        versionRef: alpha
+       |        installDir: "$${appsDir}/alpha"
+       |        download:
+       |          url: https://example.invalid/alpha
+       |          filename: alpha
+       |        executables:
+       |          - path: bin/alpha
+       |""".stripMargin
+
   private def sudoSymlinkYaml(allowSudoSymlinks: Boolean): String =
     s"""
        |apiVersion: binstaller.io/v1alpha1
@@ -522,3 +587,32 @@ object ConfigModuleTest extends TestSuite:
        |            target: "$${appsDir}/alpha/bin/alpha"
        |            sudo: true
        |""".stripMargin
+
+  private val strictSudoSymlinkYaml: String = """
+                                                |apiVersion: binstaller.io/v1alpha1
+                                                |kind: BinaryDistributionProfile
+                                                |metadata:
+                                                |  name: strict-sudo-symlink
+                                                |spec:
+                                                |  policy:
+                                                |    mode: strict
+                                                |    appsDir: "${HOME}/.apps"
+                                                |  vars: {}
+                                                |  versions:
+                                                |    alpha: "1.0.0"
+                                                |  plan:
+                                                |    - name: alpha
+                                                |      kind: binary-tool
+                                                |      spec:
+                                                |        versionRef: alpha
+                                                |        installDir: "${appsDir}/alpha"
+                                                |        download:
+                                                |          url: https://example.invalid/alpha
+                                                |          filename: alpha
+                                                |        executables:
+                                                |          - path: bin/alpha
+                                                |        symlinks:
+                                                |          - path: /usr/local/bin/alpha
+                                                |            target: "${appsDir}/alpha/bin/alpha"
+                                                |            sudo: true
+                                                |""".stripMargin

@@ -9,6 +9,7 @@ import binstaller.config.DownloadSpec
 import binstaller.config.DynamicVersionKind
 import binstaller.config.ExtractMapping
 import binstaller.config.PlanEntry
+import binstaller.config.PolicyOverride
 import binstaller.config.SymlinkPrivilege
 import binstaller.config.VersionResolverKind
 import binstaller.config.VersionSource
@@ -790,13 +791,33 @@ private[core] object ManifestFingerprint:
     builder.result()
 
   private def appendPolicy(builder: StringBuilder, policy: binstaller.config.InstallPolicy): Unit =
+    append(builder, "spec.policy.mode", policy.mode.value)
     append(builder, "spec.policy.dryRun", policy.dryRun.toString)
     append(builder, "spec.policy.continueOnError", policy.continueOnError.toString)
     append(builder, "spec.policy.appsDir", policy.appsDir)
     append(builder, "spec.policy.cleanInstall", policy.cleanInstall.toString)
     append(builder, "spec.policy.requireConfirmation", policy.requireConfirmation.toString)
     append(builder, "spec.policy.allowSudoSymlinks", policy.allowSudoSymlinks.toString)
+    appendOverride(builder, "spec.policy.allowDynamicLatestUrls", policy.allowDynamicLatestUrls)
+    appendOverride(builder, "spec.policy.allowMissingChecksums", policy.allowMissingChecksums)
+    appendOverride(builder, "spec.policy.allowTarXzFallback", policy.allowTarXzFallback)
+    appendOverride(
+      builder,
+      "spec.policy.allowArchiveCandidateFallback",
+      policy.allowArchiveCandidateFallback
+    )
     append(builder, "spec.policy.stateFile", policy.stateFile.getOrElse(""))
+
+  private def appendOverride(
+      builder: StringBuilder,
+      key: String,
+      value: Option[PolicyOverride]
+  ): Unit =
+    val rendered = value match
+      case Some(PolicyOverride.Enabled)  => "true"
+      case Some(PolicyOverride.Disabled) => "false"
+      case None                          => ""
+    append(builder, key, rendered)
 
   private def appendVersions(
       builder: StringBuilder,
@@ -1220,6 +1241,7 @@ private object PlanRenderer:
       title,
       s"tools: ${plan.tools.size}",
       s"apps dir: ${plan.policy.appsDir} (not created)",
+      s"policy mode: ${plan.policy.mode.value}",
       stateLine,
       lockLine,
       "filesystem: no changes will be made",

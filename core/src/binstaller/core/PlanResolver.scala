@@ -55,11 +55,12 @@ private final class ResolutionBuilder(
     val versions               = resolveVersions(baseVars)
     val tools                  = resolveTools(baseVars, versions.value)
     val installDirectoryErrors = validateInstallDirectories(policy.value, tools.value)
+    val strictPolicyErrors     = StrictPolicyValidator.validate(profile, policy.value, tools.value)
 
     ResolvedValue(
       ResolvedPlan(policy.value, tools.value, options.redactions),
       manifestVars.errors ++ policy.errors ++ versions.errors ++ tools.errors
-        ++ installDirectoryErrors
+        ++ installDirectoryErrors ++ strictPolicyErrors
     )
 
   private def resolveManifestVars(): ResolvedValue[Map[String, String]] =
@@ -87,7 +88,24 @@ private final class ResolutionBuilder(
         stateFile.value,
         profile.spec.policy.allowSudoSymlinks,
         RequireConfirmation.fromBoolean(profile.spec.policy.requireConfirmation),
-        ContinueOnError.fromBoolean(profile.spec.policy.continueOnError)
+        ContinueOnError.fromBoolean(profile.spec.policy.continueOnError),
+        profile.spec.policy.mode,
+        ManifestPolicy.allowance(
+          profile.spec.policy.mode,
+          profile.spec.policy.allowDynamicLatestUrls
+        ),
+        ManifestPolicy.allowance(
+          profile.spec.policy.mode,
+          profile.spec.policy.allowMissingChecksums
+        ),
+        ManifestPolicy.allowance(
+          profile.spec.policy.mode,
+          profile.spec.policy.allowTarXzFallback
+        ),
+        ManifestPolicy.allowance(
+          profile.spec.policy.mode,
+          profile.spec.policy.allowArchiveCandidateFallback
+        )
       ),
       appsDir.errors ++ stateFile.errors ++ stateFilePathErrors
     )

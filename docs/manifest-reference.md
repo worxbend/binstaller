@@ -24,6 +24,7 @@ metadata:
 
 spec:
   policy:
+    mode: developer
     appsDir: "${HOME}/.apps"
     continueOnError: false
     requireConfirmation: true
@@ -44,6 +45,8 @@ the default render and apply order.
 
 ## Policy
 
+- `mode`: optional policy profile. Defaults to `developer`. Supported values
+  are `developer` and `strict`.
 - `appsDir`: root directory that resolved install directories must stay under.
 - `continueOnError`: when `true`, apply continues after a failed tool and still
   exits nonzero if any tool failed.
@@ -53,6 +56,30 @@ the default render and apply order.
 - `stateFile`: optional current-directory filename used by apply resume.
 - `dryRun` and `cleanInstall` are decoded for compatibility with the profile
   shape; command-line `apply --dry-run` controls dry-run execution.
+
+Developer mode preserves the historical behavior for local tooling profiles:
+dynamic latest URLs, missing checksums, and the system `tar.xz` fallback are
+allowed by default. Sudo symlinks still require `allowSudoSymlinks: true`.
+
+Strict mode rejects production-sensitive risks by default:
+
+- `dynamic.latest-url` version sources and download URLs containing `/latest`.
+- Missing `download.checksum` values.
+- `sudo: true` symlinks unless `allowSudoSymlinks: true`.
+- `tar.xz` archives, because they currently use the system `tar` fallback.
+- Archive candidate fallback, if a later extractor adds candidate discovery.
+
+Strict profiles can opt into reviewed exceptions with explicit booleans:
+
+```yaml
+policy:
+  mode: strict
+  allowDynamicLatestUrls: true
+  allowMissingChecksums: true
+  allowSudoSymlinks: true
+  allowTarXzFallback: true
+  allowArchiveCandidateFallback: true
+```
 
 State files are not written by `plan` or `apply --dry-run`. Non-dry-run apply
 rejects absolute, nested, or empty state paths.
@@ -170,7 +197,8 @@ checksum:
 
 Configured SHA-256 values must be exactly 64 hexadecimal characters. Apply
 verifies checksums before staging replacement. Missing checksums remain allowed
-for developer convenience, but plan/TUI surfaces mark them as risk.
+in developer mode, but plan/TUI surfaces mark them as risk. Strict mode rejects
+missing checksums unless `policy.allowMissingChecksums: true` is set.
 
 ## Symlinks
 

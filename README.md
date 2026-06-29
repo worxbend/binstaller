@@ -77,6 +77,11 @@ Inspect pinned, resolved, and dynamic version sources:
 binstaller versions --config config.example.yaml
 ```
 
+The manifest policy defaults to `mode: developer`, which preserves local
+tooling convenience. Production-oriented profiles can set `policy.mode: strict`
+to reject dynamic latest URLs, missing checksums, sudo symlinks, and `tar.xz`
+fallback extraction unless those risks are explicitly allowed in the manifest.
+
 Source-development equivalents use the checked-in Mill launcher:
 
 ```bash

@@ -131,6 +131,39 @@ object CoreModuleTest extends TestSuite:
       assert(ResolvedVersion.render(tool.version) == "dynamic latest-url")
       assert(tool.download.url == "https://example.invalid/latest/download/beta")
 
+    test("strict policy rejects dynamic versions missing checksums and tar.xz fallback"):
+      val errors = resolveErrors(strictPolicyYaml())
+
+      assert(errors.exists(error =>
+        error.path == "spec.versions.alpha.dynamic.type" &&
+          error.message.contains("strict-policy[dynamic-latest-url]") &&
+          error.message.contains("suggestion[dynamic-latest-url]")
+      ))
+      assert(errors.exists(error =>
+        error.path == "spec.plan[0].spec.download.checksum" &&
+          error.message.contains("strict-policy[missing-checksum]") &&
+          error.message.contains("suggestion[missing-checksum]")
+      ))
+      assert(errors.exists(error =>
+        error.path == "spec.plan[0].spec.download.archive.type" &&
+          error.message.contains("strict-policy[tar-xz-fallback]") &&
+          error.message.contains("suggestion[tar-xz-fallback]")
+      ))
+
+    test("strict policy permits risky behavior only through explicit overrides"):
+      val plan = resolve(strictPolicyYaml(
+        """allowDynamicLatestUrls: true
+          |    allowMissingChecksums: true
+          |    allowTarXzFallback: true""".stripMargin
+      ))
+
+      val tool = onlyTool(plan)
+      assert(plan.policy.mode == binstaller.config.PolicyMode.Strict)
+      assert(plan.policy.allowDynamicLatestUrls == PolicyAllowance.Allowed)
+      assert(plan.policy.allowMissingChecksums == PolicyAllowance.Allowed)
+      assert(plan.policy.allowTarXzFallback == PolicyAllowance.Allowed)
+      assert(tool.download.archive.exists(_.original.archiveType == ArchiveType.TarXz))
+
     test("unresolved variables and missing version values produce validation-style errors"):
       val errors = resolveErrors(invalidVariablesYaml)
 
@@ -1413,6 +1446,26 @@ object CoreModuleTest extends TestSuite:
         }
       ))
 
+    test("plan and dry-run render strict policy failures with typed suggestions"):
+      val tempRoot = Files.createTempDirectory("binstaller-core-strict-policy-output")
+      val config   = writeConfig(tempRoot, strictPolicyYaml())
+      val service  = BinaryInstallerService.resolving(FakeHttpTextClient(""))
+
+      val planResult = service.plan(InstallerOptions(
+        configPath = config.toString,
+        statePath = None,
+        resetState = ResetState.Disabled,
+        verboseOutput = VerboseOutput.Disabled
+      ))
+      val dryRunResult = service.apply(applyOptions(config).copy(dryRun = DryRunMode.Enabled))
+
+      assert(planResult.exitCode == 1)
+      assert(dryRunResult.exitCode == 1)
+      assert(planResult.lines.exists(_.contains("strict-policy[missing-checksum]")))
+      assert(planResult.lines.exists(_.contains("suggestion[missing-checksum]")))
+      assert(dryRunResult.lines.exists(_.contains("strict-policy[tar-xz-fallback]")))
+      assert(dryRunResult.lines.exists(_.contains("suggestion[tar-xz-fallback]")))
+
   private def resolve(
       yaml: String,
       httpTextClient: HttpTextClient = FakeHttpTextClient("")
@@ -2041,6 +2094,42 @@ object CoreModuleTest extends TestSuite:
       |        executables:
       |          - path: bin/beta
       |""".stripMargin
+
+  private def strictPolicyYaml(overrides: String = ""): String =
+    s"""
+       |apiVersion: binstaller.io/v1alpha1
+       |kind: BinaryDistributionProfile
+       |metadata:
+       |  name: strict-policy
+       |spec:
+       |  policy:
+       |    mode: strict
+       |    appsDir: "$${HOME}/.apps"
+       |    $overrides
+       |  vars: {}
+       |  versions:
+       |    alpha:
+       |      dynamic:
+       |        type: latest-url
+       |        note: upstream latest endpoint
+       |  plan:
+       |    - name: alpha
+       |      kind: binary-tool
+       |      spec:
+       |        versionRef: alpha
+       |        installDir: "$${appsDir}/alpha"
+       |        download:
+       |          url: https://example.invalid/latest/download/alpha.tar.xz
+       |          filename: alpha.tar.xz
+       |          archive:
+       |            type: tar.xz
+       |            extract:
+       |              files:
+       |                - from: alpha
+       |                  to: bin/alpha
+       |        executables:
+       |          - path: bin/alpha
+       |""".stripMargin
 
   private val invalidVariablesYaml: String =
     """

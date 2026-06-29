@@ -385,6 +385,16 @@ kind: BinaryDistributionProfile
   `lock --config config.example.yaml` followed by
   `apply --config config.example.yaml --dry-run --locked` smoke passed, and the
   generated lock file was removed after validation.
+- 2026-06-29: T013 added strict/developer policy profiles. `spec.policy.mode`
+  defaults to `developer`; `strict` rejects dynamic latest version sources and
+  `/latest` download URLs, missing checksums, and `tar.xz` fallback extraction
+  unless the manifest opts in with explicit allow fields. Strict sudo symlink
+  failures use the existing `allowSudoSymlinks` gate with a typed
+  strict-policy suggestion. Plan and dry-run failures render
+  `strict-policy[...]` codes with matching `suggestion[...]` hints. The example
+  config now declares `mode: developer`, and public docs describe the defaults.
+  Config, core, and CLI tests, recursive compile, scalafmt check, app-level
+  plan/dry-run smokes, task JSON validation, and git whitespace checks passed.
 
 ## Current Agent Loop State
 
@@ -1936,10 +1946,9 @@ Hardening backlog categories:
 - `should fix`: checksum auto-discovery, lock-file generation, max download
   size, stricter redirect policy, network timeouts/retries, improved provenance
   rendering, richer security docs, and additional fuzz/property tests.
-- `later`: optional policy profiles such as `strict`, `developer`, and
-  `legacy-compatible`; signed provenance/SLSA verification; SBOM export; and
-  sandboxed installer execution only if a future product decision explicitly
-  reintroduces a script contract.
+- `later`: additional policy profiles beyond `strict`/`developer`, signed
+  provenance/SLSA verification, SBOM export, and sandboxed installer execution
+  only if a future product decision explicitly reintroduces a script contract.
 
 Acceptance checks:
 
@@ -2030,8 +2039,8 @@ Manual smoke after first working executor:
 
 - Locked apply enforcement using resolved versions, URLs, sizes, and checksums.
 - Checksum auto-discovery for upstreams that publish checksum files.
-- Strict policy mode that rejects dynamic URLs, missing checksums, HTTP URLs,
-  parent env inheritance, and sudo symlinks unless explicitly overridden.
+- Additional production policy gates beyond the current strict/developer mode,
+  such as signed provenance or stricter redirect semantics.
 - ARM64 platform support.
 - `binstaller update --write-config` for bumping pinned versions.
 - Rich TUI is the next active phase and is tracked by T024-T027.

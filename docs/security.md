@@ -67,7 +67,29 @@ the checksum before staging replacement.
 Missing checksums are currently allowed to support dynamic upstream assets and
 developer convenience. They are surfaced as `not configured`, `missing`, or
 `no-checksum` risk markers in CLI/TUI plan views. Production profiles should add
-checksums or wait for a future strict policy or lock-file provenance feature.
+checksums and use `policy.mode: strict`. Strict mode rejects missing checksums
+unless `policy.allowMissingChecksums: true` is explicitly set.
+
+## Strict Policy Mode
+
+`policy.mode` defaults to `developer` for compatibility with local tool
+profiles. Developer mode allows dynamic latest URLs, missing checksums, and the
+system `tar.xz` fallback by default. Sudo symlinks still require
+`policy.allowSudoSymlinks: true`.
+
+`policy.mode: strict` rejects production-sensitive risks unless the manifest
+explicitly opts in:
+
+- Dynamic latest sources: `dynamic.latest-url` versions and download URLs that
+  contain `/latest`.
+- Missing SHA-256 checksums.
+- Sudo symlinks, unless `policy.allowSudoSymlinks: true`.
+- `tar.xz` archives, unless `policy.allowTarXzFallback: true`.
+- Archive candidate fallback, if candidate discovery is added later, unless
+  `policy.allowArchiveCandidateFallback: true`.
+
+Strict-policy failures render as validation-style messages with stable
+`strict-policy[...]` codes and matching `suggestion[...]` hints.
 
 ## Sudo Policy
 
@@ -111,6 +133,6 @@ secret exposure in terminal output.
 
 - Downloads are bounded by default limits, but body deadlines are checked at
   chunk boundaries.
-- Missing checksums are accepted until strict policy or lock-file work lands.
+- Missing checksums are still accepted by developer-mode profiles.
 - ZIP external attributes and native `tar.xz` pre-inspection remain deferred.
 - Long-running live `apply --tui` does not yet have nonblocking cancellation.

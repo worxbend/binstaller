@@ -6,6 +6,7 @@ import binstaller.config.ChecksumSpec
 import binstaller.config.ConfigLoadError
 import binstaller.config.ConfigModule
 import binstaller.config.ExecutableMode
+import binstaller.config.PolicyMode
 import binstaller.config.SymlinkPrivilege
 import binstaller.config.ValidationError
 
@@ -40,8 +41,17 @@ final case class ResolvedPolicy(
     stateFile: Option[String],
     allowSudoSymlinks: AllowSudoSymlinks,
     requireConfirmation: RequireConfirmation,
-    continueOnError: ContinueOnError
+    continueOnError: ContinueOnError,
+    mode: PolicyMode = PolicyMode.Developer,
+    allowDynamicLatestUrls: PolicyAllowance = PolicyAllowance.Allowed,
+    allowMissingChecksums: PolicyAllowance = PolicyAllowance.Allowed,
+    allowTarXzFallback: PolicyAllowance = PolicyAllowance.Allowed,
+    allowArchiveCandidateFallback: PolicyAllowance = PolicyAllowance.Allowed
 )
+
+/** Effective allow/reject decision after applying a manifest policy profile and overrides. */
+enum PolicyAllowance:
+  case Allowed, Rejected
 
 /** Whether non-dry-run apply requires explicit confirmation. */
 enum RequireConfirmation:

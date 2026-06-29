@@ -69,14 +69,24 @@ final case class ProfileSpec(
 
 /** Profile-wide execution policy decoded from `spec.policy`. */
 final case class InstallPolicy(
+    mode: PolicyMode,
     dryRun: Boolean,
     continueOnError: Boolean,
     appsDir: String,
     cleanInstall: Boolean,
     requireConfirmation: Boolean,
     allowSudoSymlinks: AllowSudoSymlinks,
+    allowDynamicLatestUrls: Option[PolicyOverride],
+    allowMissingChecksums: Option[PolicyOverride],
+    allowTarXzFallback: Option[PolicyOverride],
+    allowArchiveCandidateFallback: Option[PolicyOverride],
     stateFile: Option[String]
 )
+
+/** Coarse policy profile for security-sensitive manifest defaults. */
+enum PolicyMode(val value: String):
+  case Developer extends PolicyMode("developer")
+  case Strict    extends PolicyMode("strict")
 
 /** Whether profile validation permits privileged symlink declarations. */
 enum AllowSudoSymlinks:
@@ -86,6 +96,15 @@ enum AllowSudoSymlinks:
 object AllowSudoSymlinks:
   /** Convert `true` to [[Enabled]] and `false` to [[Disabled]]. */
   def fromBoolean(value: Boolean): AllowSudoSymlinks = if value then Enabled else Disabled
+
+/** Optional explicit override for strict/developer policy defaults. */
+enum PolicyOverride:
+  case Enabled, Disabled
+
+/** Helpers for converting YAML booleans into explicit policy overrides. */
+object PolicyOverride:
+  /** Convert `true` to [[Enabled]] and `false` to [[Disabled]]. */
+  def fromBoolean(value: Boolean): PolicyOverride = if value then Enabled else Disabled
 
 /** A declared source for a tool version. */
 enum VersionSource:
@@ -280,7 +299,14 @@ private object ManifestDecoder:
     )
 
   private def decodePolicy(input: DecodeResult[YamlMap]): DecodeResult[InstallPolicy] =
-    val map             = input.value
+    val map  = input.value
+    val mode = optionalEnumValue(
+      optionalString(map, "mode", "spec.policy.mode"),
+      "spec.policy.mode",
+      PolicyMode.values.toVector,
+      PolicyMode.Developer,
+      _.value
+    )
     val dryRun          = optionalBoolean(map, "dryRun", "spec.policy.dryRun", default = false)
     val continueOnError =
       optionalBoolean(map, "continueOnError", "spec.policy.continueOnError", default = false)
@@ -299,21 +325,47 @@ private object ManifestDecoder:
       "spec.policy.allowSudoSymlinks",
       default = false
     ).map(AllowSudoSymlinks.fromBoolean)
+    val allowDynamicLatestUrls = optionalPolicyOverride(
+      map,
+      "allowDynamicLatestUrls",
+      "spec.policy.allowDynamicLatestUrls"
+    )
+    val allowMissingChecksums = optionalPolicyOverride(
+      map,
+      "allowMissingChecksums",
+      "spec.policy.allowMissingChecksums"
+    )
+    val allowTarXzFallback = optionalPolicyOverride(
+      map,
+      "allowTarXzFallback",
+      "spec.policy.allowTarXzFallback"
+    )
+    val allowArchiveCandidateFallback = optionalPolicyOverride(
+      map,
+      "allowArchiveCandidateFallback",
+      "spec.policy.allowArchiveCandidateFallback"
+    )
     val stateFile = optionalString(map, "stateFile", "spec.policy.stateFile")
 
     DecodeResult(
       InstallPolicy(
+        mode = mode.value,
         dryRun = dryRun.value,
         continueOnError = continueOnError.value,
         appsDir = appsDir.value,
         cleanInstall = cleanInstall.value,
         requireConfirmation = requireConfirmation.value,
         allowSudoSymlinks = allowSudoSymlinks.value,
+        allowDynamicLatestUrls = allowDynamicLatestUrls.value,
+        allowMissingChecksums = allowMissingChecksums.value,
+        allowTarXzFallback = allowTarXzFallback.value,
+        allowArchiveCandidateFallback = allowArchiveCandidateFallback.value,
         stateFile = stateFile.value
       ),
-      input.errors ++ dryRun.errors ++ continueOnError.errors ++ appsDir.errors ++
+      input.errors ++ mode.errors ++ dryRun.errors ++ continueOnError.errors ++ appsDir.errors ++
         cleanInstall.errors ++ requireConfirmation.errors ++ allowSudoSymlinks.errors ++
-        stateFile.errors
+        allowDynamicLatestUrls.errors ++ allowMissingChecksums.errors ++
+        allowTarXzFallback.errors ++ allowArchiveCandidateFallback.errors ++ stateFile.errors
     )
 
   private def decodeVersions(input: DecodeResult[YamlMap])
@@ -607,6 +659,15 @@ private object ManifestDecoder:
         DecodeResult.invalid(None, path, "mode must be a four-digit octal string")
       case Some(_) => DecodeResult.invalid(None, path, "mode must be a string")
 
+  private def optionalPolicyOverride(
+      map: YamlMap,
+      key: String,
+      path: String
+  ): DecodeResult[Option[PolicyOverride]] = map.get(key) match
+    case None                 => DecodeResult.valid(None)
+    case Some(value: Boolean) => DecodeResult.valid(Some(PolicyOverride.fromBoolean(value)))
+    case Some(_)              => DecodeResult.invalid(None, path, "value must be a boolean")
+
   private def requiredMap(map: YamlMap, path: String): DecodeResult[YamlMap] =
     val key = path.split("\\.").last
     map.get(key) match
@@ -708,6 +769,27 @@ private object ManifestDecoder:
             )
           )
 
+  private def optionalEnumValue[A](
+      input: DecodeResult[Option[String]],
+      path: String,
+      values: Vector[A],
+      fallback: A,
+      render: A => String
+  ): DecodeResult[A] =
+    if input.errors.nonEmpty then DecodeResult(fallback, input.errors)
+    else
+      input.value match
+        case None        => DecodeResult.valid(fallback)
+        case Some(value) => values.find(candidate => render(candidate) == value) match
+            case Some(candidate) => DecodeResult.valid(candidate)
+            case None            => DecodeResult(
+                fallback,
+                Vector(ValidationError(
+                  path,
+                  s"unsupported value '$value', expected one of ${values.map(render).mkString(", ")}"
+                ))
+              )
+
 private object ProfileValidator:
 
   def validate(profile: BinaryDistributionProfile): Vector[ValidationError] =
@@ -758,5 +840,16 @@ private object ProfileValidator:
               case (symlink, symlinkIndex) if symlink.privilege == SymlinkPrivilege.Sudo =>
                 ValidationError(
                   s"spec.plan[$entryIndex].spec.symlinks[$symlinkIndex].sudo",
-                  s"tool '${entry.name}' uses a sudo symlink but policy.allowSudoSymlinks is false"
+                  sudoSymlinkPolicyMessage(profile, entry.name)
                 )
+
+  private def sudoSymlinkPolicyMessage(
+      profile: BinaryDistributionProfile,
+      toolName: String
+  ): String = profile.spec.policy.mode match
+    case PolicyMode.Strict =>
+      s"strict-policy[sudo-symlink]: tool '$toolName' uses a sudo symlink; " +
+        "suggestion[allow-sudo-symlinks]: set spec.policy.allowSudoSymlinks: true " +
+        "only for reviewed system symlinks"
+    case PolicyMode.Developer =>
+      s"tool '$toolName' uses a sudo symlink but policy.allowSudoSymlinks is false"
