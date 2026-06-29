@@ -257,6 +257,15 @@ kind: BinaryDistributionProfile
   because `native-image` is not on `PATH`; `java -version` reports OpenJDK
   25.0.3. Iteration 41 re-ran this final gate and marked T016 complete in the
   task ledger.
+- 2026-06-29: VALIDATION-42 checkpoint revalidated the completed TUI/readiness
+  chunk. The configured config/core/CLI tests, recursive compile and tests,
+  app-level `--help`, `plan`, `apply --dry-run`, `versions`, scalafmt, and git
+  whitespace checks all passed with no source fixes. Additional project-native
+  checks also passed: `tui.test`, static non-interactive `plan --tui` and
+  `apply --dry-run --tui` smokes, Mill module resolution, task JSON validation,
+  and must-fix review status scan. Native-image remains locally blocked because
+  `native-image` is not on `PATH`; this shell is not an interactive TTY for live
+  raw-terminal TUI smoke.
 
 ## Current Agent Loop State
 
