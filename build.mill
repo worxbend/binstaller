@@ -41,6 +41,10 @@ trait BinstallerModule extends ScalaModule:
       "utest.runner.Framework"
     }
 
+    def forkArgs: T[Seq[String]] = Task {
+      super.forkArgs() ++ Seq(s"-Dbinstaller.repoRoot=${mill.api.BuildCtx.workspaceRoot}")
+    }
+
 object config extends BinstallerModule:
   def mvnDeps: T[Seq[mill.javalib.Dep]] = Task {
     Seq(Deps.snakeYamlEngine)

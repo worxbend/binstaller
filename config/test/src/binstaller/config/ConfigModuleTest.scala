@@ -207,10 +207,14 @@ object ConfigModuleTest extends TestSuite:
 
   private def abort(message: String): Nothing = throw java.lang.AssertionError(message)
 
-  private def exampleConfigPath: Path = upwardPaths(Path.of("").toAbsolutePath)
+  private def exampleConfigPath: Path = repoRootCandidates
     .map(_.resolve("config.example.yaml"))
     .find(Files.exists(_))
     .getOrElse(abort("could not locate config.example.yaml"))
+
+  private def repoRootCandidates: Iterator[Path] =
+    sys.props.get("binstaller.repoRoot").iterator.map(Path.of(_).toAbsolutePath) ++
+      upwardPaths(Path.of("").toAbsolutePath)
 
   private def upwardPaths(start: Path): Iterator[Path] =
     Iterator.iterate(start)(_.getParent).takeWhile(_ != null)

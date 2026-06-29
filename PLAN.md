@@ -296,7 +296,11 @@ The next agent loop should execute this ordered pending queue:
   metadata hardening/deferrals, render scrubbing/redaction, checksum value
   validation, honest apply TUI keybar behavior, and replacement rollback tests.
 - T012: Document public contracts - completed ScalaDoc and intent/risk comments for public and security-sensitive contracts.
-- T013: Checkpoint production readiness - validate after hardening and public contract documentation.
+- T013: Checkpoint production readiness - completed broad validation after
+  hardening and public contract documentation. The default Mill daemon was busy
+  with a separate non-dry-run apply, so validation used `--no-daemon` with an
+  isolated `MILL_OUTPUT_DIR`; this exposed and fixed test fixture lookup for
+  `config.example.yaml` when Mill output is outside the checkout.
 - T014: Write maintainer docs - add architecture, manifest, security, TUI, testing, and release guides.
 - T015: Finalize README - make README the concise user-facing entry point linking deeper docs.
 - T016: Run final validation - run the configured validation suite and record native-image status.

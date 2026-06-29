@@ -315,14 +315,16 @@ object CliModuleTest extends TestSuite:
                                                        |          - path: bin/alpha
                                                        |""".stripMargin
 
-  private def findRepoFile(name: String): Path = Iterator
-    .iterate(Path.of("").toAbsolutePath)(_.getParent)
-    .takeWhile(_ != null)
+  private def findRepoFile(name: String): Path = repoRootCandidates
     .map(_.resolve(name))
     .find(Files.isRegularFile(_))
     .getOrElse(
       throw java.lang.AssertionError(s"could not find $name from ${Path.of("").toAbsolutePath}")
     )
+
+  private def repoRootCandidates: Iterator[Path] =
+    sys.props.get("binstaller.repoRoot").iterator.map(Path.of(_).toAbsolutePath) ++
+      Iterator.iterate(Path.of("").toAbsolutePath)(_.getParent).takeWhile(_ != null)
 
   private val ToolHeading = """^\d+\. (\S+)$""".r
 
