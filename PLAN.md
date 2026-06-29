@@ -157,6 +157,14 @@ kind: BinaryDistributionProfile
   normalization accepts safe `./name` members while still rejecting traversal.
   The next development phase should focus on a first-class TUI and then a
   deliberate production-readiness pass.
+- 2026-06-29: T001 of the TUI phase chose the initial TUI stack and entrypoint.
+  Tamboui 0.4.0 is not being added directly for the first implementation pass;
+  it remains the visual and interaction reference. The implementation will use
+  a small deterministic renderer in a dedicated `tui` module, reusing `fansi`
+  for ANSI styling and adding JLine only if raw-mode input, resize, alternate
+  screen, or mouse support cannot be kept correct with local terminal
+  primitives. The explicit user entrypoints are `plan --tui` and
+  `apply --tui`; default `plan` and `apply` remain script-friendly.
 
 ## Current Agent Loop State
 
@@ -180,6 +188,27 @@ is:
 - After the TUI lands, the repository should enter a codebase-hardening and
   documentation phase before README is treated as final.
 
+## Agent Loop Tasks
+
+The next agent loop should execute this ordered pending queue:
+
+- T001: Choose TUI stack - decide whether Tamboui is direct dependency or visual reference only, and record the explicit TUI entrypoint.
+- T002: Add TUI module shell - add the `tui` module and wire explicit plan/apply TUI entrypoints without changing default script-friendly CLI output.
+- T003: Introduce apply events - make core emit structured renderer-agnostic plan/apply events for CLI and TUI.
+- T004: Checkpoint TUI foundation - validate the module shell and event model before terminal rendering work.
+- T005: Render planning TUI - implement header, plan table/tree, details pane, logs pane, footer, keybar, colors, truncation, and deterministic rendering tests.
+- T006: Add TUI navigation - implement focus cycling, selection, log/detail scrolling, filtering, help, resize handling, and clean quit.
+- T007: Render execution TUI - implement the active apply screen with spinner/progress, recent logs, completed/failed rows, and terminal cleanup.
+- T008: Checkpoint TUI experience - run full validation and manual terminal smoke checks after the TUI is usable.
+- T009: Document TUI smoke workflow - write durable no-network, narrow-terminal, resize, focus, scroll, execution, and cleanup smoke instructions.
+- T010: Review post-TUI readiness - perform the mandatory architecture, security, maintainability, test, and native-image review under `docs/`.
+- T011: Fix must-fix readiness issues - implement or explicitly defer every must-fix review finding with regression tests.
+- T012: Document public contracts - add ScalaDoc and intent/risk comments for public and security-sensitive contracts.
+- T013: Checkpoint production readiness - validate after hardening and public contract documentation.
+- T014: Write maintainer docs - add architecture, manifest, security, TUI, testing, and release guides.
+- T015: Finalize README - make README the concise user-facing entry point linking deeper docs.
+- T016: Run final validation - run the configured validation suite and record native-image status.
+
 ## Next Phase Development Plan
 
 ### P011 - Tamboui-Inspired TUI Experience
@@ -190,6 +219,33 @@ for visual and interaction direction, especially the demos for `Canvas`,
 Tamboui directly if its JVM/Scala integration is practical and version-checked
 before coding; otherwise, reproduce the same interaction model in the existing
 TUI stack with a clear note in the implementation summary.
+
+T001 stack decision: for the initial implementation, Tamboui is visual and
+interaction reference only, not a direct runtime dependency. The practical path
+for the current Scala 3/Mill/JVM/native-image build is a dedicated `tui` module
+with a deterministic layout/rendering model, `fansi` for color/styling, and
+small terminal primitives for borders, tables, scrollbars, spinner/wavetext-like
+indicators, truncation, and snapshot-friendly output. JLine is the only planned
+new dependency candidate for terminal raw mode, key decoding, resize handling,
+alternate-screen lifecycle, and mouse wheel support if local primitives become
+too brittle. TUI entry is explicit: `plan --tui` opens the read-only planning
+TUI, and `apply --tui` opens the apply TUI; default `plan` and `apply` output
+must remain non-interactive.
+
+Dependency impact and risks: adding Tamboui directly would likely require
+`dev.tamboui:tamboui-tui:0.4.0`,
+`dev.tamboui:tamboui-toolkit:0.4.0`, and
+`dev.tamboui:tamboui-jline3-backend:0.4.0`. Those artifacts are current on
+Maven Central as of 2026-06-29, and Tamboui documents GraalVM native-image
+support, but the project still describes itself as experimental and under
+active API development. Direct use would add Java-first widget abstractions,
+backend lifecycle behavior, and native-image reachability/terminal cleanup
+surface that this repo has not validated. Testability risk is also higher
+because the TUI would depend on third-party widget internals rather than this
+repo's own deterministic layout model. JLine, if added, has a narrower risk:
+native-image behavior and terminal state cleanup still need validation, but it
+can be isolated behind an input/backend boundary while rendering remains pure
+and snapshot-testable.
 
 Style direction:
 
