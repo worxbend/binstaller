@@ -53,6 +53,13 @@ as part of this refactor.
   TUI-local selection transitions for Space, select-all-visible, clear-visible,
   and invert-visible. Selection counts refresh in the header after each change,
   and hidden selections survive filtering.
+- 2026-06-30: Validation iteration 26 passed the configured checkpoint after
+  T001-T003: focused tests, recursive compile/test, scalafmt, Mill resolution,
+  first-class `tui` help/config smokes, non-interactive plan/apply/version/lock
+  smokes, and `git diff --check`. No code fixes were needed. Remaining risks
+  are environment-bound: live raw-terminal TUI behavior still needs a real TTY,
+  and local native-image validation is blocked because `native-image` is not on
+  `PATH`.
 
 ## Product Target
 
