@@ -120,6 +120,16 @@ as part of this refactor.
   Snapshot/model tests now cover dense normal-width output and narrow clipping.
   Focused TUI tests, static `tui --config config.example.yaml`, recursive
   compile, scalafmt check, JSON validation, and whitespace checks passed.
+- 2026-06-30: T012 hardened and revalidated terminal lifecycle behavior for
+  the first-class `tui` command. Tests now cover non-interactive browsing
+  fallback without raw mode, terminal open failure, normal close, cleanup after
+  render failure, modal close, `q`, Ctrl+C, resize-driven layout bounds in
+  browsing and execution views, and direct `stty` argv usage without shell
+  strings. The manual smoke guide now uses `./mill app.run tui --config ...`
+  and includes real-terminal startup, resize, quit, Ctrl+C, modal close, and
+  cleanup checks. Focused TUI tests, static `tui --config config.example.yaml`,
+  recursive compile, scalafmt check, JSON validation, and whitespace checks
+  passed.
 
 ## Product Target
 

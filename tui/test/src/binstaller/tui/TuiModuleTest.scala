@@ -281,6 +281,24 @@ object TuiModuleTest extends TestSuite:
       assert(!output.contains("\u001b[?1049h"))
       assert(output.contains("non-interactive terminal detected"))
 
+    test("non-interactive browsing frame does not open or close terminal raw mode"):
+      val fixture  = writeFixture()
+      val terminal = FakeTuiTerminal(interactive = false, TuiViewport(100, 38))
+      val result   = TuiModule.startInteractive(
+        TuiRequest(TuiMode.Plan, fixture.options, Some("tui")),
+        FakeHttpTextClient(""),
+        testSettings(height = 38),
+        terminal
+      )
+      val output = result.lines.mkString("\n")
+
+      assert(result.exitCode == 0)
+      assert(!terminal.opened)
+      assert(!terminal.closed)
+      assert(!output.contains("\u001b[?1049h"))
+      assert(output.contains("non-interactive terminal detected; rendered a static TUI frame"))
+      assert(stripAnsi(output).contains("binstaller 1.2.3 | mode browse"))
+
     test("layout model carries header metadata and plan rows"):
       val fixture = writeFixture()
       val model   = modelFor(fixture, selectedIndex = 0)
@@ -947,6 +965,29 @@ object TuiModuleTest extends TestSuite:
       assert(!closeState.helpOpen)
       assert(closeState.appState == state.appState.copy(modal = None))
 
+    test("interactive modal close returns to browsing frame and cleans up terminal"):
+      val fixture  = writeFixture()
+      val terminal = FakeTuiTerminal(
+        interactive = true,
+        TuiViewport(100, 38),
+        inputs = Vector(TuiInput.Question, TuiInput.Escape, TuiInput.Quit)
+      )
+      val result = TuiModule.startInteractive(
+        TuiRequest(TuiMode.Plan, fixture.options, Some("tui")),
+        FakeHttpTextClient(""),
+        testSettings(height = 38),
+        terminal
+      )
+      val helpFrame   = stripAnsi(terminal.rendered(1).mkString("\n"))
+      val closedFrame = stripAnsi(terminal.rendered(2).mkString("\n"))
+
+      assert(result.exitCode == 0)
+      assert(terminal.opened)
+      assert(terminal.closed)
+      assert(helpFrame.contains("Help"))
+      assert(closedFrame.contains("Plan [focus]"))
+      assert(!closedFrame.contains("Help"))
+
     test("quit inputs exit through terminal cleanup path"):
       val fixture       = writeFixture()
       val quitTerminal  = FakeTuiTerminal(true, TuiViewport(100, 38), Vector(TuiInput.Quit))
@@ -972,6 +1013,28 @@ object TuiModuleTest extends TestSuite:
       assert(ctrlCTerminal.opened)
       assert(ctrlCTerminal.closed)
 
+    test("terminal render failure exits through cleanup path"):
+      val fixture  = writeFixture()
+      val terminal = FakeTuiTerminal(
+        interactive = true,
+        TuiViewport(100, 38),
+        renderFailureAt = Some(0)
+      )
+      val result = TuiModule.startInteractive(
+        TuiRequest(TuiMode.Plan, fixture.options, Some("tui")),
+        FakeHttpTextClient(""),
+        testSettings(height = 38),
+        terminal
+      )
+      val plain = stripAnsi(result.lines.mkString("\n"))
+
+      assert(result.exitCode == 1)
+      assert(terminal.opened)
+      assert(terminal.closed)
+      assert(plain.contains("ERROR: Terminal failure"))
+      assert(plain.contains("category: terminal"))
+      assert(plain.contains("render failed"))
+
     test("planning session accepts resize inputs and renders within narrow bounds"):
       val state = sessionState(
         writeFixture(longValues = true),
@@ -985,6 +1048,37 @@ object TuiModuleTest extends TestSuite:
 
       assert(finalState.viewport == TuiViewport(32, 24))
       assertRenderedWithin(rendered, width = 32)
+
+    test("resize events keep browsing and execution views within updated terminal width"):
+      val fixture       = writeFixture(longValues = true)
+      val browsingState = PlanningTuiSession.run(
+        sessionState(fixture, settings = testSettings(width = 100, height = 42)),
+        Vector(TuiInput.Resize(TuiViewport(30, 22)))
+      )
+      val executionState = TuiAppController.handle(
+        browsingState.appState.copy(executionState =
+          Some(ExecutionTuiState
+            .initial(
+              TuiRequest(TuiMode.Apply, fixture.options),
+              ExecutionTuiSettings.fromPlanning(testSettings(width = 100, height = 42))
+            )
+            .onEvent(InstallerEvent.ToolStarted(
+              "alpha-with-a-long-name",
+              InstallerPhase.Downloading,
+              elapsed(5)
+            ))
+            .onEvent(InstallerEvent.LogLine(
+              Some("alpha-with-a-long-name"),
+              "long log line that should be clipped after resize",
+              elapsed(6)
+            )))
+        ),
+        TuiInput.Resize(TuiViewport(30, 22))
+      )
+
+      assertRenderedWithin(TuiAppRenderer.render(browsingState.appState), width = 30)
+      assertRenderedWithin(TuiAppRenderer.render(executionState), width = 30)
+      assert(executionState.executionState.exists(_.viewport == TuiViewport(30, 22)))
 
     test("interactive planning rerenders after resize input"):
       val fixture  = writeFixture(longValues = true)
@@ -1021,6 +1115,9 @@ object TuiModuleTest extends TestSuite:
         Vector("stty", "raw", "-echo", "min", "0", "time", "1"),
         Vector("stty", "saved; touch /tmp/owned")
       ))
+      assert(runner.specs.flatMap(_.argv.headOption).forall(_ == "stty"))
+      assert(runner.specs.forall(spec => !spec.argv.exists(arg => arg == "sh" || arg == "bash")))
+      assert(runner.specs.forall(spec => !spec.argv.contains("-c")))
       assert(runner.specs.forall(_.inputFile == tty))
 
     test("system terminal emits resize input when size changes"):
@@ -1419,7 +1516,8 @@ private final class FakeTuiTerminal(
     interactive: Boolean,
     initialViewport: TuiViewport,
     inputs: Vector[TuiInput] = Vector.empty,
-    openFailure: Option[Throwable] = None
+    openFailure: Option[Throwable] = None,
+    renderFailureAt: Option[Int] = None
 ) extends TuiTerminal:
   var opened: Boolean                  = false
   var closed: Boolean                  = false
@@ -1435,7 +1533,10 @@ private final class FakeTuiTerminal(
     opened = true
     openFailure.foreach(error => throw error)
 
-  def render(lines: Vector[String]): Unit = rendered = rendered :+ lines
+  def render(lines: Vector[String]): Unit =
+    renderFailureAt.foreach: index =>
+      if rendered.size == index then throw IOException("render failed")
+    rendered = rendered :+ lines
 
   def readInput(): Option[TuiInput] =
     val input = inputs.lift(inputIndex)

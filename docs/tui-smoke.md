@@ -1,21 +1,21 @@
 # TUI Smoke Workflow
 
-Date: 2026-06-29
+Date: 2026-06-30
 
-Scope: manual smoke checks for the explicit TUI entrypoints:
+Scope: manual smoke checks for the first-class TUI command:
 
-- `plan --tui`
-- `apply --tui`
-- `apply --dry-run --tui`
+```bash
+./mill app.run tui --config config.example.yaml
+```
 
-Run these checks from a real terminal emulator, not from an IDE task runner,
+Run live checks from a real terminal emulator, not from an IDE task runner,
 pipe, or non-interactive shell. Non-interactive shells intentionally render a
-static frame and do not enter raw mode.
+static frame and do not enter raw mode or the alternate screen.
 
 ## Temporary No-Network Profile
 
 Create a disposable profile with pinned versions and `example.invalid` HTTPS
-URLs. The planning TUI and dry-run execution TUI must not download these URLs,
+URLs. Browsing, plan preview, and dry-run checks must not download these URLs,
 create the apps directory, or write the state file.
 
 ```bash
@@ -91,67 +91,87 @@ This check may be run from the agent shell or CI because it does not require an
 interactive TTY.
 
 ```bash
-./mill app.run plan --config "$SMOKE_ROOT/tui-smoke.yaml" --tui
-./mill app.run apply --config "$SMOKE_ROOT/tui-smoke.yaml" --dry-run --tui
+./mill app.run tui --config "$SMOKE_ROOT/tui-smoke.yaml"
 test ! -e "$SMOKE_ROOT/apps"
 test ! -e "$SMOKE_STATE"
 ```
 
 Expected results:
 
-- The plan command prints a TUI-shaped static frame plus
+- The command prints a TUI-shaped browsing frame plus
   `non-interactive terminal detected; rendered a static TUI frame`.
-- The apply dry-run command prints `mode apply execution`,
-  `Dry-run operations`, and the exact dry-run operation lines.
-- The execution frame does not include the planning table header.
-- The displayed state line is `state $SMOKE_STATE`.
+- The frame includes `mode browse`, `Plan`, `Details`, `Logs`, selected count,
+  config path, and `state $SMOKE_STATE`.
+- The output does not contain alternate-screen setup sequences such as
+  `?1049h`.
 - Neither `$SMOKE_ROOT/apps` nor `$SMOKE_STATE` is created.
 
-## Normal Terminal Planning Smoke
+## Startup And Browsing
 
 Run in a real terminal at roughly 100 columns by 30 rows or larger:
 
 ```bash
-./mill app.run plan --config "$SMOKE_ROOT/tui-smoke.yaml" --tui
+./mill app.run tui --config "$SMOKE_ROOT/tui-smoke.yaml"
 ```
 
 Expected results:
 
-- The TUI enters the alternate screen, clears the display, and hides the normal
-  shell prompt while it is open.
-- The header shows `binstaller`, `mode plan`, manifest `tui-smoke`, the config
-  path, `state $SMOKE_STATE`, host summary, selection, and filter.
-- The Plan pane shows `alpha` and `beta`. The selected row begins with `>` and
-  the Plan title shows `[focus]`.
-- The Details pane shows the selected tool's full download URL, archive mapping
-  for `alpha`, symlink preview for `beta`, and dry-run operation preview.
-- The Logs pane is visible. For this no-network profile it normally contains
-  the default resolution lines and may not overflow.
-- `q` exits cleanly and returns to the shell prompt.
+- The TUI enters the alternate screen, clears the display, hides the normal
+  shell prompt, and shows `binstaller` with `mode browse`.
+- The header shows manifest `tui-smoke`, the config path, `state $SMOKE_STATE`,
+  host summary, action mode, and `selected 2 / total 2`.
+- The Plan pane shows checked rows for `alpha` and `beta`.
+- The Details pane shows the selected tool URL, archive mapping for `alpha`,
+  symlink preview for `beta`, sudo risk, and dry-run operation preview.
+- The Logs pane is visible and focusable.
 
-## Focus, Details, Filter, And Help
+## Modal Close And Navigation
 
-Start the planning smoke again and use these keys:
+Use these keys inside the same TUI session:
 
-1. Press `Tab`.
-   Expected: focus moves from `Plan [focus]` to `Details [focus]`.
-2. Press `Tab` again.
-   Expected: focus moves to `Logs [focus]`.
-3. Press `b` or `Shift+Tab`.
+1. Press `?`.
+   Expected: an in-frame Help modal appears and the TUI stays in the alternate
+   screen.
+2. Press `Escape`.
+   Expected: Help closes and the same browsing frame returns.
+3. Press `Tab`, then `Tab` again.
+   Expected: focus cycles from Plan to Details to Logs.
+4. Press `b` or `Shift+Tab`.
    Expected: focus moves backward one pane.
-4. Return focus to Plan, then press `Down`.
-   Expected: selection changes from `1/2 alpha` to `2/2 beta`, and Details
+5. Return focus to Plan, then press `Down`.
+   Expected: the selected row changes from `alpha` to `beta`, and Details
    changes to `Details: beta`.
-5. Press `/`, type `alp`, then press `Enter`.
+6. Press `/`, type `alp`, then press `Enter`.
    Expected: the header filter changes to `alp`, the visible table contains
-   only `alpha`, and selection changes to `1/1 alpha`.
-6. Press `?`.
-   Expected: an in-frame Help section appears. It must not open a pager or
-   leave the alternate screen.
-7. Press `Escape`.
-   Expected: Help closes.
-8. Press `q`.
-   Expected: the terminal returns to normal shell mode.
+   only `alpha`, and checked selection state is preserved.
+7. Press `Escape` if a modal or filter edit is open.
+   Expected: the modal/filter closes without exiting the TUI.
+
+## Selection And Actions
+
+With the no-network profile loaded:
+
+1. Press `Space`.
+   Expected: the current row checkbox toggles and the selected count updates.
+2. Press `a`, `c`, and `i`.
+   Expected: visible rows are selected, cleared, or inverted without losing
+   hidden selections after filtering.
+3. Press `p`.
+   Expected: selected-entry plan preview lines are appended to Logs; no apps
+   directory or state file is created.
+4. Press `d`.
+   Expected: the primary view changes to execution mode, shows dry-run
+   operations, recent logs, and a final summary; no apps directory or state
+   file is created.
+5. Restart the TUI, press `r`.
+   Expected: a confirmation modal opens before any apply work starts.
+6. Press `Escape` or `n`.
+   Expected: the confirmation modal closes and no apps directory or state file
+   is created.
+
+Do not press `Enter` in the real-apply confirmation modal unless the profile
+uses an isolated temporary `appsDir` and a disposable current-directory state
+filename.
 
 ## Detail And Log Scrolling
 
@@ -194,78 +214,37 @@ Expected results:
 - Mouse wheel events scroll the focused Details or Logs pane in terminal
   emulators that send SGR mouse wheel sequences.
 
-## Dry-Run Execution View
+## Resize Smoke
 
-Run the apply TUI in dry-run mode:
-
-```bash
-./mill app.run apply --config "$SMOKE_ROOT/tui-smoke.yaml" --dry-run --tui
-test ! -e "$SMOKE_ROOT/apps"
-test ! -e "$SMOKE_STATE"
-```
-
-Expected results:
-
-- The header says `mode apply execution`.
-- The main section is `Execution`; the full Plan table is not the main view.
-- The frame includes current tool or `no active tool`, recent logs, final
-  summary, and `Dry-run operations`.
-- The dry-run operations include the `https://example.invalid/...` URLs, but no
-  network request is made and no apps or state paths are created.
-- The command exits on its own after rendering the final dry-run frame.
-
-Do not run `apply --tui --yes` against a real profile for this smoke unless the
-profile uses an isolated temporary `appsDir` and a disposable current-directory
-state filename.
-
-## Narrow Terminal Smoke
-
-Use a terminal emulator window near 70 columns by 18 rows. Where supported, this
-escape sequence asks the emulator to resize the window:
+Use a terminal emulator window near 100 columns by 30 rows, start the TUI, then
+resize the window narrower and taller while it is still open. Where supported,
+this escape sequence asks the emulator to resize the window before startup:
 
 ```bash
 printf '\033[8;18;70t'
-./mill app.run plan --config "$SMOKE_ROOT/tui-smoke.yaml" --tui
+./mill app.run tui --config "$SMOKE_ROOT/tui-smoke.yaml"
 ```
 
 Expected results:
 
+- After a resize, the next input polling cycle or navigation key rerenders the
+  frame using the new terminal dimensions.
 - Text stays inside pane width. Long paths and URLs truncate in table cells
   with an ellipsis; full values remain available in Details.
-- The keybar remains visible if there is enough height.
-- Pane titles and status lines do not overlap.
-- The renderer enforces a minimum width internally, so extremely narrow
-  terminals may clip at the terminal edge even though the frame remains stable.
+- Pane titles, status lines, keybar, and modal text do not overlap.
+- Repeat the resize after pressing `d`; the execution view should also rerender
+  within the new width.
 
-## Resize Smoke
+## Quit, Ctrl+C, And Cleanup
 
-Current behavior is size-at-open for the system terminal backend.
-
-1. Start `plan --tui` in a normal terminal.
-2. Resize the terminal narrower or taller while the TUI is open.
-3. Press a navigation key such as `Tab` or `Down`.
-4. Quit with `q`.
-5. Restart the command after resizing.
-
-Expected results:
-
-- During the already-open session, the frame may continue using the viewport
-  measured at startup.
-- After restart, the frame uses the new terminal size.
-- The pure resize model is covered by automated tests, but the current
-  `SystemTuiTerminal` does not yet convert live `SIGWINCH` notifications into
-  resize events.
-
-## Terminal Cleanup
-
-Check both normal quit paths from the planning TUI:
+Check both normal quit paths from the first-class TUI command:
 
 ```bash
-./mill app.run plan --config "$SMOKE_ROOT/tui-smoke.yaml" --tui
+./mill app.run tui --config "$SMOKE_ROOT/tui-smoke.yaml"
 # press q
 printf 'after-q\n'
 
-./mill app.run plan --config "$SMOKE_ROOT/tui-smoke.yaml" --tui
+./mill app.run tui --config "$SMOKE_ROOT/tui-smoke.yaml"
 # press Ctrl+C
 printf 'after-ctrl-c\n'
 ```
@@ -277,7 +256,18 @@ Expected results:
 - Typed characters echo normally after exit.
 - `after-q` and `after-ctrl-c` print at the shell prompt, not inside the TUI.
 
-If a local terminal is left in raw mode after an interrupted process, recover
+Also verify cleanup after modal close:
+
+```bash
+./mill app.run tui --config "$SMOKE_ROOT/tui-smoke.yaml"
+# press ?, Escape, q
+printf 'after-modal-close\n'
+```
+
+Expected: the help modal closes in-frame, `q` exits, and
+`after-modal-close` prints at the shell prompt with normal echo.
+
+If a local terminal is left in raw mode after an external interruption, recover
 with:
 
 ```bash
@@ -288,17 +278,14 @@ printf '\033[?25h\033[?1049l\033[?1000l\033[?1006l'
 ## Known Terminal Limitations
 
 - The TUI uses local terminal primitives, `fansi` ANSI styling, `/dev/tty`, and
-  `stty`; Tamboui and JLine are not runtime dependencies in this phase.
+  direct `stty` process arguments; Tamboui and JLine are not runtime
+  dependencies in this phase.
 - Interactive mode is detected through `System.console()`. IDE consoles,
   pipes, and some task runners may be treated as non-interactive and render the
   static fallback frame.
-- Live resize is not fully wired in the system terminal backend. Restart the
-  TUI after resizing to verify the new layout.
 - Mouse wheel support depends on the terminal emulator sending SGR mouse
   events. Some multiplexers require mouse mode to be enabled.
-- Planning TUI reads `q` and Ctrl+C as raw key inputs and restores terminal
-  state in `finally`. The apply execution TUI currently runs the apply loop
-  synchronously; dry-run exits quickly, but long non-dry-run TUI cancellation
-  needs a future nonblocking input boundary.
-- Raw-mode cleanup is best-effort around normal exits and handled failures.
-  Process kills such as `kill -9` cannot run cleanup handlers.
+- Dry-run and real apply actions currently run synchronously inside the TUI
+  input handler. Terminal cleanup still runs after normal exits and handled
+  failures; external process kills such as `kill -9` cannot run cleanup
+  handlers.
