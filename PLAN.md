@@ -1103,6 +1103,42 @@ Acceptance checks:
 - The final implementation still passes the full verification suite after the
   hardening changes.
 
+## Agent Loop Tasks
+
+The resumable implementation queue is stored in `.agent-loop/tasks.json`. All
+tasks start as `pending`; validation checkpoints are inserted before riskier
+phases continue.
+
+| Task | Type | Complexity | Title |
+| --- | --- | --- | --- |
+| T001 | chore | moderate | Scaffold Mill modules |
+| T002 | improvement | moderate | Add binstaller CLI shell |
+| T003 | feature | complex | Model and validate manifests |
+| T004 | validation | simple | Checkpoint config and CLI |
+| T005 | feature | complex | Resolve variables and versions |
+| T006 | feature | moderate | Render plans and selection |
+| T007 | validation | simple | Checkpoint resolution and planning |
+| T008 | feature | complex | Execute direct binary installs |
+| T009 | feature | complex | Extract archives safely |
+| T010 | feature | complex | Run installers and symlinks |
+| T011 | validation | simple | Checkpoint executor safety |
+| T012 | improvement | moderate | Lock config example coverage |
+| T013 | feature | complex | Persist state and resume |
+| T014 | improvement | moderate | Polish CLI reporting |
+| T015 | validation | simple | Checkpoint apply workflow |
+| T016 | improvement | moderate | Update docs and release workflow |
+| T017 | improvement | complex | Review and harden implementation |
+| T018 | validation | simple | Run final validation |
+
+Current progress:
+
+- 2026-06-29: T001 is complete. The repository now has a Scala 3 Mill
+  skeleton with `app -> cli -> core -> config`, centralized dependency
+  coordinates, uTest module test layouts, and an `app` NativeImageModule
+  configured with `--no-fallback` and `-Os`.
+- Native-image packaging was configured but not built during T001; normal JVM
+  compile/test validation passed through the checked-in `./mill` launcher.
+
 ## Verification Strategy
 
 Run these during implementation:

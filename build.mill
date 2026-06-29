@@ -1,0 +1,69 @@
+package build
+
+import mill.*
+import mill.javalib.NativeImageModule
+import mill.scalalib.*
+
+object Versions:
+  val scala: String = "3.8.2"
+
+object Deps:
+  val picocli: mill.javalib.Dep = mvn"info.picocli:picocli:4.7.7"
+  val snakeYamlEngine: mill.javalib.Dep = mvn"org.snakeyaml:snakeyaml-engine:3.0.1"
+  val sttpCore: mill.javalib.Dep = mvn"com.softwaremill.sttp.client4::core:4.0.25"
+  val oxCore: mill.javalib.Dep = mvn"com.softwaremill.ox::core:1.0.5"
+  val upickle: mill.javalib.Dep = mvn"com.lihaoyi::upickle:4.4.3"
+  val osLib: mill.javalib.Dep = mvn"com.lihaoyi::os-lib:0.11.8"
+  val fansi: mill.javalib.Dep = mvn"com.lihaoyi::fansi:0.5.1"
+  val utest: mill.javalib.Dep = mvn"com.lihaoyi::utest:0.9.5"
+
+trait BinstallerModule extends ScalaModule:
+  def scalaVersion: T[String] = Task {
+    Versions.scala
+  }
+
+  def scalacOptions: T[Seq[String]] = Task {
+    Seq(
+      "-deprecation",
+      "-feature",
+      "-Wunused:all",
+      "-Wvalue-discard",
+      "-Wnonunit-statement"
+    )
+  }
+
+  object test extends ScalaTests:
+    def mvnDeps: T[Seq[mill.javalib.Dep]] = Task {
+      Seq(Deps.utest)
+    }
+
+    def testFramework: T[String] = Task {
+      "utest.runner.Framework"
+    }
+
+object config extends BinstallerModule:
+  def mvnDeps: T[Seq[mill.javalib.Dep]] = Task {
+    Seq(Deps.snakeYamlEngine)
+  }
+
+object core extends BinstallerModule:
+  def moduleDeps: Seq[JavaModule] = Seq(config)
+  def mvnDeps: T[Seq[mill.javalib.Dep]] = Task {
+    Seq(Deps.sttpCore, Deps.oxCore, Deps.upickle, Deps.osLib)
+  }
+
+object cli extends BinstallerModule:
+  def moduleDeps: Seq[JavaModule] = Seq(core)
+  def mvnDeps: T[Seq[mill.javalib.Dep]] = Task {
+    Seq(Deps.picocli, Deps.fansi)
+  }
+
+object app extends BinstallerModule, NativeImageModule:
+  def moduleDeps: Seq[JavaModule] = Seq(cli)
+  def mainClass: T[Option[String]] = Task {
+    Some("binstaller.app.Main")
+  }
+
+  def nativeImageOptions: T[Seq[String]] = Task {
+    Seq("--no-fallback", "-Os")
+  }
