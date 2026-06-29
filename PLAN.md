@@ -88,6 +88,13 @@ kind: BinaryDistributionProfile
   scripts when requested, expected executables are verified after install, local
   symlinks resolve under `installDir`, sudo symlinks require policy plus
   `--yes`, and dry-run renders local and sudo symlink actions without writes.
+- 2026-06-29: T011 validation checkpoint passed after the direct binary,
+  archive, installer-script, and symlink executor work. Config, core, CLI,
+  recursive compile, recursive tests, scalafmt, git whitespace checks, and live
+  `app.run plan` / `app.run apply --dry-run` smoke checks against
+  `config.example.yaml` all completed successfully with no source fixes
+  required. Remaining risk is in future state/resume and reporting work rather
+  than the validated executor checkpoint.
 
 ### User Experience Goals
 
