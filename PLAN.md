@@ -395,6 +395,16 @@ kind: BinaryDistributionProfile
   config now declares `mode: developer`, and public docs describe the defaults.
   Config, core, and CLI tests, recursive compile, scalafmt check, app-level
   plan/dry-run smokes, task JSON validation, and git whitespace checks passed.
+- 2026-06-29: T014 lock/policy validation checkpoint passed with no source
+  fixes required. Config, core, CLI, and TUI focused tests, recursive compile,
+  recursive tests, scalafmt, Mill module resolution, task JSON validation,
+  app-level `--help`, `plan`, `apply --dry-run`, `versions`, static
+  non-interactive TUI smokes, `lock --config config.example.yaml`, locked
+  `apply --dry-run`, and git whitespace checks all passed. Native-image
+  validation remains blocked locally because `native-image` is not on `PATH`
+  under OpenJDK 25.0.3. Remaining risks are the previously documented live TUI
+  manual smoke gap and exact final URL lock provenance for provider-signed
+  release asset URLs.
 
 ## Current Agent Loop State
 
