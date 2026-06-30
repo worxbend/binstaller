@@ -162,6 +162,7 @@ object TuiAppActions:
             hostSummary = state.header.hostSummary,
             spinnerFrame = 0,
             logs = state.logs,
+            candidateNames = selectedEntries.map(_.name),
             redactions = state.snapshot.plan.redactions
           )
           val observer       = CollectingTuiAppExecutionObserver(request, settings)
@@ -219,6 +220,7 @@ object TuiAppActions:
             hostSummary = state.header.hostSummary,
             spinnerFrame = 0,
             logs = state.logs,
+            candidateNames = selectedEntries.map(_.name),
             redactions = state.snapshot.plan.redactions
           )
           val observer       = CollectingTuiAppExecutionObserver(request, settings)
@@ -527,8 +529,10 @@ object TuiAppController:
         viewport = value,
         executionState = state.executionState.map(_.handle(input))
       )
+    case TuiInput.Up | TuiInput.Down | TuiInput.PageUp | TuiInput.PageDown | TuiInput.Home |
+        TuiInput.End => state.copy(executionState = state.executionState.map(_.handle(input)))
     case TuiInput.Enter => state.executionState
-        .flatMap(_.firstFailure)
+        .flatMap(_.focusedFailure)
         .map(failure => state.copy(modal = Some(TuiModal.RootCause(failure))))
         .getOrElse(state)
     case TuiInput.Escape                => state.copy(modal = None)

@@ -71,7 +71,7 @@ layers, and both renderers consume resolved plans or renderer-agnostic events.
 Core emits the following renderer-agnostic events:
 
 - `ResolvingStarted(configPath, elapsedTime)`
-- `PlanReady(toolCount, stateFilePath, elapsedTime)`
+- `PlanReady(toolNames, stateFilePath, elapsedTime)`
 - `ToolStarted(toolName, phase, elapsedTime)`
 - `ToolPhaseChanged(toolName, phase, elapsedTime)`
 - `DownloadProgress(toolName, url, downloadedBytes, totalBytes, status, elapsedTime)`

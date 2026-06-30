@@ -1424,8 +1424,18 @@ object CoreModuleTest extends TestSuite:
 
       assert(result.exitCode == 0)
       assert(eventIndex(observer.events, { case InstallerEvent.ResolvingStarted(_, _) => true }) <
-        eventIndex(observer.events, { case InstallerEvent.PlanReady(2, Some(_), _) => true }))
-      assert(eventIndex(observer.events, { case InstallerEvent.PlanReady(2, Some(_), _) => true }) <
+        eventIndex(
+          observer.events,
+          {
+            case InstallerEvent.PlanReady(Vector("alpha", "beta"), Some(_), _) => true
+          }
+        ))
+      assert(eventIndex(
+        observer.events,
+        {
+          case InstallerEvent.PlanReady(Vector("alpha", "beta"), Some(_), _) => true
+        }
+      ) <
         eventIndex(
           observer.events,
           {

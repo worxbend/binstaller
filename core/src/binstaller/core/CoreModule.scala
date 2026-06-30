@@ -990,7 +990,7 @@ private final class ResolvingBinaryInstallerService(
             case Right(_) =>
               val statePath = configuredStatePath(options, prepared.plan)
               eventContext.emit(InstallerEvent.PlanReady(
-                prepared.plan.tools.size,
+                prepared.plan.tools.map(_.name),
                 statePath,
                 _
               ))
@@ -1041,7 +1041,7 @@ private final class ResolvingBinaryInstallerService(
             emitSummary(result, stateFilePath = None, eventContext)
             result
           case Right(lockedProvenance) =>
-            eventContext.emit(InstallerEvent.PlanReady(plan.tools.size, statePath, _))
+            eventContext.emit(InstallerEvent.PlanReady(plan.tools.map(_.name), statePath, _))
             val result = PlanRenderer.render(plan, command, lockedProvenance)
             emitSummary(result, statePath, eventContext)
             result

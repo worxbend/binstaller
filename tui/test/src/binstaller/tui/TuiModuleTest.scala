@@ -116,7 +116,11 @@ object TuiModuleTest extends TestSuite:
           TuiRequest(TuiMode.Apply, fixture.options),
           ExecutionTuiSettings.fromPlanning(testSettings(height = 42))
         )
-        .onEvent(InstallerEvent.PlanReady(2, Some(fixture.stateFile.toString), elapsed(10)))
+        .onEvent(InstallerEvent.PlanReady(
+          Vector("alpha", "beta"),
+          Some(fixture.stateFile.toString),
+          elapsed(10)
+        ))
         .onEvent(InstallerEvent.ToolStarted("alpha", InstallerPhase.Downloading, elapsed(20)))
         .onEvent(InstallerEvent.DownloadProgress(
           "alpha",
@@ -139,6 +143,9 @@ object TuiModuleTest extends TestSuite:
       assert(pendingPlain.contains("progress indeterminate"))
       assert(plain.contains("Execution [active]"))
       assert(plain.contains("activity"))
+      assert(plain.indexOf("alpha") < plain.indexOf("beta"))
+      assert(plain.contains("beta"))
+      assert(plain.contains("pending"))
       assert(plain.contains("current tool alpha"))
       assert(plain.contains("phase Downloading"))
       assert(plain.contains("elapsed 300ms"))
@@ -146,6 +153,78 @@ object TuiModuleTest extends TestSuite:
       assert(plain.contains("alpha: extracting selected archive paths"))
       assert(!plain.contains("q/Ctrl+C quit"))
       assert(!plain.contains("Plan ["))
+
+    test("execution state preserves seeded candidate order and focuses failed rows"):
+      val fixture = writeFixture()
+      val state   = ExecutionTuiState
+        .initial(
+          TuiRequest(TuiMode.Apply, fixture.options),
+          ExecutionTuiSettings
+            .fromPlanning(testSettings(height = 42))
+            .copy(candidateNames = Vector("alpha", "beta", "gamma"))
+        )
+        .onEvent(InstallerEvent.ToolStarted("beta", InstallerPhase.Downloading, elapsed(20)))
+        .onEvent(InstallerEvent.DownloadProgress(
+          "beta",
+          fixture.longUrl,
+          512L,
+          Some(1024L),
+          DownloadProgressStatus.Advanced,
+          elapsed(300)
+        ))
+        .onEvent(InstallerEvent.ToolResult(
+          "alpha",
+          ToolResultStatus.Completed,
+          Some(fixture.longInstallDir.toString),
+          None,
+          elapsed(400)
+        ))
+        .onEvent(InstallerEvent.ToolResult(
+          "gamma",
+          ToolResultStatus.Failed,
+          None,
+          Some("checksum mismatch: expected abc got def"),
+          elapsed(500)
+        ))
+        .handle(TuiInput.End)
+
+      val rendered = stripAnsi(ExecutionTuiRenderer.render(state.toModel).mkString("\n"))
+
+      assert(state.rows.map(_.name) == Vector("alpha", "beta", "gamma"))
+      assert(state.rows.map(_.status) ==
+        Vector(PlanningTuiStatus.Completed, PlanningTuiStatus.Active, PlanningTuiStatus.Failed))
+      assert(state.focusedFailure.exists(_.toolName.contains("gamma")))
+      assert(rendered.indexOf("alpha") < rendered.indexOf("beta"))
+      assert(rendered.indexOf("beta") < rendered.indexOf("gamma"))
+      assert(rendered.contains("beta"))
+      assert(rendered.contains("512 B/1.0 KiB"))
+      assert(rendered.contains("> [x] gamma"))
+
+    test("extreme narrow execution view keeps ordered candidates and lower progress"):
+      val fixture = writeFixture()
+      val state   = ExecutionTuiState
+        .initial(
+          TuiRequest(TuiMode.Apply, fixture.options),
+          ExecutionTuiSettings
+            .fromPlanning(testSettings(width = 30, height = 24))
+            .copy(candidateNames = Vector("alpha", "beta"))
+        )
+        .onEvent(InstallerEvent.ToolStarted("alpha", InstallerPhase.Downloading, elapsed(20)))
+        .onEvent(InstallerEvent.DownloadProgress(
+          "alpha",
+          fixture.longUrl,
+          512L,
+          Some(1024L),
+          DownloadProgressStatus.Advanced,
+          elapsed(300)
+        ))
+      val rendered = ExecutionTuiRenderer.render(state.toModel)
+      val plain    = stripAnsi(rendered.mkString("\n"))
+
+      assertRenderedWithin(rendered, width = 30)
+      assert(plain.indexOf("alpha active") < plain.indexOf("beta pending"))
+      assert(plain.contains("activity | current tool alp"))
+      assert(plain.contains("50%"))
 
     test("execution state accepts resize inputs and renders within narrow bounds"):
       val fixture = writeFixture(longValues = true)
@@ -1455,7 +1534,11 @@ private final class RecordingDryRunService(result: InstallerResult) extends Bina
   ): InstallerResult =
     applyOptions = applyOptions :+ options
     eventObserver.onEvent(InstallerEvent.ResolvingStarted(options.configPath, Duration.ZERO))
-    eventObserver.onEvent(InstallerEvent.PlanReady(1, options.statePath, Duration.ofMillis(1)))
+    eventObserver.onEvent(InstallerEvent.PlanReady(
+      options.selection.only,
+      options.statePath,
+      Duration.ofMillis(1)
+    ))
     eventObserver.onEvent(InstallerEvent.Summary(
       InstallerRunStatus.Succeeded,
       installed = 0,
@@ -1490,7 +1573,11 @@ private final class RecordingFailedApplyService(result: InstallerResult)
   ): InstallerResult =
     applyOptions = applyOptions :+ options
     eventObserver.onEvent(InstallerEvent.ResolvingStarted(options.configPath, Duration.ZERO))
-    eventObserver.onEvent(InstallerEvent.PlanReady(1, options.statePath, Duration.ofMillis(1)))
+    eventObserver.onEvent(InstallerEvent.PlanReady(
+      options.selection.only,
+      options.statePath,
+      Duration.ofMillis(1)
+    ))
     eventObserver.onEvent(InstallerEvent.ToolStarted(
       "beta",
       InstallerPhase.CreatingSymlinks,

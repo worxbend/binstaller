@@ -525,6 +525,7 @@ final case class ExecutionTuiSettings(
     hostSummary: String,
     spinnerFrame: Int,
     logs: Vector[String],
+    candidateNames: Vector[String] = Vector.empty,
     redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
 )
 
@@ -538,6 +539,7 @@ object ExecutionTuiSettings:
     hostSummary = settings.hostSummary,
     spinnerFrame = 0,
     logs = settings.logs,
+    candidateNames = Vector.empty,
     redactions = SensitiveValueRedactions.empty
   )
 
@@ -580,6 +582,7 @@ final case class ExecutionTuiModel(
     dryRunLines: Vector[String],
     summary: Option[String],
     spinnerFrame: Int,
+    focusedRowIndex: Int,
     keybar: String,
     modal: Option[TuiModal]
 )
@@ -594,6 +597,7 @@ final case class ExecutionTuiState(
     stateFilePath: Option[String],
     active: Option[ExecutionActiveTool],
     rows: Vector[ExecutionToolRow],
+    focusedRowIndex: Int,
     logs: Vector[String],
     dryRunLines: Vector[String],
     summary: Option[InstallerEvent.Summary],
@@ -627,14 +631,16 @@ final case class ExecutionTuiState(
       dryRunLines = dryRunLines,
       summary = summaryLine,
       spinnerFrame = spinnerFrame,
+      focusedRowIndex = focusedRowIndex,
       keybar = "Enter root cause | terminal restored after apply completes",
       modal = modal
     )
 
-  /** First failed row detail available for a root-cause modal. */
-  def firstFailure: Option[TuiFailure] = rows.collectFirst:
-    case row if row.status == PlanningTuiStatus.Failed => row.failure
-  .flatten
+  /** Failed row detail for the currently focused execution row. */
+  def focusedFailure: Option[TuiFailure] = rows
+    .lift(focusedRowIndex)
+    .filter(_.status == PlanningTuiStatus.Failed)
+    .flatMap(_.failure)
 
   /** Incorporate one renderer-agnostic core event into execution UI state. */
   def onEvent(event: InstallerEvent): ExecutionTuiState =
@@ -651,28 +657,49 @@ final case class ExecutionTuiState(
           )),
           elapsedTime = elapsed
         )
-      case InstallerEvent.PlanReady(toolCount, statePath, elapsed) => copy(
+      case InstallerEvent.PlanReady(toolNames, statePath, elapsed) =>
+        val nextRows = seedRows(toolNames)
+        copy(
           spinnerFrame = nextFrame,
           stateFilePath = statePath,
           active = Some(ExecutionActiveTool(
-            s"$toolCount tool${if toolCount == 1 then "" else "s"}",
+            s"${toolNames.size} tool${if toolNames.size == 1 then "" else "s"}",
             InstallerPhase.Planning,
             None,
             None,
             elapsed
           )),
-          logs = appendLog(s"plan ready: $toolCount tool${if toolCount == 1 then "" else "s"}"),
+          rows = nextRows,
+          focusedRowIndex = clampFocusedIndex(focusedRowIndex, nextRows),
+          logs = appendLog(
+            s"plan ready: ${toolNames.size} tool${if toolNames.size == 1 then "" else "s"}"
+          ),
           elapsedTime = elapsed
         )
-      case InstallerEvent.ToolStarted(toolName, phase, elapsed) => copy(
+      case InstallerEvent.ToolStarted(toolName, phase, elapsed) =>
+        val nextRows = upsertRow(activeRow(toolName, phase, None, None, elapsed))
+        copy(
           spinnerFrame = nextFrame,
           active = Some(ExecutionActiveTool(toolName, phase, None, None, elapsed)),
+          rows = nextRows,
+          focusedRowIndex = focusIndexFor(toolName, nextRows),
           logs = appendLog(s"$toolName: started ${phaseText(phase)}"),
           elapsedTime = elapsed
         )
-      case InstallerEvent.ToolPhaseChanged(toolName, phase, elapsed) => copy(
+      case InstallerEvent.ToolPhaseChanged(toolName, phase, elapsed) =>
+        val current  = currentActive(toolName, phase, elapsed)
+        val nextRows = upsertRow(activeRow(
+          toolName,
+          phase,
+          current.downloadedBytes,
+          current.totalBytes,
+          elapsed
+        ))
+        copy(
           spinnerFrame = nextFrame,
-          active = Some(currentActive(toolName, phase, elapsed)),
+          active = Some(current),
+          rows = nextRows,
+          focusedRowIndex = focusIndexFor(toolName, nextRows),
           logs = appendLog(s"$toolName: ${phaseText(phase)}"),
           elapsedTime = elapsed
         )
@@ -681,6 +708,13 @@ final case class ExecutionTuiState(
           case DownloadProgressStatus.Started  => "download started"
           case DownloadProgressStatus.Advanced => "download advanced"
           case DownloadProgressStatus.Finished => "download finished"
+        val nextRows = upsertRow(activeRow(
+          toolName,
+          InstallerPhase.Downloading,
+          Some(downloaded),
+          total,
+          elapsed
+        ))
         copy(
           spinnerFrame = nextFrame,
           active = Some(ExecutionActiveTool(
@@ -690,6 +724,8 @@ final case class ExecutionTuiState(
             total,
             elapsed
           )),
+          rows = nextRows,
+          focusedRowIndex = focusIndexFor(toolName, nextRows),
           logs = appendLog(
             s"$toolName: $statusText ${ExecutionTuiRenderer.byteText(downloaded, total)}"
           ),
@@ -721,18 +757,29 @@ final case class ExecutionTuiState(
             redactions
           )
         )
+        val nextRows =
+          upsertRow(ExecutionToolRow(toolName, rowStatus, rowSummary, elapsed, failure))
         copy(
           spinnerFrame = nextFrame,
           active = None,
-          rows = rows :+ ExecutionToolRow(toolName, rowStatus, rowSummary, elapsed, failure),
+          rows = nextRows,
+          focusedRowIndex = focusIndexFor(toolName, nextRows),
           logs = appendLog(s"${resultPrefix(rowStatus)} $toolName: $rowSummary"),
           elapsedTime = elapsed
         )
-      case InstallerEvent.ToolSkipped(toolName, reason, statePath, elapsed) => copy(
+      case InstallerEvent.ToolSkipped(toolName, reason, statePath, elapsed) =>
+        val nextRows = upsertRow(ExecutionToolRow(
+          toolName,
+          PlanningTuiStatus.Skipped,
+          reason,
+          elapsed
+        ))
+        copy(
           spinnerFrame = nextFrame,
           stateFilePath = statePath.orElse(stateFilePath),
           active = None,
-          rows = rows :+ ExecutionToolRow(toolName, PlanningTuiStatus.Skipped, reason, elapsed),
+          rows = nextRows,
+          focusedRowIndex = focusIndexFor(toolName, nextRows),
           logs = appendLog(s"$toolName: skipped - $reason"),
           elapsedTime = elapsed
         )
@@ -763,8 +810,10 @@ final case class ExecutionTuiState(
         redactions
       )
     )
+    val nextRows = enrichFailedRows(result)
     copy(
-      rows = enrichFailedRows(result),
+      rows = nextRows,
+      focusedRowIndex = clampFocusedIndex(focusedRowIndex, nextRows),
       dryRunLines = RenderSafety.displayLines(dryRunResultLines, redactions),
       logs =
         (logs ++ RenderSafety.displayLines(failureLogs, redactions) ++
@@ -775,7 +824,13 @@ final case class ExecutionTuiState(
   /** Handle terminal-local inputs relevant to execution rendering. */
   def handle(input: TuiInput): ExecutionTuiState = input match
     case TuiInput.Resize(value) => copy(viewport = value)
-    case _                      => this
+    case TuiInput.Up            => moveFocus(-1)
+    case TuiInput.Down          => moveFocus(1)
+    case TuiInput.PageUp   => moveFocus(-ExecutionTuiLayout.forViewport(viewport).rowBodyHeight)
+    case TuiInput.PageDown => moveFocus(ExecutionTuiLayout.forViewport(viewport).rowBodyHeight)
+    case TuiInput.Home     => copy(focusedRowIndex = 0)
+    case TuiInput.End      => copy(focusedRowIndex = (rows.size - 1).max(0))
+    case _                 => this
 
   private def currentActive(
       toolName: String,
@@ -786,6 +841,52 @@ final case class ExecutionTuiState(
     case None        => ExecutionActiveTool(toolName, phase, None, None, elapsed)
 
   private def appendLog(line: String): Vector[String] = (logs :+ line).takeRight(80)
+
+  private def seedRows(toolNames: Vector[String]): Vector[ExecutionToolRow] =
+    if toolNames.isEmpty then rows
+    else
+      val existing = rows.map(row => row.name -> row).toMap
+      toolNames.map(name =>
+        existing.getOrElse(
+          name,
+          ExecutionToolRow(
+            name,
+            PlanningTuiStatus.Inactive,
+            "pending",
+            Duration.ZERO
+          )
+        )
+      )
+
+  private def upsertRow(row: ExecutionToolRow): Vector[ExecutionToolRow] =
+    rows.indexWhere(_.name == row.name) match
+      case -1    => rows :+ row
+      case index => rows.updated(index, row)
+
+  private def activeRow(
+      toolName: String,
+      phase: InstallerPhase,
+      downloadedBytes: Option[Long],
+      totalBytes: Option[Long],
+      elapsed: Duration
+  ): ExecutionToolRow = ExecutionToolRow(
+    toolName,
+    PlanningTuiStatus.Active,
+    s"${phaseText(phase)} ${ExecutionTuiRenderer.progressText(downloadedBytes, totalBytes)}",
+    elapsed
+  )
+
+  private def moveFocus(delta: Int): ExecutionTuiState = copy(focusedRowIndex =
+    (focusedRowIndex + delta).max(0).min((rows.size - 1).max(0))
+  )
+
+  private def focusIndexFor(toolName: String, nextRows: Vector[ExecutionToolRow]): Int =
+    nextRows.indexWhere(_.name == toolName) match
+      case -1    => focusedRowIndex
+      case index => index
+
+  private def clampFocusedIndex(index: Int, nextRows: Vector[ExecutionToolRow]): Int =
+    index.max(0).min((nextRows.size - 1).max(0))
 
   private def resultPrefix(status: PlanningTuiStatus): String = status match
     case PlanningTuiStatus.Completed => "ok"
@@ -830,6 +931,9 @@ object ExecutionTuiState:
 
   /** Initial execution state before any core events arrive. */
   def initial(request: TuiRequest, settings: ExecutionTuiSettings): ExecutionTuiState =
+    val candidateRows = settings.candidateNames.map(name =>
+      ExecutionToolRow(name, PlanningTuiStatus.Inactive, "pending", Duration.ZERO)
+    )
     ExecutionTuiState(
       request = request,
       viewport = settings.viewport,
@@ -844,7 +948,8 @@ object ExecutionTuiState:
         None,
         Duration.ZERO
       )),
-      rows = Vector.empty,
+      rows = candidateRows,
+      focusedRowIndex = 0,
       logs = settings.logs,
       dryRunLines = Vector.empty,
       summary = None,
@@ -970,7 +1075,14 @@ object ExecutionTuiRenderer:
     val width  = model.viewport.width.max(1)
     val layout = ExecutionTuiLayout.forViewport(model.viewport)
     header(model, width) ++
-      executionTable(model.active, model.rows, model.spinnerFrame, layout, width) ++
+      executionTable(
+        model.active,
+        model.rows,
+        model.spinnerFrame,
+        model.focusedRowIndex,
+        layout,
+        width
+      ) ++
       infoPanel(model, layout, width) ++
       footer(model, width)
 
@@ -1007,25 +1119,78 @@ object ExecutionTuiRenderer:
       active: Option[ExecutionActiveTool],
       rows: Vector[ExecutionToolRow],
       spinnerFrame: Int,
+      focusedRowIndex: Int,
       layout: ExecutionTuiLayout,
       width: Int
   ): Vector[String] =
-    val tableWidth    = contentWidth(width)
-    val columns       = executionColumns(tableWidth)
-    val headerColumns = s"${cell("#", columns.checkbox)} ${cell("name", columns.name)} " +
-      s"${cell("version", columns.version)} ${cell("checksum", columns.checksum)} " +
-      cell("status", columns.status)
-    val allRows = rows.map(completedTableRow) ++
-      active.toVector.map(activeTableRow(_, spinnerFrame))
-    val visible = allRows.takeRight(layout.rowBodyHeight)
+    val tableWidth = contentWidth(width)
+    if width < 44 then executionCandidateList(active, rows, focusedRowIndex, layout, tableWidth)
+    else
+      val columns       = executionColumns(tableWidth)
+      val headerColumns = s"${cell("#", columns.checkbox)} ${cell("name", columns.name)} " +
+        s"${cell("version", columns.version)} ${cell("checksum", columns.checksum)} " +
+        cell("status", columns.status)
+      val allRows      = tableRows(active, rows, spinnerFrame)
+      val firstVisible = windowStart(
+        focusedRowIndex.min((allRows.size - 1).max(0)),
+        allRows.size,
+        layout.rowBodyHeight
+      )
+      val visible = allRows.slice(firstVisible, firstVisible + layout.rowBodyHeight)
+      val body    =
+        if visible.isEmpty then Vector(panelLine("waiting for selected entries...", tableWidth))
+        else
+          visible.zipWithIndex.map: (row, offset) =>
+            executionRowLine(row, columns, tableWidth, firstVisible + offset == focusedRowIndex)
+      val title = active match
+        case Some(_) => "Apply progress / Execution [active]"
+        case None    => "Apply progress"
+      Vector(panelTop(title, tableWidth), panelLine(headerColumns, tableWidth)) ++ body ++
+        Vector(panelBottom(tableWidth), "")
+
+  private def executionCandidateList(
+      active: Option[ExecutionActiveTool],
+      rows: Vector[ExecutionToolRow],
+      focusedRowIndex: Int,
+      layout: ExecutionTuiLayout,
+      width: Int
+  ): Vector[String] =
+    val allRows      = tableRows(active, rows, spinnerFrame = 0)
+    val firstVisible = windowStart(
+      focusedRowIndex.min((allRows.size - 1).max(0)),
+      allRows.size,
+      layout.rowBodyHeight
+    )
+    val visible = allRows.slice(firstVisible, firstVisible + layout.rowBodyHeight)
     val body    =
-      if visible.isEmpty then Vector(panelLine("waiting for selected entries...", tableWidth))
-      else visible.map(row => executionRowLine(row, columns, tableWidth))
-    val title = active match
-      case Some(_) => "Apply progress / Execution [active]"
-      case None    => "Apply progress"
-    Vector(panelTop(title, tableWidth), panelLine(headerColumns, tableWidth)) ++ body ++
-      Vector(panelBottom(tableWidth), "")
+      if visible.isEmpty then Vector(panelLine("waiting...", width))
+      else
+        visible.zipWithIndex.map: (row, offset) =>
+          val marker = if firstVisible + offset == focusedRowIndex then ">" else " "
+          val state  = row.status match
+            case PlanningTuiStatus.Active    => "active"
+            case PlanningTuiStatus.Completed => "done"
+            case PlanningTuiStatus.Failed    => "failed"
+            case PlanningTuiStatus.Skipped   => "skipped"
+            case _                           => "pending"
+          PlanningTuiStatus.style(row.status, panelLine(s"$marker ${row.name} $state", width))
+    Vector(panelTop("Execution", width)) ++ body ++ Vector(panelBottom(width), "")
+
+  private def tableRows(
+      active: Option[ExecutionActiveTool],
+      rows: Vector[ExecutionToolRow],
+      spinnerFrame: Int
+  ): Vector[ExecutionTableRow] =
+    if rows.isEmpty then active.toVector.map(activeTableRow(_, spinnerFrame))
+    else rows.map(row => executionTableRow(row, active, spinnerFrame))
+
+  private def executionTableRow(
+      row: ExecutionToolRow,
+      active: Option[ExecutionActiveTool],
+      spinnerFrame: Int
+  ): ExecutionTableRow = active.filter(_.name == row.name) match
+    case Some(value) => activeTableRow(value, spinnerFrame)
+    case None        => completedTableRow(row)
 
   private final case class ExecutionTableRow(
       name: String,
@@ -1052,10 +1217,12 @@ object ExecutionTuiRenderer:
   private def executionRowLine(
       row: ExecutionTableRow,
       columns: TableColumns,
-      width: Int
+      width: Int,
+      focused: Boolean
   ): String =
+    val marker   = if focused then ">" else " "
     val checkbox = "[x]"
-    val plain    = s"  ${cell(checkbox, columns.checkbox)} " +
+    val plain    = s"$marker ${cell(checkbox, columns.checkbox)} " +
       s"${cell(row.name, columns.name)} ${cell("-", columns.version)} " +
       s"${cell("-", columns.checksum)} ${cell(row.statusText, columns.status)}"
     PlanningTuiStatus.style(row.status, panelLine(plain, width))
@@ -1109,7 +1276,7 @@ object ExecutionTuiRenderer:
     val operationLimit = (height - recentLogs.size).max(1)
     model.dryRunLines.take(operationLimit) ++ recentLogs
 
-  private def progressText(downloadedBytes: Option[Long], totalBytes: Option[Long]): String =
+  def progressText(downloadedBytes: Option[Long], totalBytes: Option[Long]): String =
     downloadedBytes match
       case Some(downloaded) => totalBytes.filter(_ > 0L) match
           case Some(total) =>
@@ -1137,6 +1304,12 @@ object ExecutionTuiRenderer:
     else if bytes >= mib then f"${bytes / mib}%.1f MiB"
     else if bytes >= kib then f"${bytes / kib}%.1f KiB"
     else s"$bytes B"
+
+  private def windowStart(selectedIndex: Int, total: Int, height: Int): Int =
+    if total <= height then 0
+    else
+      val half = height / 2
+      (selectedIndex - half).max(0).min(total - height)
 
   private def contentWidth(width: Int): Int = width.min(132).max(20)
 

@@ -31,7 +31,13 @@ enum DownloadProgressStatus:
 /** Renderer-agnostic event contract shared by CLI progress and TUI execution views. */
 enum InstallerEvent:
   case ResolvingStarted(configPath: String, elapsedTime: Duration)
-  case PlanReady(toolCount: Int, stateFilePath: Option[String], elapsedTime: Duration)
+
+  case PlanReady(
+      toolNames: Vector[String],
+      stateFilePath: Option[String],
+      elapsedTime: Duration
+  )
+
   case ToolStarted(toolName: String, phase: InstallerPhase, elapsedTime: Duration)
   case ToolPhaseChanged(toolName: String, phase: InstallerPhase, elapsedTime: Duration)
 

@@ -440,3 +440,17 @@ baseline and close the remaining gaps in this order:
   `test -t 0` exits 1 with `stdin_is_tty=false`, and
   `command -v native-image` exits 1 while `java -version` reports OpenJDK
   25.0.3.
+- 2026-06-30: Implementation iteration 44 completed T002. Execution rendering
+  now seeds ordered selected candidate rows from `PlanReady`/TUI-selected
+  entries, updates active progress in the candidate row instead of appending a
+  separate active row, preserves completed/failed/skipped/pending row order,
+  and supports execution-row focus so `Enter` opens the focused failed row's
+  root-cause modal. Extreme narrow execution rendering falls back to an ordered
+  candidate list with the active progress shown in the lower info bar.
+- T002 validation passed: `./mill tui.test`, `./mill core.test`,
+  `./mill __.compile`, `./mill mill.scalalib.scalafmt/checkFormatAll`,
+  `./mill app.run tui --config config.example.yaml`,
+  `jq empty .agent-loop/tasks.json`, and `git diff --check`. The first
+  scalafmt check found formatting drift after implementation; running
+  `./mill mill.scalalib.scalafmt/reformatAll` fixed it before the final
+  passing checks.
