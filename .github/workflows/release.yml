@@ -184,7 +184,7 @@ jobs:
 
           echo "::group::🧰 Example config"
           cp config.example.yaml "${example}"
-          shasum -a 256 "${example}" > "${example}.sha256"
+          (cd release-artifacts && shasum -a 256 "config.example.${version}.yaml" > "config.example.${version}.yaml.sha256")
           echo "✅ Example config ready: ${example}"
           echo "🔐 Checksum ready: ${example}.sha256"
           echo "::endgroup::"
