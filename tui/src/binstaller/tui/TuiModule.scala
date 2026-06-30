@@ -725,7 +725,7 @@ final case class ExecutionTuiState(
           spinnerFrame = nextFrame,
           active = None,
           rows = rows :+ ExecutionToolRow(toolName, rowStatus, rowSummary, elapsed, failure),
-          logs = appendLog(s"$toolName: $rowSummary"),
+          logs = appendLog(s"${resultPrefix(rowStatus)} $toolName: $rowSummary"),
           elapsedTime = elapsed
         )
       case InstallerEvent.ToolSkipped(toolName, reason, statePath, elapsed) => copy(
@@ -786,6 +786,12 @@ final case class ExecutionTuiState(
     case None        => ExecutionActiveTool(toolName, phase, None, None, elapsed)
 
   private def appendLog(line: String): Vector[String] = (logs :+ line).takeRight(80)
+
+  private def resultPrefix(status: PlanningTuiStatus): String = status match
+    case PlanningTuiStatus.Completed => "ok"
+    case PlanningTuiStatus.Failed    => "fail"
+    case PlanningTuiStatus.Skipped   => "skip"
+    case _                           => status.label
 
   private def phaseText(phase: InstallerPhase): String = phase.toString
 
@@ -964,11 +970,8 @@ object ExecutionTuiRenderer:
     val width  = model.viewport.width.max(1)
     val layout = ExecutionTuiLayout.forViewport(model.viewport)
     header(model, width) ++
-      active(model.active, model.spinnerFrame, width) ++
-      resultRows(model.rows, layout, width) ++
-      dryRun(model.dryRunLines, width) ++
-      logs(model.logs, layout, width) ++
-      TuiModalRenderer.render(model.modal, width) ++
+      executionTable(model.active, model.rows, model.spinnerFrame, layout, width) ++
+      infoPanel(model, layout, width) ++
       footer(model, width)
 
   /** Format elapsed time for compact terminal display. */
@@ -988,87 +991,123 @@ object ExecutionTuiRenderer:
       PlanningTuiStatus.style(
         PlanningTuiStatus.Active,
         fit(
-          s"${header.appName} ${header.appVersion} | mode ${header.mode} execution | " +
-            s"action [${header.mode}] | elapsed ${header.elapsedText}",
+          s"🚀 ${header.appName} ${header.appVersion} | ${header.mode} | elapsed ${header.elapsedText}",
           width
         )
       ),
       fit(s"config ${header.configPath}", width),
-      fit(s"state ${header.stateFilePath.getOrElse("not configured")}", width),
-      fit(s"host ${header.hostSummary}", width),
-      separator(width)
+      fit(
+        s"state ${header.stateFilePath.getOrElse("not configured")} | host ${header.hostSummary}",
+        width
+      ),
+      ""
     )
 
-  private def active(
+  private def executionTable(
       active: Option[ExecutionActiveTool],
-      spinnerFrame: Int,
-      width: Int
-  ): Vector[String] =
-    val lines = active match
-      case Some(value) =>
-        val progress = progressText(value.downloadedBytes, value.totalBytes)
-        Vector(
-          paneTitle("Execution", active = true, width),
-          fit(
-            s"activity ${spinner(spinnerFrame)} | current tool ${value.name} | " +
-              s"phase ${value.phase} | elapsed ${formatDuration(value.elapsedTime)}",
-            width
-          ),
-          fit(progress, width)
-        )
-      case None => Vector(
-          paneTitle("Execution", active = false, width),
-          fit("no active tool", width)
-        )
-    lines :+ separator(width)
-
-  private def resultRows(
       rows: Vector[ExecutionToolRow],
+      spinnerFrame: Int,
       layout: ExecutionTuiLayout,
       width: Int
   ): Vector[String] =
-    val visible = rows.takeRight(layout.rowBodyHeight)
+    val tableWidth    = contentWidth(width)
+    val columns       = executionColumns(tableWidth)
+    val headerColumns = s"${cell("#", columns.checkbox)} ${cell("name", columns.name)} " +
+      s"${cell("version", columns.version)} ${cell("checksum", columns.checksum)} " +
+      cell("status", columns.status)
+    val allRows = rows.map(completedTableRow) ++
+      active.toVector.map(activeTableRow(_, spinnerFrame))
+    val visible = allRows.takeRight(layout.rowBodyHeight)
     val body    =
-      if visible.isEmpty then Vector(fit("no completed tools yet", width))
-      else visible.map(rowLine(_, width))
-    Vector(paneTitle("Completed / Failed", active = false, width)) ++ body ++
-      Vector(separator(width))
+      if visible.isEmpty then Vector(panelLine("waiting for selected entries...", tableWidth))
+      else visible.map(row => executionRowLine(row, columns, tableWidth))
+    val title = active match
+      case Some(_) => "Apply progress / Execution [active]"
+      case None    => "Apply progress"
+    Vector(panelTop(title, tableWidth), panelLine(headerColumns, tableWidth)) ++ body ++
+      Vector(panelBottom(tableWidth), "")
 
-  private def rowLine(row: ExecutionToolRow, width: Int): String =
-    val prefix = row.status match
-      case PlanningTuiStatus.Completed => "ok"
-      case PlanningTuiStatus.Failed    => "fail"
-      case PlanningTuiStatus.Skipped   => "skip"
-      case _                           => row.status.label
-    val plain = fit(
-      s"$prefix ${cell(row.name, 18)} ${cell(formatDuration(row.elapsedTime), 8)} ${row.summary}",
-      width
+  private final case class ExecutionTableRow(
+      name: String,
+      status: PlanningTuiStatus,
+      statusText: String
+  )
+
+  private def activeTableRow(active: ExecutionActiveTool, spinnerFrame: Int): ExecutionTableRow =
+    ExecutionTableRow(
+      active.name,
+      PlanningTuiStatus.Active,
+      s"activity | ⏳ ${spinner(spinnerFrame)} ${active.phase} " +
+        progressText(active.downloadedBytes, active.totalBytes)
     )
-    PlanningTuiStatus.style(row.status, plain)
 
-  private def dryRun(
-      lines: Vector[String],
+  private def completedTableRow(row: ExecutionToolRow): ExecutionTableRow =
+    val status = row.status match
+      case PlanningTuiStatus.Completed => s"✅ ok installed ${formatDuration(row.elapsedTime)}"
+      case PlanningTuiStatus.Failed    => s"❌ fail ${formatDuration(row.elapsedTime)}"
+      case PlanningTuiStatus.Skipped   => s"⏭ skipped"
+      case _                           => row.summary
+    ExecutionTableRow(row.name, row.status, status)
+
+  private def executionRowLine(
+      row: ExecutionTableRow,
+      columns: TableColumns,
+      width: Int
+  ): String =
+    val checkbox = "[x]"
+    val plain    = s"  ${cell(checkbox, columns.checkbox)} " +
+      s"${cell(row.name, columns.name)} ${cell("-", columns.version)} " +
+      s"${cell("-", columns.checksum)} ${cell(row.statusText, columns.status)}"
+    PlanningTuiStatus.style(row.status, panelLine(plain, width))
+
+  private def infoPanel(
+      model: ExecutionTuiModel,
+      layout: ExecutionTuiLayout,
       width: Int
   ): Vector[String] =
-    if lines.isEmpty then Vector.empty
-    else
-      val body = lines.map(line => fit(line, width))
-      Vector(paneTitle("Dry-run operations", active = false, width)) ++ body ++
-        Vector(separator(width))
-
-  private def logs(lines: Vector[String], layout: ExecutionTuiLayout, width: Int): Vector[String] =
-    val visible = lines.takeRight(layout.logBodyHeight)
-    val body    =
-      if visible.isEmpty then Vector(fit("no recent log lines", width))
-      else visible.map(line => fit(line, width))
-    Vector(paneTitle("Recent Logs", active = false, width)) ++ body ++ Vector(separator(width))
+    val panelWidth = contentWidth(width)
+    val title      =
+      if model.modal.nonEmpty then "🚨 error output"
+      else if model.dryRunLines.nonEmpty then "ℹ️ Dry-run operations / Recent Logs"
+      else "ℹ️ info bar"
+    val modalLines = model.modal.map(value =>
+      TuiModalRenderer.render(Some(value), panelWidth - 2)
+    ).getOrElse(Vector.empty)
+    val rawLines =
+      if modalLines.nonEmpty then modalLines
+      else if model.dryRunLines.nonEmpty then dryRunInfoLines(model, layout.infoBodyHeight)
+      else executionInfoLines(model).takeRight(layout.infoBodyHeight)
+    val lines = if rawLines.isEmpty then Vector("No output yet.") else rawLines
+    Vector(panelTop(title, panelWidth)) ++
+      pad(lines, layout.infoBodyHeight).map(line => panelLine(line, panelWidth)) ++
+      Vector(panelBottom(panelWidth), "")
 
   private def footer(model: ExecutionTuiModel, width: Int): Vector[String] =
     val status = model.summary.getOrElse("running")
     Vector(
       fit(status, width),
-      PlanningTuiStatus.style(PlanningTuiStatus.Active, fit(model.keybar, width))
+      PlanningTuiStatus.style(
+        PlanningTuiStatus.Active,
+        fit(
+          "p plan | d dry-run | r apply | tab focus | l logs | space select | a toggle all | q quit",
+          width
+        )
+      )
     )
+
+  private def executionInfoLines(model: ExecutionTuiModel): Vector[String] =
+    model.active.toVector.flatMap: active =>
+      Vector(
+        s"activity | current tool ${active.name}",
+        s"phase ${active.phase} | elapsed ${formatDuration(active.elapsedTime)}",
+        progressText(active.downloadedBytes, active.totalBytes)
+      )
+    ++ model.logs
+
+  private def dryRunInfoLines(model: ExecutionTuiModel, height: Int): Vector[String] =
+    val recentLogs     = model.logs.takeRight(3)
+    val operationLimit = (height - recentLogs.size).max(1)
+    model.dryRunLines.take(operationLimit) ++ recentLogs
 
   private def progressText(downloadedBytes: Option[Long], totalBytes: Option[Long]): String =
     downloadedBytes match
@@ -1079,21 +1118,16 @@ object ExecutionTuiRenderer:
       case None => s"progress indeterminate ${indeterminateBar} bytes pending"
 
   private def progressBar(downloadedBytes: Long, totalBytes: Long): String =
-    val width  = 28
+    val width  = 18
     val ratio  = (downloadedBytes.toDouble / totalBytes.toDouble).max(0.0).min(1.0)
     val filled = (ratio * width).round.toInt
     val empty  = width - filled
     val pct    = (ratio * 100.0).round.toInt
-    s"[${"█" * filled}${"░" * empty}] $pct%"
+    s"${"█" * filled}${"░" * empty} $pct%"
 
-  private def indeterminateBar: String = "[░░░░░░░░░░░░░░░░░░░░░░░░░░░░]"
+  private def indeterminateBar: String = "░░░░░░░░░░░░░░░░░░"
 
   private def spinner(frame: Int): String = Vector("|", "/", "-", "\\")(frame.abs % 4)
-
-  private def paneTitle(title: String, active: Boolean, width: Int): String =
-    val label = if active then s"$title [active]" else s"$title [idle]"
-    val line  = fit(label, width)
-    if active then PlanningTuiStatus.style(PlanningTuiStatus.Active, line) else line
 
   private def formatBytes(bytes: Long): String =
     val kib = 1024.0
@@ -1104,7 +1138,40 @@ object ExecutionTuiRenderer:
     else if bytes >= kib then f"${bytes / kib}%.1f KiB"
     else s"$bytes B"
 
-  private def separator(width: Int): String = "-" * width
+  private def contentWidth(width: Int): Int = width.min(132).max(20)
+
+  private final case class TableColumns(
+      checkbox: Int,
+      name: Int,
+      version: Int,
+      checksum: Int,
+      status: Int
+  )
+
+  private def executionColumns(width: Int): TableColumns =
+    val content  = (width - 8).max(20)
+    val checkbox = 3
+    val name     = if width < 70 then 14 else 18
+    val version  = if width < 70 then 8 else 14
+    val checksum = if width < 70 then 10 else 14
+    val status   = (content - checkbox - name - version - checksum).max(18)
+    TableColumns(checkbox, name, version, checksum, status)
+
+  private def panelTop(title: String, width: Int): String =
+    val label     = s" $title "
+    val remaining = (width - label.length - 2).max(0)
+    val left      = remaining / 2
+    val right     = remaining - left
+    fit(s"╭${"─" * left}$label${"─" * right}╮", width)
+
+  private def panelBottom(width: Int): String = fit(s"╰${"─" * (width - 2).max(0)}╯", width)
+
+  private def panelLine(value: String, width: Int): String =
+    if width <= 2 then fit(value, width)
+    else s"│${fit(value, width - 2)}│"
+
+  private def pad(lines: Vector[String], height: Int): Vector[String] = lines.take(height) ++
+    Vector.fill((height - lines.size).max(0))("")
 
   private def cell(value: String, width: Int): String =
     val clipped = truncate(RenderSafety.terminalLine(value), width)
@@ -1122,7 +1189,8 @@ object ExecutionTuiRenderer:
 final case class ExecutionTuiLayout(
     rowBodyHeight: Int,
     dryRunBodyHeight: Int,
-    logBodyHeight: Int
+    logBodyHeight: Int,
+    infoBodyHeight: Int
 )
 
 /** Execution layout constructors. */
@@ -1130,11 +1198,10 @@ object ExecutionTuiLayout:
 
   /** Calculate execution pane heights from the current viewport. */
   def forViewport(viewport: TuiViewport): ExecutionTuiLayout =
-    val usable = (viewport.height.max(18) - 15).max(6)
-    val rows   = usable.min(6).max(2)
-    val dryRun = (((usable - rows) * 2) / 3).max(0).min(30)
-    val logs   = (usable - rows - dryRun).max(3)
-    ExecutionTuiLayout(rows, dryRun, logs)
+    val usable = (viewport.height.max(18) - 10).max(6)
+    val info   = usable.min(16).max(5)
+    val rows   = (usable - info).max(4)
+    ExecutionTuiLayout(rows, info, info, info)
 
 /** Focusable panes in the planning TUI. */
 enum TuiPane(val label: String):
@@ -1219,7 +1286,8 @@ object PlanningTuiState:
 final case class PlanningTuiLayout(
     tableBodyHeight: Int,
     detailBodyHeight: Int,
-    logBodyHeight: Int
+    logBodyHeight: Int,
+    infoBodyHeight: Int
 )
 
 /** Planning layout constructors. */
@@ -1227,11 +1295,10 @@ object PlanningTuiLayout:
 
   /** Calculate planning pane heights from the current viewport. */
   def forViewport(viewport: TuiViewport): PlanningTuiLayout =
-    val usable = (viewport.height.max(18) - 14).max(4)
-    val table  = usable.min(6).max(3)
-    val detail = (((usable - table) * 2) / 5).min(7).max(3)
-    val logs   = (usable - table - detail).max(3)
-    PlanningTuiLayout(table, detail, logs)
+    val usable = (viewport.height.max(18) - 10).max(6)
+    val info   = usable.min(16).max(5)
+    val table  = (usable - info).max(4)
+    PlanningTuiLayout(table, info, info, info)
 
 /** Interactive planning TUI session runner. */
 object PlanningTuiSession:
@@ -1501,15 +1568,7 @@ object PlanningTuiRenderer:
     val layout = PlanningTuiLayout.forViewport(model.viewport)
     header(model, width) ++
       table(model.rows, layout, width, model.focusedPane == TuiPane.Plan) ++
-      detail(
-        model.detail,
-        model.detailScroll,
-        layout,
-        width,
-        model.focusedPane == TuiPane.Details
-      ) ++
-      logs(model.logs, model.logScroll, layout, width, model.focusedPane == TuiPane.Logs) ++
-      modal(model.modal, width) ++
+      infoPanel(model, layout, width) ++
       footer(model, width)
 
   private def header(model: PlanningTuiModel, width: Int): Vector[String] =
@@ -1518,8 +1577,8 @@ object PlanningTuiRenderer:
       PlanningTuiStatus.style(
         PlanningTuiStatus.Active,
         fit(
-          s"${header.appName} ${header.appVersion} | mode ${header.mode} | " +
-            s"action [${header.mode}] | ${header.selectionText}",
+          s"📦 ${header.appName} ${header.appVersion} | mode ${header.mode} | " +
+            s"action [${header.mode}] | ${header.manifestName} | ${header.selectionText}",
           width
         )
       ),
@@ -1534,7 +1593,7 @@ object PlanningTuiRenderer:
         s"host ${header.hostSummary} | mode chip ${header.mode} | filter ${header.filterText}",
         width
       ),
-      separator(width)
+      ""
     )
 
   private def table(
@@ -1543,118 +1602,130 @@ object PlanningTuiRenderer:
       width: Int,
       focused: Boolean
   ): Vector[String] =
-    val header = s"${cell("#", 4)} ${cell("sel", 3)} ${cell("status", 10)} ${cell("name", 20)} " +
-      s"${cell("kind", 12)} ${cell("version", 18)} ${cell("install dir", 26)} " +
-      s"${cell("checksum", 10)} risk"
+    val tableWidth    = contentWidth(width)
+    val columns       = planningColumns(tableWidth)
+    val headerColumns = s"${cell("#", columns.checkbox)} ${cell("name", columns.name)} " +
+      s"${cell("version", columns.version)} ${cell("checksum", columns.checksum)} " +
+      cell("status", columns.status)
     val selectedIndex = rows.indexWhere(_.selected).max(0)
     val firstVisible  = windowStart(selectedIndex, rows.size, layout.tableBodyHeight)
     val visibleRows   = rows.slice(firstVisible, firstVisible + layout.tableBodyHeight)
     val body          =
-      if rows.isEmpty then Vector(fit("no plan entries match the active filter", width))
-      else visibleRows.map(rowLine(_, width))
-    Vector(paneTitle("Plan", focused, None, width), fit(header, width)) ++ body ++
-      Vector(separator(width))
+      if rows.isEmpty then Vector(panelLine("no plan entries match the active filter", tableWidth))
+      else visibleRows.map(rowLine(_, columns, tableWidth))
+    val title = if focused then "Plan [focus] table" else "Plan table"
+    Vector(panelTop(title, tableWidth), panelLine(headerColumns, tableWidth)) ++ body ++
+      Vector(panelBottom(tableWidth), "")
 
-  private def rowLine(row: PlanningTuiRow, width: Int): String =
+  private def rowLine(row: PlanningTuiRow, columns: TableColumns, width: Int): String =
     val marker   = if row.selected then ">" else " "
     val checkbox = if row.checked then "[x]" else "[ ]"
-    val risks    = if row.riskMarkers.isEmpty then "[ok]" else row.riskMarkers.map(badge).mkString
-    val plain    = s"$marker ${cell(row.index.toString, 3)} $checkbox " +
-      s"${cell(row.status.label, 10)} ${cell(row.name, 20)} ${cell(row.kind, 12)} " +
-      s"${cell(row.version, 18)} ${cell(row.installDir, 26)} " +
-      s"${cell(row.checksumState, 10)} ${truncate(risks, 20)}"
-    PlanningTuiStatus.style(row.status, fit(plain, width))
+    val status   = planningStatusText(row)
+    val plain    = s"$marker ${cell(checkbox, columns.checkbox)} " +
+      s"${cell(row.name, columns.name)} ${cell(row.version, columns.version)} " +
+      s"${cell(row.checksumState, columns.checksum)} ${cell(status, columns.status)}"
+    PlanningTuiStatus.style(row.status, panelLine(plain, width))
 
-  private def badge(value: String): String = s"[$value]"
+  private def planningStatusText(row: PlanningTuiRow): String =
+    if row.checked then "✅ selected"
+    else if row.riskMarkers.contains("no-checksum") then "⚠️ no checksum"
+    else "○ not selected"
 
-  private def detail(
-      detail: Option[PlanningTuiDetail],
-      offset: Int,
+  private def infoPanel(
+      model: PlanningTuiModel,
       layout: PlanningTuiLayout,
-      width: Int,
-      focused: Boolean
+      width: Int
   ): Vector[String] =
-    val title = detail.map(value => s"Details: ${value.name}").getOrElse("Details")
-    val lines = detail.map(_.lines).getOrElse(Vector("no selected entry"))
-    Vector(paneTitle(
-      title,
-      focused,
-      scrollLabel(lines.size, offset, layout.detailBodyHeight),
-      width
-    )) ++
-      scrollBody(lines, offset, layout.detailBodyHeight, width) ++
-      Vector(separator(width))
+    val panelWidth = contentWidth(width)
+    val title      = model.modal match
+      case Some(TuiModal.Help)                                   => "ℹ️ Help"
+      case Some(TuiModal.Error(_)) | Some(TuiModal.RootCause(_)) => "🚨 error output"
+      case Some(_)                                               => "ℹ️ info"
+      case None if model.focusedPane == TuiPane.Logs             => "📜 Logs"
+      case None => model.detail.map(value => s"ℹ️ Details: ${value.name}").getOrElse("ℹ️ info")
+    val rawLines = model.modal match
+      case Some(value)                               => modalInfoLines(value)
+      case None if model.focusedPane == TuiPane.Logs =>
+        visibleText(model.logs, model.logScroll, layout.infoBodyHeight)
+      case None => visibleText(
+          model.detail.map(_.lines).getOrElse(Vector("Select an entry to inspect details.")),
+          model.detailScroll,
+          layout.infoBodyHeight
+        )
+    val lines = if rawLines.isEmpty then Vector("") else rawLines
+    Vector(panelTop(title, panelWidth)) ++
+      paddedInfo(lines, layout.infoBodyHeight, panelWidth) ++
+      Vector(panelBottom(panelWidth), "")
 
-  private def logs(
-      lines: Vector[String],
-      offset: Int,
-      layout: PlanningTuiLayout,
-      width: Int,
-      focused: Boolean
-  ): Vector[String] = Vector(paneTitle(
-    "Logs",
-    focused,
-    scrollLabel(lines.size, offset, layout.logBodyHeight),
-    width
-  )) ++
-    scrollBody(lines, offset, layout.logBodyHeight, width) ++
-    Vector(separator(width))
+  private def modalInfoLines(value: TuiModal): Vector[String] = value match
+    case TuiModal.Help => Vector(
+        "Tab focus | Space select | a toggle all | c clear | i invert",
+        "p plan preview | d dry-run | r apply | l logs | / filter | q quit",
+        "Enter focuses selected entry details or confirms modal actions.",
+        "Esc closes modal/filter.",
+        "q or Ctrl+C exits after restoring the terminal."
+      )
+    case TuiModal.ConfirmApply(names) => Vector(
+        "Confirm real apply",
+        s"Apply will install ${names.size} selected entr${
+            if names.size == 1 then "y" else "ies"
+          }: ${names.mkString(", ")}",
+        s"⚠️ Apply ${names.size} selected entr${if names.size == 1 then "y" else "ies"}:",
+        names.mkString(", "),
+        "Press Enter to apply now, or Escape/n to cancel."
+      )
+    case TuiModal.Message(title, lines) => title +: lines
+    case TuiModal.Error(failure)        => failure.title +: failure.renderLines
+    case TuiModal.RootCause(failure)    =>
+      s"Root cause: ${failure.toolName.getOrElse(failure.title)}" +: failure.renderLines
 
-  private def modal(value: Option[TuiModal], width: Int): Vector[String] =
-    TuiModalRenderer.render(value, width)
+  private def visibleText(lines: Vector[String], offset: Int, height: Int): Vector[String] =
+    val clippedOffset = offset.max(0).min((lines.size - height).max(0))
+    lines.slice(clippedOffset, clippedOffset + height)
+
+  private def paddedInfo(lines: Vector[String], height: Int, width: Int): Vector[String] =
+    val padded = lines.take(height) ++ Vector.fill((height - lines.size).max(0))("")
+    padded.map(line => panelLine(line, width))
 
   private def footer(model: PlanningTuiModel, width: Int): Vector[String] =
-    val legend = PlanningTuiStatus.legendOrder
-      .map(_.label)
-      .mkString(" ")
+    val legend = PlanningTuiStatus.legendOrder.map(_.label).mkString(" ")
     Vector(
+      PlanningTuiStatus.style(PlanningTuiStatus.Active, fit(model.keybar, width)),
       fit(model.footer, width),
-      fit(s"status $legend", width),
-      PlanningTuiStatus.style(PlanningTuiStatus.Active, fit(model.keybar, width))
+      fit(s"status $legend", width)
     )
 
-  private def separator(width: Int): String = "-" * width
+  private def contentWidth(width: Int): Int = width.min(132).max(20)
 
-  private def paneTitle(
-      title: String,
-      focused: Boolean,
-      scroll: Option[String],
-      width: Int
-  ): String =
-    val focus = if focused then "focus" else "idle"
-    val text  = scroll match
-      case Some(value) => s"$title [$focus] $value"
-      case None        => s"$title [$focus]"
-    val line = fit(text, width)
-    if focused then PlanningTuiStatus.style(PlanningTuiStatus.Active, line) else line
+  private def panelTop(title: String, width: Int): String =
+    val label     = s" $title "
+    val remaining = (width - label.length - 2).max(0)
+    val left      = remaining / 2
+    val right     = remaining - left
+    fit(s"╭${"─" * left}$label${"─" * right}╮", width)
 
-  private def scrollLabel(total: Int, offset: Int, window: Int): Option[String] =
-    if total <= window then None
-    else Some(s"scroll ${offset + 1}-${(offset + window).min(total)}/$total")
+  private def panelBottom(width: Int): String = fit(s"╰${"─" * (width - 2).max(0)}╯", width)
 
-  private def scrollBody(
-      lines: Vector[String],
-      offset: Int,
-      height: Int,
-      width: Int
-  ): Vector[String] =
-    val clippedOffset = offset.max(0).min((lines.size - height).max(0))
-    val visible       = lines.slice(clippedOffset, clippedOffset + height)
-    val padded        = visible ++ Vector.fill((height - visible.size).max(0))("")
-    val markers       = scrollbarMarkers(lines.size, clippedOffset, height)
-    padded.zip(markers).map:
-      case (line, marker) =>
-        if width <= 2 then fit(line, width)
-        else fit(line, width - 2) + " " + marker
+  private def panelLine(value: String, width: Int): String =
+    if width <= 2 then fit(value, width)
+    else s"│${fit(value, width - 2)}│"
 
-  private def scrollbarMarkers(total: Int, offset: Int, height: Int): Vector[String] =
-    if total <= height then Vector.fill(height)(" ")
-    else
-      val travel     = (height - 1).max(1)
-      val maxOffset  = (total - height).max(1)
-      val thumbIndex = Math.round(offset.toDouble / maxOffset.toDouble * travel).toInt
-      Vector.tabulate(height): index =>
-        if index == thumbIndex then "█" else "│"
+  private final case class TableColumns(
+      checkbox: Int,
+      name: Int,
+      version: Int,
+      checksum: Int,
+      status: Int
+  )
+
+  private def planningColumns(width: Int): TableColumns =
+    val content  = (width - 8).max(20)
+    val checkbox = 3
+    val name     = if width < 70 then 14 else 18
+    val version  = if width < 70 then 10 else 16
+    val checksum = if width < 70 then 12 else 14
+    val status   = (content - checkbox - name - version - checksum).max(16)
+    TableColumns(checkbox, name, version, checksum, status)
 
   private def windowStart(selectedIndex: Int, total: Int, height: Int): Int =
     val maxStart = (total - height).max(0)

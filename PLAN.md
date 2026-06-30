@@ -1,642 +1,442 @@
-# Binstaller TUI Refactor Plan
+# Initkit TUI Excellence Plan
 
 Date: 2026-06-30
 
-This plan supersedes the older `plan --tui` / `apply --tui` approach.
-The TUI must become a separate interactive application command:
+This file is intentionally reset. It contains only the current product goal:
+make `initkit tui` / `binstaller tui` a best-in-class terminal UI, inspired by
+Ratatui showcase apps, opencode-style developer tools, and polished modern TUI
+workflows.
 
-```bash
-binstaller tui --config config.example.yaml
-./mill app.run tui --config config.example.yaml
-```
+## Goal
 
-Default CLI commands remain script-friendly:
+Build a beautiful, fast, colorful, ergonomic TUI that feels like a serious
+developer workstation installer, not a plain text report.
 
-```bash
-binstaller plan --config config.example.yaml
-binstaller apply --config config.example.yaml --dry-run
-binstaller apply --config config.example.yaml --yes
-```
+The TUI should be:
 
-The TUI command owns interactive selection, dry-run preview, apply execution,
-logs, details, and error display inside the interface. `plan --tui` and
-`apply --tui` are transitional code paths and should be removed or deprecated
-as part of this refactor.
+- Table-first and easy to scan.
+- Colorful, with tasteful use of `fansi` colors and emoji.
+- Animated where it helps: spinners, progress bars, loading/wave text, active
+  row indicators, and status transitions.
+- Keyboard-first, predictable, and responsive.
+- Safe for real install operations: confirmation, clear errors, root-cause
+  details, and visible state/config paths.
+- Production-grade Scala: readable structure, good naming, tests, comments,
+  Scaladoc where useful, and strict formatting.
 
-## Current Code State
+## Visual Direction
 
-- The active module graph is `app -> cli -> {core, tui}`, `tui -> core`,
-  `core -> config`.
-- The current TUI exists in a dedicated `tui` module and is reachable through
-  the first-class `tui` command.
-- The current TUI already has deterministic rendering, focusable panes,
-  scrollable details/logs, static fallback for non-interactive shells, terminal
-  cleanup, resize handling, and tests.
-- Core exposes renderer-agnostic plan/apply events and should remain UI-agnostic.
-- The TUI now owns one unified app state for browsing, checkbox selection,
-  filtering, plan preview, dry-run, confirmed apply, logs, and modals. Remaining
-  work is documentation/review/README closure and final validation.
+Use these references for style and interaction quality:
 
-## Implementation Progress
+- Ratatui showcase apps: polished panes, rich table states, strong focus
+  styling, tasteful color accents, good keyboard command bars.
+- opencode-style TUI: developer-focused layout, dense information, active
+  status, useful side/details panels, and strong terminal ergonomics.
+- Tamboui widget demos for design ideas only:
+  - Canvas
+  - Scrollbar
+  - Spinner
+  - Table
+  - Wavetext for loading
 
-- 2026-06-30: T001 added first-class `binstaller tui` routing, removed the
-  transitional `--tui` flags from `plan` and `apply`, and kept `plan`, `apply`,
-  `versions`, and `lock` on non-interactive service-backed paths. The new
-  command currently starts the existing planning TUI frame; later tasks move
-  selection and plan/dry-run/apply actions inside a unified TUI app state.
-- 2026-06-30: T002 introduced a unified pure `TuiAppState` for browsing mode,
-  header metadata, resolved entries, TUI-local selected tool names, focus,
-  filter, modal, logs, and optional execution state. The planning renderer and
-  session now derive from that state, and TUI selection converts to core
-  `ToolSelection` only through a boundary helper.
-- 2026-06-30: T003 rendered checkbox state in plan rows and added persistent
-  TUI-local selection transitions for Space, select-all-visible, clear-visible,
-  and invert-visible. Selection counts refresh in the header after each change,
-  and hidden selections survive filtering.
-- 2026-06-30: Validation iteration 26 passed the configured checkpoint after
-  T001-T003: focused tests, recursive compile/test, scalafmt, Mill resolution,
-  first-class `tui` help/config smokes, non-interactive plan/apply/version/lock
-  smokes, and `git diff --check`. No code fixes were needed. Remaining risks
-  are environment-bound: live raw-terminal TUI behavior still needs a real TTY,
-  and local native-image validation is blocked because `native-image` is not on
-  `PATH`.
-- 2026-06-30: T004 completed browsing controls by wiring `Enter` to selected
-  entry details and `l` to log focus through `TuiAppController`, keeping the
-  existing focus cycling, row movement, scrolling, filtering, help modal, and
-  quit/cleanup paths on the unified state model. Deterministic TUI tests and
-  the non-interactive `tui --config config.example.yaml` smoke passed.
-- 2026-06-30: Validation iteration 28 passed the T005 checkpoint after
-  T001-T004: focused tests, recursive compile/test, scalafmt, Mill resolution,
-  first-class `tui` help/config smokes, non-interactive app smokes, and
-  `git diff --check`. The static `tui --config config.example.yaml` smoke
-  rendered a frame and clear non-interactive message. Local blockers remain
-  environment-bound: `native-image` is not on `PATH`, and stdin is not a live
-  TTY in this agent shell.
-- 2026-06-30: T006 wired the internal `p` action for selected-entry plan
-  preview. The TUI now converts its local selection to core `ToolSelection` at
-  the action boundary, appends selected plan output to logs, opens a visible
-  no-selection modal, and preserves filter/focus/details/selection state. The
-  focused checks `core.test`, `tui.test`, recursive compile, scalafmt check,
-  JSON validation, and `git diff --check` passed.
-- 2026-06-30: T007 wired the internal `d` action for selected-entry dry-run
-  apply. The TUI now converts selected entries to core `ToolSelection`, runs
-  `applyWithEvents` with `DryRunMode.Enabled`, stores the completed
-  `ExecutionTuiState`, renders execution as the primary view after `d`, keeps
-  recent logs and the final summary visible, and opens the shared
-  no-selection modal without calling apply when nothing is selected. The
-  focused checks `core.test`, `tui.test`, `app.run tui --config
-  config.example.yaml`, recursive compile, scalafmt check, JSON validation,
-  and `git diff --check` passed.
-- 2026-06-30: T008 wired the internal `r` action for confirmed real apply.
-  Pressing `r` now opens an in-TUI confirmation modal before any non-dry-run
-  apply call is made; only `Enter` in that modal calls `applyWithEvents`.
-  Escape or `n` closes the modal without writes. Confirmed apply converts only
-  selected TUI entries to core `ToolSelection`, sets `DryRunMode.Disabled` and
-  `ApplyConfirmation.Enabled`, and preserves the existing option fields for
-  state, reset-state, lock validation, and other core gates. Focused core,
-  CLI, TUI, compile, scalafmt, JSON, and whitespace checks passed.
-- 2026-06-30: Validation iteration 32 passed the T009 broad checkpoint after
-  T006-T008 internal TUI actions: focused tests, recursive compile/test,
-  scalafmt, Mill resolution, first-class `tui` help/config smokes, static
-  plan/apply/version/lock smokes, and `git diff --check`. No code
-  fixes were needed. The static `tui --config config.example.yaml` smoke
-  rendered a frame and clear non-interactive message. Local blockers remain
-  environment-bound: `native-image` is not on `PATH`, and stdin is not a live
-  TTY in this agent shell.
-- 2026-06-30: T010 implemented structured TUI failure modals and root-cause
-  details. Invalid config/resolution failures now render a visible startup
-  error screen, failed plan/dry-run/apply results open sanitized error modals
-  and append the same bounded details to logs, failed execution rows can reopen
-  a root-cause modal with `Enter`, and terminal open/render failures return a
-  terminal failure screen while still closing the terminal boundary. Focused
-  core, CLI, TUI, recursive compile, scalafmt, JSON, whitespace, and static
-  `tui --config config.example.yaml` checks passed.
-- 2026-06-30: T011 polished the TUI workspace layout. The header now exposes
-  profile/manifest, config/state paths, host, mode chip, action mode, and
-  selected/total count; plan rows render compact risk badges; details include
-  URL/final-URL/provenance, checksum status, archive mappings, symlinks, sudo
-  risk, and dry-run preview; execution frames show activity/progress,
-  indeterminate progress, bytes, elapsed time, logs, result rows, and summary.
-  Snapshot/model tests now cover dense normal-width output and narrow clipping.
-  Focused TUI tests, static `tui --config config.example.yaml`, recursive
-  compile, scalafmt check, JSON validation, and whitespace checks passed.
-- 2026-06-30: T012 hardened and revalidated terminal lifecycle behavior for
-  the first-class `tui` command. Tests now cover non-interactive browsing
-  fallback without raw mode, terminal open failure, normal close, cleanup after
-  render failure, modal close, `q`, Ctrl+C, resize-driven layout bounds in
-  browsing and execution views, and direct `stty` argv usage without shell
-  strings. The manual smoke guide now uses `./mill app.run tui --config ...`
-  and includes real-terminal startup, resize, quit, Ctrl+C, modal close, and
-  cleanup checks. Focused TUI tests, static `tui --config config.example.yaml`,
-  recursive compile, scalafmt check, JSON validation, and whitespace checks
-  passed.
-- 2026-06-30: Validation iteration 36 passed the T013 broad checkpoint after
-  T010-T012 modal/root-cause UI, layout polish, and terminal lifecycle
-  hardening. Focused config/core/CLI/TUI tests, recursive compile/test,
-  scalafmt, Mill resolution, first-class `tui` help/config smokes,
-  non-interactive plan/apply/version/lock smokes, and `git diff --check`
-  passed without production or test source fixes. Local blockers remain
-  environment-bound: `native-image` is not on `PATH`, and stdin is not a live
-  TTY for the manual raw-terminal smoke.
-- 2026-06-30: T014 updated the architecture, TUI guide, manual TUI smoke,
-  security, and testing docs for the first-class `binstaller tui` command. The
-  docs now describe TUI-local selection, filtering, internal `p`/`d`/`r`
-  actions, confirmation and failure modals, modal/log redaction, terminal
-  control scrubbing, selected-entry execution guarantees, terminal lifecycle
-  expectations, deterministic TUI tests, and the static non-interactive
-  `./mill app.run tui --config config.example.yaml` smoke. Targeted docs checks
-  passed: `git diff --check`, `./mill app.run tui --help`, and
-  `./mill app.run tui --config config.example.yaml`.
-- 2026-06-30: T015 added the mandatory first-class TUI review document covering
-  command boundaries, TUI control flow, modal rendering, selection guarantees,
-  security risks, test evidence, and documented deferrals. README now documents
-  `binstaller tui --config config.example.yaml`, keeps `plan`,
-  `apply --dry-run`, `apply --yes`, `versions`, and `lock` as non-interactive
-  command paths, and no longer presents `plan --tui` or `apply --tui` as the
-  TUI path. Release docs and native release smokes were also migrated to the
-  first-class `tui --config` smoke. Targeted CLI/TUI tests, app help smokes,
-  JSON validation, stale-doc scan, and `git diff --check` passed.
-- 2026-06-30: Validation iteration 39 completed T016 final validation for the
-  first-class TUI refactor. Focused config/core/CLI/TUI tests, recursive
-  compile/test, scalafmt check, Mill resolution, app help/config smokes,
-  first-class static `tui --config config.example.yaml`, `git diff --check`,
-  and JSON validation all passed. `plan --help` and `apply --help` logs were
-  scanned and contain no `--tui`. Local blockers remain environment-bound:
-  `native-image` is not on `PATH` (`command -v native-image` exits 1), and
-  stdin is not a live TTY (`test -t 0` exits 1), so live raw-terminal smoke
-  remains a documented manual/interactive-environment check.
-- 2026-06-30: Validation iteration 40 re-ran the checkpoint validation after
-  T016. JSON validation, focused config/core/CLI/TUI tests, recursive
-  compile/test, scalafmt check, Mill resolution, app help/config smokes,
-  first-class static `tui --config config.example.yaml`, and `git diff --check`
-  all passed with no source fixes. `plan --help` and `apply --help` logs still
-  contain no `--tui`. The only remaining blockers are environment-bound:
-  `native-image` is absent from `PATH`, and stdin is not a live TTY for the
-  manual raw-terminal smoke.
+Do not copy web/docs code blindly. Use the references to guide the terminal
+look and UX expectations.
 
-## Product Target
+## Primary UX Contract
 
-`binstaller tui` is an interactive installer workspace.
+The latest hand-drawn sketch is the primary UX contract. Ratatui/opencode/
+Tamboui references define polish and quality, but the screen structure must
+follow the sketch first.
 
-The user should be able to:
-
-- Load one manifest and inspect all resolved entries.
-- Toggle selected entries with checkboxes.
-- Select all, clear all, invert selection, filter, and inspect details.
-- Choose `Plan`, `Dry Run`, or `Apply` from inside the TUI.
-- Run dry-run preview without leaving the TUI.
-- Run real apply from inside the TUI after confirmation.
-- See active execution as a focused progress screen.
-- See failures in modal dialogs with root-cause details and suggestions.
-- Return from modals to the same TUI state.
-- Keep logs visible, focusable, larger, and scrollable.
-- See the config path and state-file path in the header at all times.
-
-## UX Requirements
-
-### Command Model
-
-Add a first-class subcommand:
-
-```bash
-binstaller tui --config FILE [--state FILE] [--reset-state] [--verbose]
-```
-
-Do not require these flags for normal interactive use:
-
-- `--dry-run`
-- `--yes`
-- `--only`
-- `--skip`
-- `--tui`
-
-Inside the TUI, users choose selected entries and action mode.
-
-Keep `--only` and `--skip` for non-interactive `plan` and `apply`; do not
-make them the primary TUI selection mechanism. If supported on `tui`, they
-should only initialize the checkbox state.
-
-### Layout
-
-Use a dense, developer-tool terminal UI inspired by Tamboui widget demos and
-the provided Posting-style screenshot.
-
-Required layout:
-
-- Header:
-  - app name/version;
-  - profile/manifest name;
-  - config path;
-  - state-file path;
-  - host summary;
-  - current action mode;
-  - selected count and total count.
-- Left pane:
-  - tree/table/list of plan entries;
-  - checkbox per entry;
-  - status/risk badges;
-  - current row highlight;
-  - grouping by status, source type, or install phase when useful.
-- Right/top detail pane:
-  - selected entry details;
-  - version, URL, final URL/provenance, checksum status;
-  - archive mappings;
-  - symlinks and sudo risk;
-  - dry-run operation preview for that entry.
-- Logs pane:
-  - larger than previous versions;
-  - focusable;
-  - scrollable with visible scrollbar;
-  - shows resolver logs, dry-run lines, apply events, and root-cause snippets.
-- Execution view:
-  - when running dry-run/apply, do not keep the plan table as the primary view;
-  - render current tool, phase, spinner/wavetext, progress bar, bytes, elapsed
-    time, recent logs, completed rows, failed rows, skipped rows, and summary.
-- Footer/keybar:
-  - concise shortcuts;
-  - current focus;
-  - current mode;
-  - transient status messages.
-
-### Styling
-
-Style direction:
-
-- Deep navy/black background.
-- Purple/magenta borders, active tabs, and selection accents.
-- Cyan activity/progress accents.
-- Green completed states.
-- Red failed states.
-- Yellow warning/confirmation/sudo/strict-policy states.
-- Muted gray inactive rows.
-- Pale monospace foreground.
-- Active selection uses a filled highlight band plus bright foreground.
-- Use compact tabs, badges, mode chips, and status strips.
-
-Tamboui references are style and interaction references only unless a later
-implementation explicitly validates Tamboui as a runtime dependency. Borrow the
-gist of:
-
-- `Table`: plan entries, results, skipped rows.
-- `Scrollbar`: logs and details panes.
-- `Spinner`: active operation with unknown percent.
-- `Wavetext`: resolving/loading/working banners.
-- `Canvas`: subtle header/progress accents only if they improve clarity.
-
-Do not turn the first screen into a landing page. It must be the usable
-installer workspace.
-
-### Interaction
-
-Required keybindings:
-
-- `Tab`: focus next pane.
-- `Shift+Tab` or `b`: focus previous pane.
-- `Up` / `Down`: move current list row or scroll focused text pane.
-- `PageUp` / `PageDown`: page selection or logs/details.
-- `Home` / `End`: jump to start/end.
-- `Space`: toggle selected entry checkbox.
-- `a`: select all visible entries.
-- `c`: clear all visible entries.
-- `i`: invert visible selection.
-- `/`: filter entries.
-- `Enter`: open details or confirm modal action.
-- `p`: run plan preview for selected entries.
-- `d`: run dry-run apply for selected entries.
-- `r`: run real apply for selected entries, after confirmation modal.
-- `l`: focus logs.
-- `?`: help modal.
-- `q` or `Ctrl+C`: quit, restoring terminal state.
-
-Mouse support is desirable but secondary. Keyboard behavior must be complete.
-
-### Selection Model
-
-The TUI owns a persistent selection state:
-
-- Each plan entry has a checkbox.
-- Selection state survives focus changes, filtering, detail view, modals, and
-  dry-run preview.
-- Filtering does not lose hidden selections.
-- Header shows `selected N / total M`.
-- Apply/dry-run operates on selected entries only.
-- If no entries are selected and the user runs dry-run/apply, show a modal
-  explaining that at least one entry must be selected.
-
-Selection state should be independent from CLI `ToolSelection`, but converted
-to `ToolSelection` before invoking core.
-
-### Modal Requirements
-
-The TUI must support modal dialogs:
-
-- Help modal.
-- Confirmation modal before real apply.
-- Error modal for validation, resolution, dry-run, apply, lock, state, or
-  terminal errors.
-- Root-cause modal for failed tool details.
-
-Error modal contents:
-
-- top-level failure category;
-- affected tool/action/path when available;
-- root cause;
-- safe command/download/path/checksum context;
-- bounded stdout/stderr snippets when available;
-- redacted sensitive values;
-- suggested next action when known;
-- key hints: close, copy/save later if implemented, jump to logs.
-
-Errors must not be rendered only in logs. A failed action should visibly open a
-modal and also append log lines.
-
-## Refactor Architecture
-
-### CLI Layer
-
-Change `cli` module:
-
-- Add `tui` as a first-class picocli subcommand.
-- Remove `--tui` flags from `plan` and `apply`, or keep temporary deprecated
-  aliases only during migration with tests marking them for deletion.
-- `plan` and `apply` remain non-interactive and script-friendly.
-- `tui` command builds `InstallerOptions` and calls `TuiModule.start(...)`.
-- TUI command should accept global config/state/reset/verbose options and
-  optional initial selection flags only if useful.
-
-Target command surface:
+Default screen structure:
 
 ```text
-binstaller plan      # non-interactive plan
-binstaller apply     # non-interactive apply
-binstaller versions  # non-interactive versions
-binstaller lock      # non-interactive lock
-binstaller tui       # interactive TUI application
+┌──────────────────────────────────────────────────────────────┐
+│ #   name        version      checksum        status          │
+│ [x] yazi        0.01         no-checksum     installed       │
+│ [x] minikube    2.4.4        aasdasdasd      not installed   │
+│ [x] xplr        2.4.4        asdasdasdasd    not installed   │
+│ [x] kind        2.4.4        asdasdasdasd    not installed   │
+│ [x] nvim        0.01         no-checksum     installing ███░ │
+└──────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│ info bar                                                     │
+│ description, logs, plan preview, or error output             │
+└──────────────────────────────────────────────────────────────┘
+
+p plan | d dry-run | r apply | tab focus | l logs | space select | a select all
 ```
 
-### TUI Module
+The default screen must be a simple two-panel workspace:
 
-Refactor `tui` module around an application state machine.
+- Top panel: selectable table.
+- Bottom panel: info bar. It shows selected-entry details by default, logs
+  when log focus is active, plan/dry-run output when requested, and error
+  output when a failure occurs.
+- Bottom-most line: compact legend/command bar.
 
-Suggested model:
+Avoid returning to a crowded dashboard layout. Do not show multiple competing
+sidebars, duplicate footers, or verbose status blocks on the default screen.
 
-```scala
-final case class TuiAppState(
-    header: TuiHeader,
-    entries: Vector[TuiEntry],
-    selection: TuiSelectionState,
-    focus: TuiFocus,
-    filter: TuiFilter,
-    mode: TuiMode,
-    modal: Option[TuiModal],
-    logs: TuiLogBuffer,
-    execution: Option[TuiExecutionState]
-)
+## Target Table
+
+Required table columns:
+
+- Checkbox selected state.
+- Name.
+- Version.
+- Checksum state.
+- Status.
+
+Column behavior:
+
+- Checkbox is the first column and is the main selection affordance.
+- The active row should be visibly highlighted.
+- The name column must stay compact.
+- The status column owns install state, warnings, and the per-entry progress
+  bar.
+- During execution, update the current entry in place; when it completes, leave
+  that row finalized and move progress to the next row.
+- Every installing entry must display its progress bar in its own table row
+  whenever the table is visible.
+- Only if the terminal is too narrow to render any readable row progress, keep
+  the candidate list in order and render the active candidate's progress in the
+  lower info bar, clearly tied to the active row.
+
+The table behavior must support:
+
+- `Space`: toggle current row.
+- `a`: select/deselect all visible rows.
+- Arrow keys: move active row.
+- Page/Home/End navigation.
+- `/`: filter rows.
+- `Tab`: switch focus between main table, details/logs/info pane, and command
+  areas.
+- `p`: show plan preview for selected entries.
+- `d`: run dry-run for selected entries.
+- `r`: confirm and apply selected entries.
+- `l`: focus logs.
+- `?`: help.
+- `q` / Ctrl+C: quit with terminal cleanup.
+
+Header metadata should be visible but must not dominate the sketch layout.
+Use a compact header strip or short metadata lines above the table for:
+
+- App name/version.
+- Current mode/action.
+- Manifest/profile name.
+- Selected count and total count.
+- Config path.
+- State file path.
+- Host summary.
+- Filter state.
+
+The footer must be one compact command legend, for example:
+
+```text
+p plan | d dry-run | r apply | tab focus | l logs | space select | a toggle all | q quit
 ```
 
-Core concepts:
+Do not repeat the same shortcuts in multiple footer lines.
 
-- `TuiMode`: browsing, planning, dryRunReady, applying, completed.
-- `TuiAction`: runPlan, runDryRun, runApply, toggleSelection, focusPane,
-  scroll, filter, openModal, closeModal.
-- `TuiModal`: help, confirmApply, error, rootCause.
-- `TuiSelectionState`: selected entry names plus visible-filter helpers.
-- `TuiRenderer`: pure deterministic render from model to frame.
-- `TuiController`: consumes input and updates state.
-- `TuiRunner`: owns terminal lifecycle and invokes core.
+## Execution UX
 
-Keep rendering pure where possible. Side effects belong in command/service
-boundaries, not in render functions.
+When running plan, dry-run, or apply:
 
-### Core Integration
+- Do not replace the user experience with a noisy static list.
+- Keep the main table visible when useful, and update the active entry status
+  inline.
+- The active installing row must show a spinner and progress bar in the status
+  column.
+- Row-level progress is the required default. If a row-level progress bar is
+  not readable because of extreme terminal width constraints, use a fallback
+  execution layout that still shows the ordered candidate list and renders one
+  in-place progress bar for the active candidate in the lower info bar.
+- Completed rows should turn green and remain readable.
+- Failed rows should turn red and be selectable for root-cause details.
+- Skipped rows should be subdued.
+- Download progress should update in place, not print a new line per tick.
+- Progress bars should be visually rich: filled/empty segments, percentage,
+  byte counts when known, and indeterminate animation when total size is
+  unknown.
+- At completion, show a concise colored summary with totals for completed,
+  skipped, failed, interrupted, remaining, and elapsed time.
 
-Core should stay independent from the TUI.
+## Password And Privilege UX
 
-If current events are not enough, add renderer-agnostic events rather than
-TUI-specific callbacks.
+The TUI must handle privileged operations inside the interface.
 
-Required core capabilities:
+- When a command needs a password, show a focused password modal.
+- The password input must be masked and must never be printed, logged,
+  persisted, included in errors, or exposed in command previews.
+- The modal should explain which operation is requesting elevated privileges.
+- The user must be able to cancel the password prompt safely.
+- Cancellation should fail or interrupt only the current privileged operation
+  with a clear message.
+- Prefer an explicit privilege boundary such as a controlled askpass flow or
+  equivalent TUI-mediated input path instead of letting `sudo` take over the
+  terminal unexpectedly.
+- Preserve compatibility with systems where existing sudo credentials are
+  already cached and no prompt is needed.
+- Tests must cover password modal rendering, cancel behavior, redaction, and
+  no leakage into logs/errors.
 
-- Resolve plan snapshot without writes.
-- Render/apply dry-run for selected entries without writes.
-- Apply selected entries with structured events.
-- Return typed errors with root-cause details and suggestions.
-- Preserve state/resume semantics for selected entries.
+## Logs, Details, And Errors
 
-Do not add TUI concepts to core data types. Convert TUI selection to existing
-selection/options at the boundary.
+The TUI must provide a strong logs/details experience:
+
+- The lower info bar is the default home for details, logs, plan preview,
+  dry-run output, and error output.
+- Logs view inside the info bar must be larger than before and focusable.
+- When logs are focused, scrolling must work with keyboard and mouse wheel.
+- Details view must show selected entry metadata without overwhelming the
+  default screen.
+- Error output should appear in the lower info bar first, with an optional
+  modal for full root-cause detail.
+- Error details must include root cause, command/action, exit code, stderr,
+  stdout excerpt, duration, environment hints, and practical suggestions when
+  possible.
+- Failed table rows should reopen the root-cause modal with `Enter`.
+- Errors and logs must be redacted using existing redaction rules.
+
+## Style Requirements
+
+Use terminal styling deliberately:
+
+- Use colors for semantic state:
+  - Green: completed/success.
+  - Red: failed/error.
+  - Yellow: warning/risk/missing checksum.
+  - Cyan/blue: active/focus/current action.
+  - Gray: skipped/inactive/secondary text.
+- Use emoji/icons where they improve scanning:
+  - Package/app marker in header.
+  - Check/warning/error/status markers in rows.
+  - Spinner/progress/activity markers during execution.
+- Avoid broken ANSI rendering. Never measure, pad, or truncate strings after
+  embedding ANSI escape sequences.
+- Keep columns compact; avoid excessively wide name columns.
+- Keep text inside panels clipped safely with ellipsis.
+- Preserve a good layout at narrow and wide terminal sizes.
+
+## Responsive Resize Requirements
+
+Use the Tamboui core concepts as design guidance for resize behavior:
+<https://tamboui.dev/docs/main/core-concepts.html>
+
+- Treat rendering as immediate-mode: each frame is derived from current app
+  state and the current terminal area.
+- Recompute layout on every render and every resize event.
+- Split the available area into explicit rectangles for header, table,
+  info/error bar, and footer.
+- Use constraints instead of fixed coordinates: minimum sizes for essential
+  areas, fill/percentage sizing for flexible areas, and safe clipping when
+  space is limited.
+- Keep widget state outside rendering functions: selected row, focus, scroll
+  offsets, filter text, active execution row, modal state, and progress state
+  must survive resize.
+- Use deterministic tick/animation frames for spinners, progress animation, and
+  loading/wave text.
+- Support keyboard and mouse input after resize without resetting focus.
+- On very small terminals, degrade gracefully: compact header, compact table,
+  one-line legend, and lower info bar with clipped/scrollable content.
+
+## Architecture Requirements
+
+Keep the TUI maintainable and testable:
+
+- Core installer logic remains UI-agnostic.
+- The TUI owns interaction state, selection state, modal state, focus, scroll,
+  and execution rendering.
+- Convert TUI selections to core selections only at service/action boundaries.
+- Keep rendering deterministic for tests.
+- Separate state transitions from rendering.
+- Keep terminal side effects isolated behind terminal/backend traits.
+- Model resize as a normal input event that updates viewport and causes a full
+  redraw from preserved state.
+- Avoid shell injection and unsafe command string handling in terminal control
+  paths.
+- Add comments or Scaladoc where behavior is non-obvious, especially around
+  terminal lifecycle, rendering safety, ANSI handling, selection semantics, and
+  event-driven execution state.
 
 ## Implementation Phases
 
-### TUI-R001 - Command Refactor
+### 1. UX Audit
 
-Deliverables:
+- Capture the current TUI output in normal, narrow, and execution states.
+- Identify visual noise, duplicated text, poor spacing, weak focus cues, and
+  non-working navigation.
+- List all keyboard interactions and verify whether each actually works.
+- Review current renderer boundaries for ANSI measurement bugs.
 
-- Add `binstaller tui`.
-- Remove or deprecate `plan --tui` and `apply --tui`.
-- Update help output.
-- Update docs references to the new command.
-- Add CLI tests for command routing.
+### 2. Visual System
 
-Acceptance checks:
+- Define shared color/status helpers.
+- Define reusable panel, table, progress bar, spinner, scrollbar, and footer
+  rendering helpers.
+- Make table widths responsive and compact.
+- Add safe text measurement/truncation before applying color.
+- Add deterministic animation frames for tests.
 
-- `./mill app.run tui --help` shows TUI command help.
-- `./mill app.run plan --help` no longer advertises `--tui` after migration.
-- `./mill app.run apply --help` no longer advertises `--tui` after migration.
-- Existing non-interactive commands still work.
+### 3. Responsive Layout And Resize
 
-### TUI-R002 - Application State And Selection
+- Build layout from the current terminal area on every frame.
+- Define header, table, info/error bar, and footer rectangles using constraints.
+- Preserve focus, selection, scroll offsets, modals, active row, and progress
+  state across resize.
+- Add normal, narrow, and tiny terminal snapshot tests.
+- Verify mouse wheel and keyboard input still target the correct focused
+  widget after resize.
 
-Deliverables:
+### 4. Table-First Browsing
 
-- Add TUI state model with checkbox selection.
-- Render checkboxes in the plan list.
-- Implement selection toggles: single, all, clear, invert.
-- Preserve selection across filters and focus changes.
+- Refine the default browsing screen to match the sketch: top table, lower
+  info bar, bottom legend.
+- Make selected/current/focused rows visually distinct.
+- Keep details/logs/preview/errors in the lower info bar.
+- Ensure config and state paths stay visible in the header.
+- Make footer shortcuts accurate and non-duplicated.
 
-Acceptance checks:
+### 5. Execution Experience
 
-- Unit tests verify checkbox rendering.
-- Unit tests verify selection survives filtering.
-- Header shows selected/total count.
+- Render active execution progress inline in the installing entry's table row.
+- Treat row-level progress as mandatory for normal terminals.
+- Add the narrow-terminal fallback only for extreme widths: ordered candidate
+  list plus one in-place active progress bar in the lower info bar.
+- Add animated spinner and progress bar states.
+- Render completed/failed/skipped status transitions with color.
+- Keep logs accessible during execution.
+- Render final summary with color and concise totals.
 
-### TUI-R003 - Internal Actions: Plan, Dry Run, Apply
+### 6. Password And Privilege Flow
 
-Deliverables:
+- Design a password modal for privileged operations.
+- Ensure password input is masked, redacted, and never stored.
+- Route privilege prompts through TUI-controlled input instead of raw `sudo`
+  terminal takeover where possible.
+- Handle cached sudo credentials without showing a prompt.
+- Add cancellation and failure states with clear messages.
 
-- Add internal action dispatch from TUI keybindings.
-- `p` renders plan/details/logs for selected entries.
-- `d` runs dry-run apply for selected entries.
-- `r` opens confirmation modal and then runs real apply for selected entries.
-- No-selection action opens an error modal.
+### 7. Error Experience
 
-Acceptance checks:
+- Improve CLI and TUI root-cause rendering.
+- Add practical suggestions where possible.
+- Make TUI error modals readable, scrollable, and redacted.
+- Ensure failed rows can reopen detailed diagnostics.
 
-- Dry-run action performs no filesystem writes.
-- Apply action requires explicit confirmation modal.
-- Selected entries map correctly to core selection.
-- Result summary remains visible after action completes.
+### 8. Keyboard And Focus
 
-### TUI-R004 - Error Modals And Root Cause UI
+- Verify `Tab`, `Enter`, `l`, `/`, arrows, PageUp/PageDown, Home/End, mouse
+  wheel, `Space`, `a`, `p`, `d`, `r`, `?`, `q`, and Ctrl+C.
+- Make logs and details focus obvious.
+- Keep focus stable after filtering, modal close, resize, and execution
+  completion.
 
-Deliverables:
+### 9. Code Quality Pass
 
-- Implement error modal model and renderer.
-- Convert validation/resolution/apply errors into modal content.
-- Add root-cause detail modal for failed tools.
-- Append errors to logs as well as showing modal.
+- Refactor large renderer/state methods into clear helpers where it improves
+  readability.
+- Add Scaladoc/comments for public and complex internal APIs.
+- Review naming, data flow, and test coverage.
+- Remove dead transitional code and stale comments.
+- Keep formatting clean with scalafmt.
 
-Acceptance checks:
+### 10. Validation
 
-- Invalid config opens an error modal.
-- Failed dry-run/apply opens an error modal with root cause and suggestion.
-- Sensitive values are redacted.
-- Terminal-control characters are scrubbed.
-
-### TUI-R005 - Styling And Layout Polish
-
-Deliverables:
-
-- Apply Posting/Tamboui-inspired styling.
-- Make logs pane larger and clearly focusable.
-- Add scrollbars to logs/details.
-- Add mode chips and status badges.
-- Improve execution view with spinner/wavetext-like loading and progress bars.
-- Ensure narrow terminal layout does not overlap text.
-
-Acceptance checks:
-
-- Snapshot/model tests cover normal and narrow terminal widths.
-- Logs/details scrollbars render when content overflows.
-- Active pane and active selection are obvious.
-- Completed rows are green; failed rows are red.
-
-### TUI-R006 - Terminal Lifecycle And Input Hardening
-
-Deliverables:
-
-- Revalidate alternate-screen/raw-mode cleanup.
-- Revalidate `q`, Ctrl+C, modal close, and failure cleanup paths.
-- Revalidate resize handling.
-- Revalidate non-interactive fallback behavior.
-
-Acceptance checks:
-
-- Tests cover terminal open failure.
-- Tests cover normal close and failure close.
-- Non-interactive `binstaller tui` renders static fallback or clear message.
-- Manual smoke guide updated.
-
-### TUI-R007 - Review, Hardening, And Documentation
-
-This is mandatory because the refactor changes command shape and TUI control
-flow.
-
-Deliverables:
-
-- Code review document under `docs/`.
-- Security review of new TUI command boundaries and modal rendering.
-- Tests for command migration and error modal redaction.
-- Update architecture docs.
-- Update TUI guide and smoke guide.
-- Update README last.
-
-Acceptance checks:
-
-- `./mill config.test`
-- `./mill core.test`
-- `./mill cli.test`
-- `./mill tui.test`
-- `./mill __.compile`
-- `./mill __.test`
-- `./mill mill.scalalib.scalafmt/checkFormatAll`
-- `git diff --check`
-- App smokes:
+Required checks:
 
 ```bash
-./mill app.run --help
-./mill app.run tui --help
-./mill app.run plan --config config.example.yaml
-./mill app.run apply --config config.example.yaml --dry-run
+./mill tui.test
+./mill cli.test
+./mill __.compile
+./mill mill.scalalib.scalafmt/checkFormatAll
 ./mill app.run tui --config config.example.yaml
+git diff --check
 ```
 
-Live raw-terminal TUI smoke must be run manually from a real terminal emulator.
+Manual checks in a real terminal:
 
-## Security And Hardening Requirements
+- Open TUI.
+- Resize terminal.
+- Resize during active install/progress.
+- Resize while password modal, help modal, logs, and error output are visible.
+- Move through rows.
+- Toggle one row.
+- Toggle all.
+- Filter.
+- Focus details.
+- Focus logs.
+- Scroll logs.
+- Open help.
+- Run plan preview.
+- Run dry-run.
+- Confirm/cancel apply modal.
+- Trigger or inspect an error modal.
+- Quit with `q`.
+- Quit with Ctrl+C.
 
-- TUI must not execute shell strings.
-- TUI selection must not bypass existing policy, state, checksum, strict mode,
-  lock, sudo, or confirmation gates.
-- TUI modal rendering must scrub terminal control characters.
-- TUI modal rendering must redact sensitive env-derived values.
-- TUI logs must not leak secrets.
-- Real apply must require an in-TUI confirmation modal.
-- Sudo symlink operations must remain explicit and highlighted.
-- State-file path must remain visible before execution.
-- Dry-run/apply must operate only on selected entries.
-- Hidden filtered entries must not accidentally run unless selected.
-- On any failure, terminal state must be restored.
+## Acceptance Criteria
 
-## Code Quality Requirements
+The work is complete when:
 
-- Keep `core` UI-agnostic.
-- Keep TUI state transitions testable without a real terminal.
-- Keep render functions deterministic and side-effect free.
-- Add ScalaDoc to public TUI state/controller/runner APIs.
-- Add comments for non-obvious terminal lifecycle, modal, selection, and
-  security invariants.
-- Avoid long render/controller functions; split layout, input handling, modal
-  rendering, and action dispatch into focused units.
-- Keep explicit public return types.
-- Preserve existing CLI behavior unless intentionally changed by this plan.
-
-## Documentation Order
-
-Update docs in this order:
-
-1. Architecture docs for new `tui` command and module responsibilities.
-2. TUI guide with command, keybindings, selection, dry-run/apply actions, and
-   modals.
-3. TUI smoke workflow with real-terminal steps.
-4. Security docs for TUI modal/log rendering and selection guarantees.
-5. Testing docs for TUI state/render/input tests.
-6. README last, after implementation, review, and validation are complete.
-
-README must not be treated as complete until the command refactor, hardening,
-tests, and developer docs are done.
+- The default UX follows the sketch: top selectable table, lower info/error
+  bar, and bottom command legend.
+- The TUI looks polished, colorful, and modern in a real terminal.
+- The default screen is a clean table-first installer workspace.
+- The TUI is fully resizable: layout recomputes from current terminal area,
+  state is preserved, and no panels overlap or disappear incoherently.
+- Logs are focusable, larger, scrollable, and rendered through the info bar.
+- Each installing entry displays an in-row progress bar while it is running.
+- Execution progress updates in place with animation.
+- Narrow terminals still show an ordered candidate list and one clearly tied
+  active progress bar.
+- Password prompts are handled through a masked TUI modal and never leak into
+  logs, errors, previews, state, or tests.
+- Errors are actionable and visible in both CLI and TUI.
+- Header always shows config and state paths.
+- The renderer has no visible ANSI escape artifacts.
+- Tests cover deterministic render output, selection behavior, focus behavior,
+  progress states, error modals, and terminal cleanup.
+- Code is maintainable Scala with clear structure and useful comments.
 
 ## Agent Loop Tasks
 
-The authoritative resumable implementation queue is stored in
-`.agent-loop/tasks.json`. The active pending queue for this TUI refactor is:
+The agent loop should continue from the current first-class `binstaller tui`
+baseline and close the remaining gaps in this order:
 
-| Task | Type | Complexity | Title |
-| --- | --- | --- | --- |
-| T001 | feature | complex | Add tui subcommand (completed 2026-06-30) |
-| T002 | feature | complex | Introduce TUI app state |
-| T003 | feature | moderate | Render checkbox selection |
-| T004 | feature | moderate | Complete browsing controls |
-| T005 | validation | simple | Checkpoint command browsing |
-| T006 | feature | moderate | Wire selected plan action |
-| T007 | feature | complex | Wire selected dry run (completed 2026-06-30) |
-| T008 | feature | complex | Wire confirmed apply (completed 2026-06-30) |
-| T009 | validation | simple | Checkpoint TUI actions |
-| T010 | feature | complex | Implement error modals |
-| T011 | improvement | complex | Polish TUI layout |
-| T012 | fix | moderate | Harden terminal lifecycle |
-| T013 | validation | simple | Checkpoint modal layout hardening |
-| T014 | chore | moderate | Update TUI docs |
-| T015 | chore | moderate | Complete review and README |
-| T016 | validation | simple | Run final validation |
+1. T001 Audit current TUI gaps.
+2. T002 Seed execution rows.
+3. T003 Enrich progress rendering.
+4. T004 Checkpoint execution rendering.
+5. T005 Introduce privilege boundary.
+6. T006 Add password modal.
+7. T007 Checkpoint privilege flow.
+8. T008 Polish logs and errors.
+9. T009 Harden responsive resize.
+10. T010 Checkpoint responsive UI.
+11. T011 Update TUI documentation.
+12. T012 Run final validation.
 
-## Verification Strategy
+## Progress Updates
 
-Use the checked-in Mill launcher. The default validation command set is written
-to `.agent-loop/config.json` and includes focused module tests, recursive
-compile/test, scalafmt checks, Mill task resolution, app-level non-interactive
-smokes, the first-class `tui` static smoke, and `git diff --check`.
-
-Live raw-terminal TUI smoke and native-image builds are not automatic in the
-agent shell. Validation iterations should record whether stdin is a TTY and
-whether `native-image` is available before treating those checks as blocked.
+- 2026-06-30: Validation iteration 43 completed T001, the current TUI gap
+  audit. The current static browsing frame renders the target two-panel shape:
+  compact header, selectable checkbox table, lower focused info/details panel,
+  and one command legend. Narrow browsing/execution behavior is covered by
+  deterministic width-bound tests at 30-32 columns, and execution currently
+  renders completed/failed/skipped rows plus the active row as events arrive.
+  No production behavior was changed.
+- T001 mapped the remaining implementation gaps to the active task queue:
+  T002 for ordered pre-seeded execution rows and failed-row focus, T003 for
+  richer quieter progress/status rendering, T005-T006 for privileged password
+  mediation, T008 for logs/error info-bar polish, T009 for broader responsive
+  and future password-modal resize coverage, T011 for documentation updates,
+  and T012 for final/manual validation closure.
+- T001 validation passed: `./mill tui.test`,
+  `./mill app.run tui --config config.example.yaml`, `git diff --check`, and
+  `jq empty .agent-loop/tasks.json`. Local environment blockers were recorded:
+  `test -t 0` exits 1 with `stdin_is_tty=false`, and
+  `command -v native-image` exits 1 while `java -version` reports OpenJDK
+  25.0.3.

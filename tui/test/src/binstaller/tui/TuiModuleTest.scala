@@ -54,15 +54,14 @@ object TuiModuleTest extends TestSuite:
 
       val plain = stripAnsi(result.lines.mkString("\n"))
       assert(result.exitCode == 0)
-      assert(plain.contains("binstaller 1.2.3 | mode browse"))
-      assert(plain.contains("manifest tui-profile (BinaryDistributionProfile)"))
+      assert(plain.contains("binstaller 1.2.3 | mode browse | action [browse] | tui-profile"))
       assert(plain.contains(s"config ${fixture.config}"))
       assert(plain.contains(s"state ${fixture.stateFile}"))
       assert(plain.contains("host linux/amd64"))
       assert(plain.contains("selected 2 / total 2"))
       assert(plain.contains("Plan"))
       assert(plain.contains("Details: alpha"))
-      assert(plain.contains("Logs"))
+      assert(plain.contains("l logs"))
       assert(plain.contains("q quit"))
 
     test("apply dry-run tui renders execution view with concrete dry-run operations"):
@@ -76,7 +75,7 @@ object TuiModuleTest extends TestSuite:
 
       val plain = stripAnsi(result.lines.mkString("\n"))
       assert(result.exitCode == 0)
-      assert(plain.contains("mode apply execution"))
+      assert(plain.contains("binstaller 1.2.3 | apply | elapsed"))
       assert(plain.contains("Dry-run operations"))
       assert(plain.contains("binstaller apply --dry-run"))
       assert(plain.contains("download: https://example.invalid/releases/alpha.tar.gz"))
@@ -145,7 +144,6 @@ object TuiModuleTest extends TestSuite:
       assert(plain.contains("elapsed 300ms"))
       assert(plain.contains("512 B/1.0 KiB"))
       assert(plain.contains("alpha: extracting selected archive paths"))
-      assert(plain.contains("terminal restored after apply completes"))
       assert(!plain.contains("q/Ctrl+C quit"))
       assert(!plain.contains("Plan ["))
 
@@ -206,8 +204,8 @@ object TuiModuleTest extends TestSuite:
       assert(plain.contains("fail beta"))
       assert(plain.contains("checksum mismatch"))
       assert(plain.contains("failed | installed 1 | failed 1 | skipped 0 | exit 1"))
-      assert(rendered.contains("\u001b[32m"))
-      assert(rendered.contains("\u001b[31m"))
+      assert(rendered.contains("✅ ok"))
+      assert(rendered.contains("❌ fail"))
 
     test("apply execution TUI closes terminal after dry-run success"):
       val fixture  = writeFixture()
@@ -224,7 +222,7 @@ object TuiModuleTest extends TestSuite:
       assert(result.lines.isEmpty)
       assert(terminal.opened)
       assert(terminal.closed)
-      assert(rendered.contains("mode apply execution"))
+      assert(rendered.contains("binstaller 1.2.3 | apply | elapsed"))
       assert(rendered.contains("binstaller apply --dry-run"))
 
     test("apply execution TUI closes terminal after failure"):
@@ -297,7 +295,9 @@ object TuiModuleTest extends TestSuite:
       assert(!terminal.closed)
       assert(!output.contains("\u001b[?1049h"))
       assert(output.contains("non-interactive terminal detected; rendered a static TUI frame"))
-      assert(stripAnsi(output).contains("binstaller 1.2.3 | mode browse"))
+      assert(stripAnsi(output).contains(
+        "binstaller 1.2.3 | mode browse | action [browse] | tui-profile"
+      ))
 
     test("layout model carries header metadata and plan rows"):
       val fixture = writeFixture()
@@ -325,11 +325,10 @@ object TuiModuleTest extends TestSuite:
       val betaText  = beta.detail.map(_.lines.mkString("\n")).getOrElse("")
       val sudoText  = sudoModel.detail.map(_.lines.mkString("\n")).getOrElse("")
 
-      assert(plain.contains("binstaller 1.2.3 | mode browse | action [browse]"))
-      assert(plain.contains("profile tui-profile (BinaryDistributionProfile)"))
+      assert(plain.contains("binstaller 1.2.3 | mode browse | action [browse] | tui-profile"))
       assert(plain.contains(s"config ${fixture.config}"))
       assert(plain.contains(s"state ${fixture.stateFile}"))
-      assert(plain.contains("host linux/amd64 | mode chip browse"))
+      assert(plain.contains("host linux/amd64"))
       assert(plain.contains("selected 2 / total 2"))
       assert(alphaText.contains("version resolver provenance: static manifest value"))
       assert(alphaText.contains("download final url: observed during dry-run/apply"))
@@ -470,7 +469,7 @@ object TuiModuleTest extends TestSuite:
 
       assert(finalState.appState.mode == TuiBrowsingMode.DryRun)
       assert(finalState.appState.executionState.exists(_.summary.nonEmpty))
-      assert(rendered.contains("mode apply execution"))
+      assert(rendered.contains("binstaller 1.2.3 | apply | elapsed"))
       assert(rendered.contains("Dry-run operations"))
       assert(rendered.contains("Recent Logs"))
       assert(rendered.contains("binstaller apply --dry-run"))
@@ -647,7 +646,7 @@ object TuiModuleTest extends TestSuite:
       assert(finalState.appState.mode == TuiBrowsingMode.Apply)
       assert(finalState.appState.modal.isEmpty)
       assert(finalState.appState.executionState.exists(_.summary.nonEmpty))
-      assert(rendered.contains("mode apply execution"))
+      assert(rendered.contains("binstaller 1.2.3 | apply | elapsed"))
       assert(rendered.contains("apply selected 1 / 2: beta"))
 
     test("failed apply row can open root-cause detail modal"):
@@ -705,7 +704,7 @@ object TuiModuleTest extends TestSuite:
 
       assert(result.exitCode == 0)
       assert(first.contains("Plan [focus]"))
-      assert(second.contains("mode apply execution"))
+      assert(second.contains("binstaller 1.2.3 | apply | elapsed"))
       assert(second.contains("Dry-run operations"))
       assert(!second.contains("Plan [focus]"))
       assert(!Files.exists(fixture.appsDir))
@@ -775,6 +774,16 @@ object TuiModuleTest extends TestSuite:
       assert(inverted.appState.selectedToolNames == Set("alpha"))
       assert(inverted.toModel.header.selectionText == "selected 1 / total 2")
 
+    test("a toggles all visible selections off when they are already selected"):
+      val toggled = PlanningTuiSession.run(
+        sessionState(writeFixture()),
+        Vector(TuiInput.Character('a'))
+      )
+
+      assert(toggled.appState.selectedToolNames.isEmpty)
+      assert(toggled.toModel.rows.map(_.checked) == Vector(false, false))
+      assert(toggled.toModel.header.selectionText == "selected 0 / total 2")
+
     test("state override is shown instead of manifest state file"):
       val fixture       = writeFixture()
       val overrideState = "override.state.json"
@@ -813,8 +822,6 @@ object TuiModuleTest extends TestSuite:
       assert(plain.contains("…"))
       assert(model.detail.exists(_.lines.contains(s"download url: ${fixture.longUrl}")))
       assert(model.detail.exists(_.lines.contains(s"install dir: ${fixture.longInstallDir}")))
-      PlanningTuiStatus.legendOrder.foreach: status =>
-        assert(plain.contains(status.label))
       assert(first.contains("\u001b["))
 
     test("planning TUI redacts redirected resolver final URLs"):
@@ -922,7 +929,7 @@ object TuiModuleTest extends TestSuite:
       assert(logsScrolled.logScroll == 0)
       assert(logsAtEnd.logScroll > 0)
 
-    test("overflowing details and logs render visible scrollbars"):
+    test("overflowing details and logs render in the focused info bar"):
       val fixture = writeFixture(longValues = true)
       val logs    = Vector.tabulate(30)(index => s"overflow log line ${index + 1}")
       val model   = sessionState(
@@ -931,10 +938,10 @@ object TuiModuleTest extends TestSuite:
       ).withFocus(TuiPane.Logs).withLogScroll(4).toModel
       val plain = stripAnsi(PlanningTuiRenderer.render(model).mkString("\n"))
 
-      assert(plain.contains("Details: alpha [idle] scroll"))
-      assert(plain.contains("Logs [focus] scroll"))
-      assert(plain.contains("█"))
-      assert(plain.contains("│"))
+      assert(plain.contains("Logs"))
+      assert(plain.contains("overflow log line 5"))
+      assert(plain.contains("overflow log line 20"))
+      assert(plain.contains("Plan table"))
 
     test("slash filtering updates visible rows and header filter text"):
       val finalState = PlanningTuiSession.run(

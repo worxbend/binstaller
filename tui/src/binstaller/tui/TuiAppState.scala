@@ -487,7 +487,7 @@ object TuiAppController:
     case TuiInput.Enter          => state.copy(focus = TuiPane.Details)
     case TuiInput.Character('l') => state.copy(focus = TuiPane.Logs)
     case TuiInput.Character(' ') => toggleCurrentVisible(state)
-    case TuiInput.Character('a') => selectVisible(state)
+    case TuiInput.Character('a') => toggleVisibleSelection(state)
     case TuiInput.Character('c') => clearVisible(state)
     case TuiInput.Character('i') => invertVisible(state)
     case TuiInput.Character('p') => actions.planPreview(state)
@@ -591,8 +591,11 @@ object TuiAppController:
     case Some(entry) => state.withSelection(state.selection.toggle(entry.name))
     case None        => state
 
-  private def selectVisible(state: TuiAppState): TuiAppState =
-    state.withSelection(state.selection.select(visibleToolNames(state)))
+  private def toggleVisibleSelection(state: TuiAppState): TuiAppState =
+    val visibleNames = visibleToolNames(state)
+    if visibleNames.nonEmpty && visibleNames.forall(state.selection.contains) then
+      state.withSelection(state.selection.clear(visibleNames))
+    else state.withSelection(state.selection.select(visibleNames))
 
   private def clearVisible(state: TuiAppState): TuiAppState =
     state.withSelection(state.selection.clear(visibleToolNames(state)))
