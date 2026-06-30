@@ -87,7 +87,7 @@ chmod +x dist/binstaller-linux-amd64
 
 Do not run apply against a real profile during release smoke unless the profile
 uses an isolated temporary `appsDir`, a disposable current-directory state
-filename, and `--yes` is intentional.
+filename, and the install side effects are intentional.
 
 ## Rollback Notes
 

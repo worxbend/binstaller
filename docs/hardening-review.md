@@ -40,8 +40,8 @@ reporting, tests, and release workflow.
   as `not configured`, but absence is still accepted.
 - Add max download size enforcement and optional content-length checks before
   buffering downloads into memory.
-- Add redirect provenance to plan/apply/lock output, including the final
-  effective URL where the JDK client exposes it.
+- Add redirect provenance to plan/lock output, including the final effective URL
+  where the JDK client exposes it.
 - Add retry policy for transient HTTP failures, keeping retries off for scripts
   unless idempotence is modeled.
 - Add native `tar.xz` handling or a stronger extraction sandbox; the current tar
@@ -108,9 +108,9 @@ reporting, tests, and release workflow.
 - Do installer scripts have timeout/cancellation and cleanup behavior? Installer
   scripts are not executed. External process execution still has a timeout for
   the remaining structured process boundaries.
-- Are sudo symlinks impossible unless configured and confirmed? Yes. Config
-  validation gates sudo symlinks with `policy.allowSudoSymlinks`; apply preflight
-  also requires policy allowance and `--yes` before writes.
+- Are sudo symlinks impossible unless configured? Yes. Config validation gates
+  sudo symlinks with `policy.allowSudoSymlinks`; apply preflight also requires
+  policy allowance before writes.
 - Are sudo operations rendered exactly and highlighted? Dry-run renders exact
   `sudo ln -sfn` commands with quoted args and `sudo risk` markers. Apply uses
   structured argv.

@@ -68,6 +68,7 @@ object CliModuleTest extends TestSuite:
 
       assert(result.exitCode == 0)
       assert(result.out.contains("Render the binary installer plan without changing files."))
+      assert(result.out.contains("Default: cwd config.yaml."))
 
     test("apply help describes apply output"):
       val result = runCli(Vector("apply", "--help"))
@@ -75,29 +76,33 @@ object CliModuleTest extends TestSuite:
       assert(result.exitCode == 0)
       assert(result.out.contains("Apply the binary installer plan."))
 
-    test("plan requires config"):
-      val result = runCli(Vector("plan"))
+    test("plan uses config.yaml from cwd by default"):
+      val service = RecordingInstallerService()
+      val result  = runCli(Vector("plan"), service)
 
-      assert(result.exitCode != 0)
-      assert(result.err.trim == "Missing required option: --config")
+      assert(result.exitCode == 0)
+      assert(service.planOptions.exists(_.configPath == defaultConfigPath))
 
-    test("apply requires config"):
-      val result = runCli(Vector("apply"))
+    test("apply uses config.yaml from cwd by default"):
+      val service = RecordingInstallerService()
+      val result  = runCli(Vector("apply"), service)
 
-      assert(result.exitCode != 0)
-      assert(result.err.trim == "Missing required option: --config")
+      assert(result.exitCode == 0)
+      assert(service.applyOptions.exists(_.configPath == defaultConfigPath))
 
-    test("versions requires config"):
-      val result = runCli(Vector("versions"))
+    test("versions uses config.yaml from cwd by default"):
+      val service = RecordingInstallerService()
+      val result  = runCli(Vector("versions"), service)
 
-      assert(result.exitCode != 0)
-      assert(result.err.trim == "Missing required option: --config")
+      assert(result.exitCode == 0)
+      assert(service.versionsOptions.exists(_.configPath == defaultConfigPath))
 
-    test("lock requires config"):
-      val result = runCli(Vector("lock"))
+    test("lock uses config.yaml from cwd by default"):
+      val service = RecordingInstallerService()
+      val result  = runCli(Vector("lock"), service)
 
-      assert(result.exitCode != 0)
-      assert(result.err.trim == "Missing required option: --config")
+      assert(result.exitCode == 0)
+      assert(service.lockInstallerOptions.exists(_.configPath == defaultConfigPath))
 
     test("apply forwards state override and reset-state"):
       val service = RecordingInstallerService()
@@ -230,13 +235,15 @@ object CliModuleTest extends TestSuite:
       val result = runCli(Vector("versions", "--config", configExamplePath.toString), service)
 
       assert(result.exitCode == 0)
-      assert(result.out.contains("package"))
-      assert(result.out.contains("newer version"))
-      assert(result.out.contains("kubectl"))
-      assert(result.out.contains("v1.34.0"))
-      assert(!result.out.contains("https://dl.k8s.io/release/stable.txt"))
-      assert(!result.out.contains("https://cdn.example.invalid/kubernetes/stable.txt"))
-      assert(!result.out.contains("final url"))
+      assert(result.out.contains("\u001b["))
+      val plainOutput = stripAnsi(result.out)
+      assert(plainOutput.contains("package"))
+      assert(plainOutput.contains("newer version"))
+      assert(plainOutput.contains("kubectl"))
+      assert(plainOutput.contains("v1.34.0"))
+      assert(!plainOutput.contains("https://dl.k8s.io/release/stable.txt"))
+      assert(!plainOutput.contains("https://cdn.example.invalid/kubernetes/stable.txt"))
+      assert(!plainOutput.contains("final url"))
 
     test("plan renders local and sudo symlink actions without executing them"):
       val tempRoot = Files.createTempDirectory("binstaller-cli-dry-symlinks")
@@ -267,23 +274,6 @@ object CliModuleTest extends TestSuite:
       assert(!Files.exists(stateFile))
       assert(!Files.exists(appsDir.resolve("alpha")))
 
-    test("apply requires yes when confirmation policy is enabled"):
-      val tempRoot = Files.createTempDirectory("binstaller-cli-confirm")
-      val appsDir  = tempRoot.resolve("apps")
-      val config   = writeConfig(tempRoot, noWriteYaml(appsDir, "state.json"))
-      val service  = resolvingServiceWithStateRoot(tempRoot)
-
-      val result = runCli(
-        Vector("apply", "--config", config.toString),
-        service
-      )
-
-      assert(result.exitCode == 1)
-      assert(result.out.contains("policy.requireConfirmation"))
-      assert(result.out.contains("--yes"))
-      assert(!result.out.contains("Exception"))
-      assert(!Files.exists(appsDir))
-
     test("apply renders download progress bar in place"):
       val tempRoot = Files.createTempDirectory("binstaller-cli-progress")
       val appsDir  = tempRoot.resolve("apps")
@@ -297,7 +287,7 @@ object CliModuleTest extends TestSuite:
       )
 
       val result = runCli(
-        Vector("apply", "--config", config.toString, "--yes"),
+        Vector("apply", "--config", config.toString),
         service
       )
 
@@ -330,6 +320,8 @@ object CliModuleTest extends TestSuite:
       case ToolHeading(name) => name
 
   private def stripAnsi(output: String): String = output.replaceAll("\u001b\\[[;\\d]*m", "")
+
+  private def defaultConfigPath: String = Path.of("config.yaml").toAbsolutePath.normalize().toString
 
   private def writeConfig(tempRoot: Path, content: String): Path =
     val path = tempRoot.resolve("profile.yaml")
@@ -377,6 +369,7 @@ object CliModuleTest extends TestSuite:
                                                        |spec:
                                                        |  policy:
                                                        |    appsDir: "$appsDir"
+                                                       |    requireConfirmation: true
                                                        |  vars: {}
                                                        |  versions:
                                                        |    alpha: "1.0.0"
@@ -470,14 +463,17 @@ private final class ProgressBinaryDownloadClient(bytes: Array[Byte]) extends Bin
 
 private final class RecordingInstallerService extends BinaryInstallerService:
 
-  private var recordedPlanOptions: Option[InstallerOptions]   = None
-  private var recordedApplyOptions: Option[InstallerOptions]  = None
-  private var recordedLockOptions: Option[LockOptions]        = None
-  private var recordedLockInstaller: Option[InstallerOptions] = None
+  private var recordedPlanOptions: Option[InstallerOptions]     = None
+  private var recordedApplyOptions: Option[InstallerOptions]    = None
+  private var recordedVersionsOptions: Option[InstallerOptions] = None
+  private var recordedLockOptions: Option[LockOptions]          = None
+  private var recordedLockInstaller: Option[InstallerOptions]   = None
 
   def planOptions: Option[InstallerOptions] = recordedPlanOptions
 
   def applyOptions: Option[InstallerOptions] = recordedApplyOptions
+
+  def versionsOptions: Option[InstallerOptions] = recordedVersionsOptions
 
   def lockOptions: Option[LockOptions] = recordedLockOptions
 
@@ -497,7 +493,9 @@ private final class RecordingInstallerService extends BinaryInstallerService:
     recordedApplyOptions = Some(options)
     InstallerResult(Vector("apply"), 0)
 
-  def versions(options: InstallerOptions): InstallerResult = InstallerResult(Vector("versions"), 0)
+  def versions(options: InstallerOptions): InstallerResult =
+    recordedVersionsOptions = Some(options)
+    InstallerResult(Vector("versions"), 0)
 
   def lock(options: InstallerOptions, lockOptions: LockOptions): InstallerResult =
     recordedLockInstaller = Some(options)

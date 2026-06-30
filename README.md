@@ -37,32 +37,30 @@ Release artifacts:
 
 ## Quick Start
 
-Use the checked-in [config.example.yaml](config.example.yaml) as the reference
-profile. It uses:
+Copy the checked-in [config.example.yaml](config.example.yaml) to `config.yaml`
+in your working directory, or pass it explicitly with `--config`.
 
-```yaml
-apiVersion: binstaller.io/v1alpha1
-kind: BinaryDistributionProfile
+```bash
+cp config.example.yaml config.yaml
 ```
 
 Preview the resolved plan:
 
 ```bash
-binstaller plan --config config.example.yaml
+binstaller plan
 ```
 
-Apply the profile. `--yes` is required when the profile has
-`requireConfirmation: true`.
+Apply the profile.
 
 ```bash
-binstaller apply --config config.example.yaml --yes
+binstaller apply
 ```
 
 Select or omit tools by name. These flags may be repeated.
 
 ```bash
-binstaller plan --config config.example.yaml --only yazi
-binstaller apply --config config.example.yaml --skip neovim --yes
+binstaller plan --only yazi
+binstaller apply --skip neovim
 ```
 
 Print a package/version summary table. For tools downloaded from GitHub
@@ -70,13 +68,13 @@ Releases, this also checks the repository's latest release tag and prints the
 newer version when an update is available.
 
 ```bash
-binstaller versions --config config.example.yaml
+binstaller versions
 ```
 
 Write a reproducible lock file without installing tools:
 
 ```bash
-binstaller lock --config config.example.yaml --output /tmp/binstaller.lock.json
+binstaller lock --output /tmp/binstaller.lock.json
 ```
 
 The manifest policy defaults to `mode: developer`, which preserves local
@@ -89,7 +87,7 @@ Source-development equivalents use the checked-in Mill launcher:
 ```bash
 ./mill app.run --help
 ./mill app.run plan --config config.example.yaml
-./mill app.run apply --config config.example.yaml --yes
+./mill app.run apply --config config.example.yaml
 ./mill app.run versions --config config.example.yaml
 ./mill app.run lock --config config.example.yaml --output /tmp/binstaller.lock.json
 ```
@@ -101,14 +99,14 @@ Top-level commands:
 | Command | Purpose | Writes files |
 |---|---|---|
 | `plan` | Render the resolved install plan. | No |
-| `apply --yes` | Download, stage, install, symlink, and save state. | Yes |
+| `apply` | Download, stage, install, symlink, and save state. | Yes |
 | `versions` | Print package versions and available GitHub release updates. | No |
 | `lock` | Resolve and write a JSON lock file. | Lock file only |
 
 Useful shared options:
 
-- `--config FILE`: path to the YAML profile; required for `plan`, `apply`,
-  `versions`, and `lock`.
+- `--config FILE`: path to the YAML profile. Defaults to `config.yaml` in the
+  current directory.
 - `--state FILE`: override the profile state file for apply.
 - `--reset-state`: ignore saved execution state and start fresh for apply.
 - `--verbose`: show additional command diagnostics.
@@ -118,7 +116,6 @@ Useful shared options:
 
 `apply` also accepts:
 
-- `--yes`: confirm apply actions, including sudo symlinks.
 - `--locked`: require a compatible JSON lock file before applying.
 - `--lock-file FILE`: path to the JSON lock file used by `--locked`.
 
@@ -130,9 +127,9 @@ Useful shared options:
 Exit codes:
 
 - `0`: command completed successfully, including help and plan commands.
-- `1`: manifest loading or resolution failed, selection was invalid,
-  confirmation was missing, apply failed, or state persistence failed.
-- `2`: command-line usage error, including a missing required `--config`.
+- `1`: manifest loading or resolution failed, selection was invalid, apply
+  failed, or state persistence failed.
+- `2`: command-line usage error.
 
 ## State And Resume
 

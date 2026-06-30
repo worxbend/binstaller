@@ -44,9 +44,8 @@ and command output consumes resolved plans or renderer-agnostic events.
 4. `ToolSelection` applies `--only` first and `--skip` second while preserving
    manifest order.
 5. `plan` renders the selected `ResolvedPlan` directly as script-friendly text.
-6. `apply` checks confirmation and state compatibility, executes
-   each selected tool, writes apply state after terminal tool results, and emits
-   `InstallerEvent` values.
+6. `apply` checks state compatibility, executes each selected tool, writes apply
+   state after terminal tool results, and emits `InstallerEvent` values.
 7. CLI apply progress consumes the event contract to keep a compact progress
    line and summary without changing core execution behavior.
 
@@ -55,7 +54,7 @@ and command output consumes resolved plans or renderer-agnostic events.
 The supported executable surface is intentionally small:
 
 - `plan`: resolve and render the selected plan without writing.
-- `apply --yes`: perform a confirmed apply when policy requires confirmation.
+- `apply`: perform an install apply.
 - `versions`: print a package/version summary table and show newer GitHub
   release versions when available.
 - `lock`: resolve and write reproducible lock metadata.
@@ -83,6 +82,8 @@ Current phases are `Resolving`, `Planning`, `LoadingState`, `Downloading`,
 - `plan`, `apply`, and `versions` output remains script-friendly.
 - GitHub latest-release lookup failures do not turn version reporting into a
   failed command.
+- CLI commands default to `./config.yaml` from the process current directory
+  when `--config` is omitted.
 - `plan` does not touch install directories or state files.
 - Apply state is filename-only in the current working directory.
 - Manifest installer scripts are unsupported and rejected during config loading.

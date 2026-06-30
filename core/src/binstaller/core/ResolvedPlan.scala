@@ -52,11 +52,11 @@ final case class ResolvedPolicy(
 enum PolicyAllowance:
   case Allowed, Rejected
 
-/** Whether apply requires explicit confirmation. */
+/** Legacy manifest confirmation setting retained for profile compatibility. */
 enum RequireConfirmation:
   case Enabled, Disabled
 
-/** Helpers for converting manifest booleans into confirmation policy. */
+/** Helpers for converting manifest booleans into the compatibility setting. */
 object RequireConfirmation:
   /** Convert a manifest boolean into [[RequireConfirmation]]. */
   def fromBoolean(value: Boolean): RequireConfirmation = if value then Enabled else Disabled

@@ -2,21 +2,15 @@ package binstaller.core
 
 /** Expected failure before an apply run is allowed to perform side effects. */
 enum ApplyPreflightError:
-  case ConfirmationRequired
   case SudoSymlinkNotAllowed(toolName: String)
-  case SudoSymlinkConfirmationRequired(toolName: String)
 
 /** Rendering helpers for expected apply preflight failures. */
 object ApplyPreflightError:
 
   /** Render a preflight failure into a concise user-facing line. */
   def render(error: ApplyPreflightError): String = error match
-    case ApplyPreflightError.ConfirmationRequired =>
-      "apply requires confirmation by policy.requireConfirmation; rerun apply with --yes"
     case ApplyPreflightError.SudoSymlinkNotAllowed(toolName) =>
       s"failed $toolName: sudo symlinks are not allowed by policy.allowSudoSymlinks"
-    case ApplyPreflightError.SudoSymlinkConfirmationRequired(toolName) =>
-      s"failed $toolName: sudo symlinks require apply confirmation; rerun apply with --yes"
 
 /** Expected failure while installing one tool. */
 enum ToolInstallError:
@@ -36,7 +30,6 @@ enum ToolInstallError:
   case MissingExecutable(toolName: String, path: String)
   case SymlinkFailed(toolName: String, path: String, target: String, message: String)
   case SudoSymlinkNotAllowed(toolName: String)
-  case SudoSymlinkConfirmationRequired(toolName: String)
   case SudoCredentialCanceled(toolName: String, path: String, target: String)
   case SudoCredentialsUnavailable(toolName: String, path: String, target: String, message: String)
 
@@ -54,7 +47,6 @@ object ToolInstallError:
     case ToolInstallError.MissingExecutable(toolName, _)                => toolName
     case ToolInstallError.SymlinkFailed(toolName, _, _, _)              => toolName
     case ToolInstallError.SudoSymlinkNotAllowed(toolName)               => toolName
-    case ToolInstallError.SudoSymlinkConfirmationRequired(toolName)     => toolName
     case ToolInstallError.SudoCredentialCanceled(toolName, _, _)        => toolName
     case ToolInstallError.SudoCredentialsUnavailable(toolName, _, _, _) => toolName
 
@@ -112,8 +104,6 @@ object ToolInstallError:
       )
     case ToolInstallError.SudoSymlinkNotAllowed(_) =>
       "sudo symlinks are not allowed by policy.allowSudoSymlinks"
-    case ToolInstallError.SudoSymlinkConfirmationRequired(_) =>
-      "sudo symlinks require apply confirmation; rerun apply with --yes"
     case ToolInstallError.SudoCredentialCanceled(toolName, path, target) => detailBlock(
         s"sudo credentials canceled for $target -> $path",
         Vector(

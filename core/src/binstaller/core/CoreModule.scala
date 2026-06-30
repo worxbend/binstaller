@@ -47,7 +47,6 @@ final case class InstallerOptions(
     resetState: ResetState,
     verboseOutput: VerboseOutput,
     selection: ToolSelection = ToolSelection.all,
-    applyConfirmation: ApplyConfirmation = ApplyConfirmation.Disabled,
     lockPath: String = LockOptions.defaultOutputPath,
     lockedApply: LockedApplyMode = LockedApplyMode.Disabled
 )
@@ -62,15 +61,6 @@ final case class ToolSelection(only: Vector[String], skip: Vector[String])
 object ToolSelection:
   /** Select every resolved tool. */
   def all: ToolSelection = ToolSelection(Vector.empty, Vector.empty)
-
-/** Whether the user confirmed apply side effects. */
-enum ApplyConfirmation:
-  case Enabled, Disabled
-
-/** Helpers for converting CLI flags into apply confirmation. */
-object ApplyConfirmation:
-  /** Convert a boolean CLI flag into [[ApplyConfirmation]]. */
-  def fromFlag(value: Boolean): ApplyConfirmation = if value then Enabled else Disabled
 
 /** Boundary service consumed by CLI commands and tests. */
 trait BinaryInstallerService:
@@ -186,12 +176,10 @@ final class DirectBinaryInstaller(
   /** Install every tool in a plan and render terminal result lines. */
   def installPlan(
       plan: ResolvedPlan,
-      applyConfirmation: ApplyConfirmation = ApplyConfirmation.Disabled,
       verboseOutput: VerboseOutput = VerboseOutput.Disabled,
       progressObserver: BinaryDownloadProgressObserver = BinaryDownloadProgressObserver.none
   ): InstallerResult = installPlanWithObserver(
     plan,
-    applyConfirmation,
     verboseOutput,
     _ => Right(()),
     InstallerEventContext.start(InstallerEventObserver.fromDownloadProgress(progressObserver))
@@ -199,11 +187,10 @@ final class DirectBinaryInstaller(
 
   private[core] def installPlanWithObserver(
       plan: ResolvedPlan,
-      applyConfirmation: ApplyConfirmation,
       verboseOutput: VerboseOutput,
       terminalObserver: TerminalToolResult => Either[String, Unit],
       eventContext: InstallerEventContext
-  ): InstallerResult = preflight(plan, applyConfirmation) match
+  ): InstallerResult = preflight(plan) match
     case Some(error) => InstallerResult(Vector(ApplyPreflightError.render(error)), 1)
     case None        =>
       val observed = installTools(
@@ -224,28 +211,13 @@ final class DirectBinaryInstaller(
 
       InstallerResult(lines, exitCode)
 
-  private def preflight(
-      plan: ResolvedPlan,
-      applyConfirmation: ApplyConfirmation
-  ): Option[ApplyPreflightError] = applyConfirmation match
-    case ApplyConfirmation.Disabled
-        if plan.policy.requireConfirmation == RequireConfirmation.Enabled =>
-      Some(ApplyPreflightError.ConfirmationRequired)
-    case _ => sudoPreflight(plan, applyConfirmation)
-
-  private def sudoPreflight(
-      plan: ResolvedPlan,
-      applyConfirmation: ApplyConfirmation
-  ): Option[ApplyPreflightError] = plan.tools
+  private def preflight(plan: ResolvedPlan): Option[ApplyPreflightError] = plan.tools
     .find(_.symlinks.exists(_.privilege == SymlinkPrivilege.Sudo))
     .flatMap: tool =>
       plan.policy.allowSudoSymlinks match
         case AllowSudoSymlinks.Disabled =>
           Some(ApplyPreflightError.SudoSymlinkNotAllowed(tool.name))
-        case AllowSudoSymlinks.Enabled => applyConfirmation match
-            case ApplyConfirmation.Enabled  => None
-            case ApplyConfirmation.Disabled =>
-              Some(ApplyPreflightError.SudoSymlinkConfirmationRequired(tool.name))
+        case AllowSudoSymlinks.Enabled => None
 
   private def installTools(
       policy: ResolvedPolicy,
@@ -312,9 +284,8 @@ final class DirectBinaryInstaller(
       terminal: TerminalToolResult,
       redactions: SensitiveValueRedactions
   ): Vector[String] = terminal match
-    case TerminalToolResult.Completed(_, _, provenance) =>
-      UrlProvenance.redirectDetailLines("download", provenance, redactions) :+
-        TerminalToolResult.line(terminal, redactions)
+    case TerminalToolResult.Completed(_, _, _) =>
+      Vector(TerminalToolResult.line(terminal, redactions))
     case TerminalToolResult.Failed(_, _) => Vector(TerminalToolResult.line(terminal, redactions))
 
   /** Install a single tool without sudo symlink support. Intended for focused tests and helpers. */
@@ -631,34 +602,9 @@ private object StatefulApplyRunner:
       installer: DirectBinaryInstaller,
       stateStore: ApplyStateStore,
       eventContext: InstallerEventContext
-  ): InstallerResult = confirmationPreflight(options, prepared.plan) match
-    case Some(result) => result
-    case None => runAfterConfirmation(options, prepared, installer, stateStore, eventContext)
-
-  private def confirmationPreflight(
-      options: InstallerOptions,
-      plan: ResolvedPlan
-  ): Option[InstallerResult] = options.applyConfirmation match
-    case ApplyConfirmation.Disabled
-        if plan.policy.requireConfirmation == RequireConfirmation.Enabled =>
-      Some(InstallerResult(
-        Vector(
-          "apply requires confirmation by policy.requireConfirmation; rerun apply with --yes"
-        ),
-        1
-      ))
-    case _ => None
-
-  private def runAfterConfirmation(
-      options: InstallerOptions,
-      prepared: PreparedPlan,
-      installer: DirectBinaryInstaller,
-      stateStore: ApplyStateStore,
-      eventContext: InstallerEventContext
   ): InstallerResult = statePath(options, prepared.plan) match
     case None => installer.installPlanWithObserver(
         prepared.plan,
-        options.applyConfirmation,
         options.verboseOutput,
         _ => Right(()),
         eventContext
@@ -757,7 +703,6 @@ private object StatefulApplyRunner:
       )
     val result = installer.installPlanWithObserver(
       pendingPlan,
-      options.applyConfirmation,
       options.verboseOutput,
       terminalObserver,
       eventContext

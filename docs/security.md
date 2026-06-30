@@ -103,7 +103,6 @@ Sudo is available only for symlink creation. It requires all of the following:
 
 - The manifest declares `policy.allowSudoSymlinks: true`.
 - The symlink entry sets `sudo: true`.
-- Apply is confirmed with CLI `--yes`.
 - The sudo symlink destination path is absolute.
 
 Ordinary downloads, archive extraction, executable checks, local symlinks, and
@@ -127,15 +126,15 @@ tool failure for the current privileged symlink. It does not cancel the whole
 process by itself; existing `continueOnError` behavior determines whether later
 tools continue.
 
-## Selection And Confirmation
+## Selection And Apply
 
 CLI selection uses `--only` and `--skip`. The selected names are converted to
 core `ToolSelection` before plan rendering, lock generation, or apply. Plan
 must not download, replace installs, create symlinks, or write state.
 
-Real apply requires `--yes` when the manifest policy has
-`requireConfirmation: true`. Without confirmation, core apply fails before
-downloads, install replacement, symlinks, or state writes.
+CLI apply is confirmed by default. Running `apply` performs downloads, install
+replacement, symlinks, and state writes subject to manifest policy and selected
+tools.
 
 ## State-File Policy
 

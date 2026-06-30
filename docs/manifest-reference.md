@@ -50,7 +50,8 @@ the default render and apply order.
 - `appsDir`: root directory that resolved install directories must stay under.
 - `continueOnError`: when `true`, apply continues after a failed tool and still
   exits nonzero if any tool failed.
-- `requireConfirmation`: when `true`, apply requires `--yes`.
+- `requireConfirmation`: accepted for profile compatibility. CLI apply is
+  confirmed by default.
 - `allowSudoSymlinks`: must be `true` before any plan entry may declare
   `sudo: true` symlinks.
 - `stateFile`: optional current-directory filename used by apply resume.
@@ -232,7 +233,7 @@ symlinks:
     target: bin/lazygit
 ```
 
-Sudo symlinks require `policy.allowSudoSymlinks: true` and `apply --yes`:
+Sudo symlinks require `policy.allowSudoSymlinks: true`:
 
 ```yaml
 symlinks:
@@ -249,8 +250,8 @@ Apply executes privileged symlinks as structured argv equivalent to
 Selection is a command option, not a manifest field.
 
 ```bash
-binstaller plan --config config.example.yaml --only yazi
-binstaller apply --config config.example.yaml --skip neovim --yes
+binstaller plan --only yazi
+binstaller apply --skip neovim
 ```
 
 `--only` and `--skip` may be repeated. `--only` is applied first, `--skip` is

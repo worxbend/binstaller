@@ -457,8 +457,7 @@ object CoreModuleTest extends TestSuite:
           configPath = config.toString,
           statePath = None,
           resetState = ResetState.Disabled,
-          verboseOutput = VerboseOutput.Disabled,
-          applyConfirmation = ApplyConfirmation.Enabled
+          verboseOutput = VerboseOutput.Disabled
         )
       )
 
@@ -486,9 +485,7 @@ object CoreModuleTest extends TestSuite:
 
     test("versions output includes package version summary table"):
       val service = BinaryInstallerService.resolving(FakeHttpTextClient("v1.34.0"))
-      val result  = service.versions(
-        applyOptions(exampleConfigPath).copy(applyConfirmation = ApplyConfirmation.Disabled)
-      )
+      val result  = service.versions(applyOptions(exampleConfigPath))
 
       assert(result.exitCode == 0)
       assert(result.lines.exists(line =>
@@ -764,7 +761,6 @@ object CoreModuleTest extends TestSuite:
 
       val result = service.apply(
         applyOptions(config).copy(
-          applyConfirmation = ApplyConfirmation.Enabled,
           lockPath = lockPath.toString,
           lockedApply = LockedApplyMode.Enabled
         )
@@ -798,7 +794,6 @@ object CoreModuleTest extends TestSuite:
 
       val result = service.apply(
         applyOptions(config).copy(
-          applyConfirmation = ApplyConfirmation.Enabled,
           lockPath = lockPath.toString,
           lockedApply = LockedApplyMode.Enabled
         )
@@ -837,7 +832,6 @@ object CoreModuleTest extends TestSuite:
 
       val result = service.apply(
         applyOptions(config).copy(
-          applyConfirmation = ApplyConfirmation.Enabled,
           lockPath = lockPath.toString,
           lockedApply = LockedApplyMode.Enabled
         )
@@ -847,20 +841,16 @@ object CoreModuleTest extends TestSuite:
       assert(result.lines.exists(_.contains("is missing")))
       assert(!Files.exists(installDir))
 
-    test("apply requires yes when policy requireConfirmation is true"):
+    test("apply is confirmed by default when policy requireConfirmation is true"):
       val tempRoot   = Files.createTempDirectory("binstaller-core-confirm")
       val installDir = tempRoot.resolve("alpha")
       val config     = writeConfig(tempRoot, directBinaryYaml(installDir))
       val service    = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
 
-      val result =
-        service.apply(applyOptions(config).copy(applyConfirmation = ApplyConfirmation.Disabled))
+      val result = service.apply(applyOptions(config))
 
-      assert(result.exitCode == 1)
-      assert(result.lines == Vector(
-        "apply requires confirmation by policy.requireConfirmation; rerun apply with --yes"
-      ))
-      assert(!Files.exists(installDir))
+      assert(result.exitCode == 0)
+      assert(Files.exists(installDir.resolve("bin/alpha")))
 
     test("continueOnError false stops apply after the first failed tool"):
       val tempRoot = Files.createTempDirectory("binstaller-core-stop-on-error")
@@ -1124,7 +1114,7 @@ object CoreModuleTest extends TestSuite:
         InstallFileSystem.nio
       )
 
-      val result = installer.installPlan(plan, ApplyConfirmation.Enabled)
+      val result = installer.installPlan(plan)
       val output = result.lines.mkString("\n")
 
       assert(result.exitCode == 1)
@@ -1165,7 +1155,7 @@ object CoreModuleTest extends TestSuite:
         RecordingInstallFileSystem(stagedFiles = Vector("bin/alpha"))
       )
 
-      val result = installer.installPlan(plan, ApplyConfirmation.Enabled)
+      val result = installer.installPlan(plan)
       val output = result.lines.mkString("\n")
 
       assert(result.exitCode == 1)
@@ -1174,7 +1164,7 @@ object CoreModuleTest extends TestSuite:
       ))
       assert(!output.contains(secret))
 
-    test("apply output and state record redirected download provenance"):
+    test("apply output omits redirected download provenance while state records it"):
       val tempRoot   = Files.createTempDirectory("binstaller-core-download-redirect-state")
       val config     = writeConfig(tempRoot, directBinaryYaml(tempRoot.resolve("alpha")))
       val stateStore = RecordingApplyStateStore(ApplyStateStore.nio(tempRoot))
@@ -1196,13 +1186,12 @@ object CoreModuleTest extends TestSuite:
       val result = service.apply(applyOptions(config).copy(statePath = Some("redirect.state.json")))
 
       assert(result.exitCode == 0)
-      assert(result.lines.exists(_ == "download final url: https://cdn.example.invalid/alpha"))
-      assert(result.lines.exists(_.contains(
-        "download redirects: 302 https://example.invalid/alpha -> https://cdn.example.invalid/alpha"
-      )))
+      assert(!result.lines.exists(_.startsWith("download initial url:")))
+      assert(!result.lines.exists(_.startsWith("download final url:")))
+      assert(!result.lines.exists(_.startsWith("download redirects:")))
       assert(stateStore.savedStates.last.tools.head.download.contains(download))
 
-    test("apply output redacts sensitive redirected URLs"):
+    test("apply output omits sensitive redirected URLs"):
       val secret   = "secret-token-value"
       val download = UrlProvenance(
         "https://example.invalid/alpha",
@@ -1229,13 +1218,13 @@ object CoreModuleTest extends TestSuite:
         RecordingInstallFileSystem(stagedFiles = Vector("bin/alpha"))
       )
 
-      val result = installer.installPlan(plan, ApplyConfirmation.Enabled)
+      val result = installer.installPlan(plan)
       val output = result.lines.mkString("\n")
 
       assert(result.exitCode == 0)
-      assert(output.contains("download final url: https://cdn.example.invalid/<redacted>/alpha"))
       assert(!output.contains(secret))
-      assert(output.contains("<redacted>"))
+      assert(!output.contains("download final url:"))
+      assert(!output.contains("download redirects:"))
 
     test("failed replacement restores previous install directory"):
       val tempRoot     = Files.createTempDirectory("binstaller-core-rollback")
@@ -1289,7 +1278,7 @@ object CoreModuleTest extends TestSuite:
       assert(Files.readSymbolicLink(installDir.resolve("bin/a")) ==
         installDir.toAbsolutePath.normalize().resolve("bin/alpha"))
 
-    test("sudo symlink apply requires policy and apply confirmation before writes"):
+    test("sudo symlink apply requires policy before writes"):
       val tempRoot        = Files.createTempDirectory("binstaller-core-sudo-gate")
       val installDir      = tempRoot.resolve("alpha")
       val commandExecutor = RecordingCommandExecutor()
@@ -1302,21 +1291,21 @@ object CoreModuleTest extends TestSuite:
         ResolvedPolicy(
           tempRoot.toString,
           None,
-          AllowSudoSymlinks.Enabled,
+          AllowSudoSymlinks.Disabled,
           RequireConfirmation.Disabled,
           ContinueOnError.Disabled
         ),
         Vector(sudoSymlinkTool(installDir))
       )
 
-      val result = installer.installPlan(plan, ApplyConfirmation.Disabled)
+      val result = installer.installPlan(plan)
 
       assert(result.exitCode == 1)
-      assert(result.lines.exists(_.contains("--yes")))
+      assert(result.lines.exists(_.contains("policy.allowSudoSymlinks")))
       assert(commandExecutor.commands.isEmpty)
       assert(!Files.exists(installDir))
 
-    test("sudo symlink apply uses structured argv after policy and confirmation"):
+    test("sudo symlink apply uses structured argv after policy allowance"):
       val tempRoot        = Files.createTempDirectory("binstaller-core-sudo-apply")
       val installDir      = tempRoot.resolve("alpha")
       val commandExecutor = RecordingCommandExecutor()
@@ -1339,7 +1328,7 @@ object CoreModuleTest extends TestSuite:
         Vector(sudoSymlinkTool(installDir))
       )
 
-      val result = installer.installPlan(plan, ApplyConfirmation.Enabled)
+      val result = installer.installPlan(plan)
 
       assert(result.exitCode == 0)
       assert(credentials.requests.isEmpty)
@@ -1380,7 +1369,7 @@ object CoreModuleTest extends TestSuite:
         Vector(sudoSymlinkTool(installDir))
       )
 
-      val result = installer.installPlan(plan, ApplyConfirmation.Enabled)
+      val result = installer.installPlan(plan)
 
       assert(result.exitCode == 0)
       assert(credentials.requests == Vector(SudoCredentialRequest(
@@ -1432,7 +1421,7 @@ object CoreModuleTest extends TestSuite:
         Vector(sudoSymlinkTool(alphaInstall), beta)
       )
 
-      val result = installer.installPlan(plan, ApplyConfirmation.Enabled)
+      val result = installer.installPlan(plan)
 
       assert(result.exitCode == 1)
       assert(result.lines.exists(_.contains("sudo credentials canceled")))
@@ -1462,7 +1451,7 @@ object CoreModuleTest extends TestSuite:
         Vector(sudoSymlinkTool(installDir))
       )
 
-      val result = installer.installPlan(plan, ApplyConfirmation.Enabled)
+      val result = installer.installPlan(plan)
 
       assert(result.exitCode == 1)
       assert(result.lines.mkString("\n").contains("<redacted>"))
@@ -1906,8 +1895,7 @@ object CoreModuleTest extends TestSuite:
     configPath = config.toString,
     statePath = None,
     resetState = ResetState.Disabled,
-    verboseOutput = VerboseOutput.Disabled,
-    applyConfirmation = ApplyConfirmation.Enabled
+    verboseOutput = VerboseOutput.Disabled
   )
 
   private def writeLock(path: Path, lockFile: LockFile): Unit =
