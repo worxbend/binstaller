@@ -466,3 +466,14 @@ baseline and close the remaining gaps in this order:
   deterministic TUI tests. Validation passed after formatting: `./mill
   tui.test`, `./mill __.compile`, and `./mill
   mill.scalalib.scalafmt/checkFormatAll`.
+- 2026-06-30: Validation iteration 46 completed T004, the execution-rendering
+  checkpoint after T002/T003. No source or test fixes were required. Focused
+  config/core/CLI/TUI tests, recursive compile/test, scalafmt check, app help
+  and command smokes, static first-class TUI smoke, JSON validation, and
+  whitespace checks all passed. Full logs are in
+  `.agent-loop/validations/validation-46-20260630-120535/`.
+- The T004 static TUI smoke rendered the first-class `tui --config` frame and
+  printed `non-interactive terminal detected; rendered a static TUI frame`,
+  so it did not enter raw mode in this shell. Environment blockers remain
+  explicit: `command -v native-image` exits 1, `java -version` reports OpenJDK
+  25.0.3, and `test -t 0` exits 1.
