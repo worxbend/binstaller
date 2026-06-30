@@ -140,19 +140,32 @@ object TuiModuleTest extends TestSuite:
       val pendingPlain = stripAnsi(pending)
 
       assert(pendingPlain.contains("activity |"))
-      assert(pendingPlain.contains("progress indeterminate"))
+      assert(pendingPlain.contains("progress"))
+      assert(pendingPlain.contains("bytes pending"))
       assert(plain.contains("Execution [active]"))
       assert(plain.contains("activity"))
       assert(plain.indexOf("alpha") < plain.indexOf("beta"))
       assert(plain.contains("beta"))
       assert(plain.contains("pending"))
+      assert(plain.contains("█████████░░░░░░░░░ 50%"))
       assert(plain.contains("current tool alpha"))
       assert(plain.contains("phase Downloading"))
       assert(plain.contains("elapsed 300ms"))
       assert(plain.contains("512 B/1.0 KiB"))
+      assert(!plain.contains("download advanced"))
       assert(plain.contains("alpha: extracting selected archive paths"))
       assert(!plain.contains("q/Ctrl+C quit"))
       assert(!plain.contains("Plan ["))
+
+    test("unknown-size download progress uses deterministic indeterminate frames"):
+      val frameOne = ExecutionTuiRenderer.progressText(Some(512L), None, frame = 3)
+      val frameTwo = ExecutionTuiRenderer.progressText(Some(512L), None, frame = 4)
+
+      assert(frameOne != frameTwo)
+      assert(frameOne.contains("512 B / unknown"))
+      assert(frameTwo.contains("512 B / unknown"))
+      assert(!frameOne.contains("/0 B"))
+      assert(!frameOne.contains("100%"))
 
     test("execution state preserves seeded candidate order and focuses failed rows"):
       val fixture = writeFixture()
@@ -226,6 +239,53 @@ object TuiModuleTest extends TestSuite:
       assert(plain.contains("activity | current tool alp"))
       assert(plain.contains("50%"))
 
+    test("download progress ticks update status without noisy advanced logs"):
+      val fixture = writeFixture()
+      val state   = ExecutionTuiState
+        .initial(
+          TuiRequest(TuiMode.Apply, fixture.options),
+          ExecutionTuiSettings.fromPlanning(testSettings(height = 42))
+        )
+        .onEvent(InstallerEvent.ToolStarted("alpha", InstallerPhase.Downloading, elapsed(20)))
+        .onEvent(InstallerEvent.DownloadProgress(
+          "alpha",
+          fixture.longUrl,
+          0L,
+          None,
+          DownloadProgressStatus.Started,
+          elapsed(30)
+        ))
+        .onEvent(InstallerEvent.DownloadProgress(
+          "alpha",
+          fixture.longUrl,
+          256L,
+          None,
+          DownloadProgressStatus.Advanced,
+          elapsed(40)
+        ))
+        .onEvent(InstallerEvent.DownloadProgress(
+          "alpha",
+          fixture.longUrl,
+          512L,
+          None,
+          DownloadProgressStatus.Advanced,
+          elapsed(50)
+        ))
+        .onEvent(InstallerEvent.DownloadProgress(
+          "alpha",
+          fixture.longUrl,
+          512L,
+          None,
+          DownloadProgressStatus.Finished,
+          elapsed(60)
+        ))
+      val plain = stripAnsi(ExecutionTuiRenderer.render(state.toModel).mkString("\n"))
+
+      assert(plain.contains("512 B / unknown"))
+      assert(plain.contains("alpha: download started 0 B"))
+      assert(plain.contains("alpha: download finished 512 B"))
+      assert(!plain.contains("download advanced"))
+
     test("execution state accepts resize inputs and renders within narrow bounds"):
       val fixture = writeFixture(longValues = true)
       val state   = ExecutionTuiState
@@ -267,11 +327,17 @@ object TuiModuleTest extends TestSuite:
           Some("checksum mismatch: expected abc got def"),
           elapsed(1500)
         ))
+        .onEvent(InstallerEvent.ToolSkipped(
+          "gamma",
+          "already completed in state",
+          Some(fixture.stateFile.toString),
+          elapsed(1550)
+        ))
         .onEvent(InstallerEvent.Summary(
           InstallerRunStatus.Failed,
           installed = 1,
           failed = 1,
-          skipped = 0,
+          skipped = 1,
           exitCode = 1,
           stateFilePath = Some(fixture.stateFile.toString),
           elapsedTime = elapsed(1600)
@@ -281,10 +347,14 @@ object TuiModuleTest extends TestSuite:
 
       assert(plain.contains("ok alpha"))
       assert(plain.contains("fail beta"))
+      assert(plain.contains("skipped"))
       assert(plain.contains("checksum mismatch"))
-      assert(plain.contains("failed | installed 1 | failed 1 | skipped 0 | exit 1"))
+      assert(plain.contains(
+        "failed | completed 1 | failed 1 | skipped 1 | remaining 0 | interrupted 0 | exit 1 | elapsed 1.6s"
+      ))
       assert(rendered.contains("✅ ok"))
       assert(rendered.contains("❌ fail"))
+      assert(rendered.contains("⏭ skipped"))
 
     test("apply execution TUI closes terminal after dry-run success"):
       val fixture  = writeFixture()
@@ -556,7 +626,9 @@ object TuiModuleTest extends TestSuite:
       assert(rendered.contains("1. beta"))
       assert(!rendered.contains("1. alpha"))
       assert(rendered.contains("dry-run selected 1 / 2: beta"))
-      assert(rendered.contains("succeeded | installed 0 | failed 0 | skipped 0 | exit 0"))
+      assert(rendered.contains(
+        "succeeded | completed 0 | failed 0 | skipped 0 | remaining 1 | interrupted 0 | exit 0"
+      ))
       assert(!rendered.contains("Plan ["))
       assert(!Files.exists(fixture.appsDir))
       assert(!Files.exists(dryRunStateFile))

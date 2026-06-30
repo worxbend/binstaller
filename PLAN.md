@@ -454,3 +454,15 @@ baseline and close the remaining gaps in this order:
   scalafmt check found formatting drift after implementation; running
   `./mill mill.scalalib.scalafmt/reformatAll` fixed it before the final
   passing checks.
+- 2026-06-30: Implementation iteration 45 completed T003. Execution progress
+  now keeps known-size download bars in the active row with filled/empty
+  segments, percentage, and byte counts; unknown-size downloads use a
+  deterministic frame-based indeterminate bar without inventing a total.
+  Advanced download ticks update the active row in place without appending log
+  lines for every tick, while start/finish transitions remain visible.
+- T003 final summaries now include completed, failed, skipped, remaining and
+  interrupted counts when row state is available, plus exit code and elapsed
+  time. Completed/failed/skipped row styling remains semantic and is covered by
+  deterministic TUI tests. Validation passed after formatting: `./mill
+  tui.test`, `./mill __.compile`, and `./mill
+  mill.scalalib.scalafmt/checkFormatAll`.

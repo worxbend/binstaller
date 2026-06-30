@@ -608,12 +608,7 @@ final case class ExecutionTuiState(
 
   /** Convert accumulated execution state into a deterministic render model. */
   def toModel: ExecutionTuiModel =
-    val summaryLine = summary.map: value =>
-      val status = value.status match
-        case InstallerRunStatus.Succeeded => "succeeded"
-        case InstallerRunStatus.Failed    => "failed"
-      s"$status | installed ${value.installed} | failed ${value.failed} | " +
-        s"skipped ${value.skipped} | exit ${value.exitCode}"
+    val summaryLine = summary.map(summaryText)
     ExecutionTuiModel(
       viewport = viewport,
       header = ExecutionTuiHeader(
@@ -708,6 +703,11 @@ final case class ExecutionTuiState(
           case DownloadProgressStatus.Started  => "download started"
           case DownloadProgressStatus.Advanced => "download advanced"
           case DownloadProgressStatus.Finished => "download finished"
+        val nextLogs = status match
+          case DownloadProgressStatus.Advanced => logs
+          case _                               => appendLog(
+              s"$toolName: $statusText ${ExecutionTuiRenderer.byteText(downloaded, total)}"
+            )
         val nextRows = upsertRow(activeRow(
           toolName,
           InstallerPhase.Downloading,
@@ -726,9 +726,7 @@ final case class ExecutionTuiState(
           )),
           rows = nextRows,
           focusedRowIndex = focusIndexFor(toolName, nextRows),
-          logs = appendLog(
-            s"$toolName: $statusText ${ExecutionTuiRenderer.byteText(downloaded, total)}"
-          ),
+          logs = nextLogs,
           elapsedTime = elapsed
         )
       case InstallerEvent.LogLine(toolName, line, elapsed) =>
@@ -841,6 +839,21 @@ final case class ExecutionTuiState(
     case None        => ExecutionActiveTool(toolName, phase, None, None, elapsed)
 
   private def appendLog(line: String): Vector[String] = (logs :+ line).takeRight(80)
+
+  private def summaryText(value: InstallerEvent.Summary): String =
+    val status = value.status match
+      case InstallerRunStatus.Succeeded => "succeeded"
+      case InstallerRunStatus.Failed    => "failed"
+    val remaining = rows.count(row =>
+      row.status == PlanningTuiStatus.Inactive || row.status == PlanningTuiStatus.Active
+    )
+    val interrupted = if value.status == InstallerRunStatus.Failed then remaining else 0
+    val rowCounts   =
+      if rows.nonEmpty then s" | remaining $remaining | interrupted $interrupted"
+      else ""
+    s"$status | completed ${value.installed} | failed ${value.failed} | " +
+      s"skipped ${value.skipped}$rowCounts | exit ${value.exitCode} | " +
+      s"elapsed ${ExecutionTuiRenderer.formatDuration(value.elapsedTime)}"
 
   private def seedRows(toolNames: Vector[String]): Vector[ExecutionToolRow] =
     if toolNames.isEmpty then rows
@@ -1203,7 +1216,7 @@ object ExecutionTuiRenderer:
       active.name,
       PlanningTuiStatus.Active,
       s"activity | ⏳ ${spinner(spinnerFrame)} ${active.phase} " +
-        progressText(active.downloadedBytes, active.totalBytes)
+        progressText(active.downloadedBytes, active.totalBytes, spinnerFrame)
     )
 
   private def completedTableRow(row: ExecutionToolRow): ExecutionTableRow =
@@ -1267,7 +1280,7 @@ object ExecutionTuiRenderer:
       Vector(
         s"activity | current tool ${active.name}",
         s"phase ${active.phase} | elapsed ${formatDuration(active.elapsedTime)}",
-        progressText(active.downloadedBytes, active.totalBytes)
+        progressText(active.downloadedBytes, active.totalBytes, model.spinnerFrame)
       )
     ++ model.logs
 
@@ -1276,13 +1289,16 @@ object ExecutionTuiRenderer:
     val operationLimit = (height - recentLogs.size).max(1)
     model.dryRunLines.take(operationLimit) ++ recentLogs
 
-  def progressText(downloadedBytes: Option[Long], totalBytes: Option[Long]): String =
-    downloadedBytes match
-      case Some(downloaded) => totalBytes.filter(_ > 0L) match
-          case Some(total) =>
-            s"${progressBar(downloaded, total)} ${byteText(downloaded, Some(total))}"
-          case None => s"progress bytes ${byteText(downloaded, None)}"
-      case None => s"progress indeterminate ${indeterminateBar} bytes pending"
+  def progressText(
+      downloadedBytes: Option[Long],
+      totalBytes: Option[Long],
+      frame: Int = 0
+  ): String = downloadedBytes match
+    case Some(downloaded) => totalBytes.filter(_ > 0L) match
+        case Some(total) =>
+          s"${progressBar(downloaded, total)} ${byteText(downloaded, Some(total))}"
+        case None => s"progress ${indeterminateBar(frame)} ${byteText(downloaded, None)} / unknown"
+    case None => s"progress ${indeterminateBar(frame)} bytes pending"
 
   private def progressBar(downloadedBytes: Long, totalBytes: Long): String =
     val width  = 18
@@ -1292,7 +1308,14 @@ object ExecutionTuiRenderer:
     val pct    = (ratio * 100.0).round.toInt
     s"${"█" * filled}${"░" * empty} $pct%"
 
-  private def indeterminateBar: String = "░░░░░░░░░░░░░░░░░░"
+  private def indeterminateBar(frame: Int): String =
+    val width  = 18
+    val window = 5
+    val start  = frame.abs % (width + window)
+    val cells  = (0 until width).map: index =>
+      if index >= start - window && index < start then "█"
+      else "░"
+    cells.mkString
 
   private def spinner(frame: Int): String = Vector("|", "/", "-", "\\")(frame.abs % 4)
 
