@@ -501,3 +501,14 @@ baseline and close the remaining gaps in this order:
   `./mill core.test`, `./mill __.compile`, `./mill
   mill.scalalib.scalafmt/checkFormatAll`, `jq empty .agent-loop/tasks.json`,
   and `git diff --check`.
+- 2026-06-30: Validation iteration 49 completed T007, the privilege/password
+  checkpoint after T005/T006. Focused config/core/CLI/TUI tests, recursive
+  compile/test, scalafmt check, command/help smokes, static first-class TUI
+  smoke, JSON validation, and whitespace checks all passed. Full logs are in
+  `.agent-loop/validations/validation-49-20260630-122412/`.
+- The T007 static TUI smoke rendered the first-class `tui --config` frame and
+  printed `non-interactive terminal detected; rendered a static TUI frame`.
+  The validation log scan found no known password sentinel values in current
+  test/smoke output. Local live-TTY password smoke remains manual because
+  `test -t 0` exits 1; `command -v native-image` also exits 1 while
+  `java -version` reports OpenJDK 25.0.3.
