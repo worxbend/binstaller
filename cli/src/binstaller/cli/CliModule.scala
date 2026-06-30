@@ -16,9 +16,6 @@ import binstaller.core.ResetState
 import binstaller.core.RenderSafety
 import binstaller.core.ToolSelection
 import binstaller.core.VerboseOutput
-import binstaller.tui.TuiMode
-import binstaller.tui.TuiModule
-import binstaller.tui.TuiRequest
 import picocli.CommandLine
 import picocli.CommandLine.Option as CliOption
 import picocli.CommandLine.Command
@@ -31,7 +28,7 @@ import java.util.concurrent.Callable
 /** Picocli-backed command boundary for the `binstaller` process. */
 object CliModule:
   /** Module path used by app and tests to identify the CLI layer. */
-  def modulePath: Vector[String] = TuiModule.modulePath :+ "cli"
+  def modulePath: Vector[String] = Vector("config", "core", "cli")
 
   /** Run the CLI with process stdout/stderr. */
   def run(args: Vector[String]): Int = run(
@@ -57,10 +54,6 @@ object CliModule:
     commandLine.addSubcommand(
       "plan",
       subcommandLine(PlanCommand(root, service, out, err), out, err)
-    )
-    commandLine.addSubcommand(
-      "tui",
-      subcommandLine(TuiCommand(root, out, err), out, err)
     )
     commandLine.addSubcommand(
       "apply",
@@ -224,22 +217,6 @@ private final class PlanCommand(
   override def call(): Integer = executeWithOptions(
     _.copy(selection = selection, dryRun = DryRunMode.Enabled),
     service.plan
-  )
-
-@Command(
-  name = "tui",
-  mixinStandardHelpOptions = true,
-  description = Array("Open the interactive terminal UI.")
-)
-private final class TuiCommand(
-    root: BinstallerCommand,
-    out: PrintWriter,
-    err: PrintWriter
-) extends ConfiguredCommand(root, out, err):
-
-  override def call(): Integer = executeWithOptions(
-    _.copy(dryRun = DryRunMode.Enabled),
-    options => TuiModule.start(TuiRequest(TuiMode.Plan, options, Some("tui")))
   )
 
 @Command(

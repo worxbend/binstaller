@@ -4,7 +4,6 @@ import binstaller.config.AllowSudoSymlinks
 import binstaller.config.ArchiveSpec
 import binstaller.config.ChecksumAlgorithm
 import binstaller.config.ConfigLoadError
-import binstaller.config.ConfigModule
 import binstaller.config.ExecutableMode
 import binstaller.config.PolicyMode
 import binstaller.config.SymlinkPrivilege
@@ -91,7 +90,7 @@ enum ResolvedVersion:
 /** Rendering helpers for resolved versions. */
 object ResolvedVersion:
 
-  /** Render a resolved version for CLI/TUI display. */
+  /** Render a resolved version for CLI display. */
   def render(version: ResolvedVersion): String = version match
     case ResolvedVersion.Concrete(value, _)  => value
     case ResolvedVersion.DynamicLatestUrl(_) => "dynamic latest-url"
@@ -174,44 +173,3 @@ object ResolvePlanError:
       Vector(RenderSafety.display(s"config read failed for $path: $message"))
     case ConfigLoadError.ParseFailed(message) =>
       Vector(RenderSafety.display(s"config parse failed: $message"))
-
-/** Snapshot consumed by the TUI without importing config internals. */
-final case class ResolvedPlanSnapshot(
-    profileName: String,
-    manifestKind: String,
-    configPath: String,
-    stateFilePath: Option[String],
-    plan: ResolvedPlan
-)
-
-/** Snapshot resolution helpers for renderers. */
-object ResolvedPlanSnapshot:
-
-  /** Resolve a snapshot using environment-derived resolution options. */
-  def resolve(
-      options: InstallerOptions,
-      httpTextClient: HttpTextClient
-  ): Either[ResolvePlanError, ResolvedPlanSnapshot] = resolve(
-    options,
-    httpTextClient,
-    ResolutionOptions.fromEnvironment()
-  )
-
-  /** Resolve a snapshot with explicit resolution options for tests or alternate runtimes. */
-  def resolve(
-      options: InstallerOptions,
-      httpTextClient: HttpTextClient,
-      resolutionOptions: ResolutionOptions
-  ): Either[ResolvePlanError, ResolvedPlanSnapshot] = ConfigModule.load(options.configPath) match
-    case Left(error)    => Left(ResolvePlanError.ConfigLoadFailed(error))
-    case Right(profile) => PlanResolver
-        .resolve(profile, resolutionOptions, httpTextClient)
-        .flatMap(plan => ToolSelector.select(plan, options.selection))
-        .map: selectedPlan =>
-          ResolvedPlanSnapshot(
-            profileName = profile.metadata.name,
-            manifestKind = profile.kind.value,
-            configPath = options.configPath,
-            stateFilePath = options.statePath.orElse(selectedPlan.policy.stateFile),
-            plan = selectedPlan
-          )

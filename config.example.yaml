@@ -317,7 +317,7 @@ spec:
 
     - name: lazygit
       kind: binary-tool
-      description: Terminal UI for Git.
+      description: Git interface for terminal workflows.
       when:
         os:
           family: linux

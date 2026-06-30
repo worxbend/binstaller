@@ -28,7 +28,7 @@ enum InstallerRunStatus:
 enum DownloadProgressStatus:
   case Started, Advanced, Finished
 
-/** Renderer-agnostic event contract shared by CLI progress and TUI execution views. */
+/** Renderer-agnostic event contract consumed by CLI progress and tests. */
 enum InstallerEvent:
   case ResolvingStarted(configPath: String, elapsedTime: Duration)
 

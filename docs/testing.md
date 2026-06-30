@@ -13,7 +13,6 @@ Focused tests:
 ./mill config.test
 ./mill core.test
 ./mill cli.test
-./mill tui.test
 ```
 
 Broad checks:
@@ -29,12 +28,10 @@ App smokes:
 
 ```bash
 ./mill app.run --help
-./mill app.run tui --help
 ./mill app.run plan --config config.example.yaml
 ./mill app.run apply --config config.example.yaml --dry-run
 ./mill app.run versions --config config.example.yaml
 ./mill app.run lock --help
-./mill app.run tui --config config.example.yaml
 ```
 
 Use `./mill mill.scalalib.scalafmt/reformatAll` to repair formatting.
@@ -82,8 +79,8 @@ rejection, mapping behavior, and previous-install preservation.
 
 ## Terminal Output Assertions
 
-CLI/TUI output includes ANSI styling. Tests normally compare behavior after
-stripping ANSI SGR color sequences:
+CLI output includes ANSI styling. Tests normally compare behavior after stripping
+ANSI SGR color sequences:
 
 ```scala
 private def stripAnsi(output: String): String =
@@ -94,64 +91,9 @@ Use plain-output assertions for text, table content, and progress summaries.
 Keep at least one assertion proving colored output is present when color itself
 is part of the behavior.
 
-For TUI, prefer deterministic state, renderer, input, and terminal-boundary
-tests:
-
-- build `TuiAppState` from a resolved snapshot and assert header, entries,
-  selection, filter, focus, modal, logs, and execution state
-- drive `TuiAppController` or `PlanningTuiSession.run` with explicit
-  `TuiInput` values for keybindings, selection, filtering, modals, and action
-  shortcuts
-- assert selected-entry plan/dry-run/apply actions convert TUI-local selection
-  to core `ToolSelection` only at service boundaries
-- render static browsing and execution models, including normal, narrow, and
-  tiny viewport sizes
-- assert execution rows are pre-seeded in selected candidate order, the active
-  row owns progress/status, failed-row focus controls which root-cause modal
-  opens, and the narrow fallback preserves ordered candidates plus readable
-  lower-info progress
-- assert known-size progress shows bar, percentage, and byte counts; unknown
-  sizes use deterministic indeterminate frames; and advanced progress ticks do
-  not append noisy log lines
-- assert lower info output keeps the table visible for selected details, plan
-  preview, dry-run output, logs, and errors
-- assert log focus and root-cause modal scrolling respond to keyboard and mouse
-  wheel input
-- assert password modal rendering names the operation/tool/destination/target,
-  masks typed input, survives resize, submits through the credential provider,
-  and treats Escape, Ctrl+C, `q`, end-of-input, and `/cancel` plus Enter as
-  cancellation
-- assert password sentinels do not appear in rendered prompt frames, TUI logs,
-  error/root-cause details, command argv/spec diagnostics, installer events, or
-  state files
-- strip ANSI and compare stable substrings
-- use `FakeTuiTerminal` for open/close, render-failure cleanup, resize, Ctrl+C,
-  quit, modal close, and non-interactive fallback assertions
-
-The static TUI smoke command is:
-
-```bash
-./mill app.run tui --config config.example.yaml
-```
-
-In non-interactive shells it should render a TUI-shaped frame plus a clear
-`non-interactive terminal detected` message without entering raw mode or the
-alternate screen.
-
-Live raw-terminal behavior remains manual and is documented in
-`docs/tui-smoke.md`.
-
-Manual live-terminal checks are still required for behavior that depends on a
-real emulator and `/dev/tty`:
-
-- startup into alternate screen and raw mode
-- resize while browsing, execution, logs, root-cause modal, and password modal
-  are visible
-- password entry masking, cancellation, cached-sudo skip, and terminal echo
-  after the prompt closes
-- mouse-wheel log/root-cause scrolling
-- `q`, Ctrl+C, and handled failure cleanup restoring cursor, echo, and the
-  previous shell screen
+Strip ANSI and compare stable substrings for command output. Keep direct
+assertions around in-place progress rendering where carriage returns are part
+of the behavior.
 
 ## No-Write And State Assertions
 

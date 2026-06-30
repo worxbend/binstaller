@@ -16,11 +16,8 @@ boundaries.
   checksum is configured, extracted or staged, and executable paths are verified.
 - Archive member names and mapped targets are untrusted and must remain inside
   staging or install roots.
-- CLI and TUI rendering scrub terminal control characters and redact sensitive
+- CLI rendering scrubs terminal control characters and redacts sensitive
   environment-derived values at display boundaries.
-- TUI modal bodies and log lines are display surfaces. They are sanitized before
-  rendering even when the underlying failure came from process output, config
-  diagnostics, or selected-entry action results.
 - State files are local resume metadata, not a security authority.
 
 ## Unsupported Installer Scripts
@@ -39,10 +36,10 @@ behavior out of the manifest contract.
 
 The remaining external process boundaries are intentionally narrow:
 
-- `sudo -n true`, `sudo -n ln -sfn <target> <path>`, and when a UI supplies a
-  password, `sudo -S -p "" ln -sfn <target> <path>` for privileged symlinks.
+- `sudo -n true`, `sudo -n ln -sfn <target> <path>`, and when an injected
+  credential provider supplies a password,
+  `sudo -S -p "" ln -sfn <target> <path>` for privileged symlinks.
 - `tar -xJf <archive> -C <extractDir>` for the `tar.xz` fallback.
-- `stty` calls in the TUI terminal backend for raw-mode setup and restore.
 
 Core command execution uses argv, not manifest-provided shell strings. Process
 execution has a default 15 minute timeout. Failure messages quote arguments so
@@ -50,7 +47,7 @@ diagnostics preserve argument boundaries.
 
 Password-backed sudo uses modeled secret stdin. The password is not included in
 argv, environment variables, command previews, command diagnostics, installer
-events, apply state, logs, or TUI modals. Command failures redact the secret
+events, apply state, or logs. Command failures redact the secret
 from command messages and captured stdout/stderr before they reach renderers or
 state.
 
@@ -66,8 +63,7 @@ staging and then copies only declared mapped members after path validation, but
 it does not yet provide native pre-extraction metadata inspection. Do not treat
 untrusted `tar.xz` archives as equivalent to native `zip` and `tar.gz` inputs.
 
-Known deferred archive gaps are documented in
-`docs/post-tui-readiness-review.md`.
+Known deferred archive gaps are documented in [Hardening Review](hardening-review.md).
 
 ## Checksum Policy
 
@@ -76,7 +72,7 @@ the checksum before staging replacement.
 
 Missing checksums are currently allowed to support dynamic upstream assets and
 developer convenience. They are surfaced as `not configured`, `missing`, or
-`no-checksum` risk markers in CLI/TUI plan views. Production profiles should add
+`no-checksum` risk markers in CLI plan views. Production profiles should add
 checksums and use `policy.mode: strict`. Strict mode rejects missing checksums
 unless `policy.allowMissingChecksums: true` is explicitly set.
 
@@ -107,8 +103,7 @@ Sudo is available only for symlink creation. It requires all of the following:
 
 - The manifest declares `policy.allowSudoSymlinks: true`.
 - The symlink entry sets `sudo: true`.
-- Non-dry-run apply is confirmed, either with CLI `--yes` or the TUI
-  confirmation modal.
+- Non-dry-run apply is confirmed with CLI `--yes`.
 - The sudo symlink destination path is absolute.
 
 Ordinary downloads, archive extraction, executable checks, local symlinks, and
@@ -121,9 +116,8 @@ The privileged-command flow is:
    `sudo -n ln -sfn <target> <path>` argv and does not request a password.
 3. If the cache probe fails, core asks an injected `SudoCredentialProvider` for
    one password for that privileged operation.
-4. TUI apply supplies that provider with a focused masked password modal. CLI
-   and other non-interactive callers use the unavailable provider unless they
-   inject their own credential boundary.
+4. CLI uses the unavailable provider unless a caller injects its own credential
+   boundary.
 5. The password-backed command uses fixed `sudo -S -p "" ln -sfn <target>
    <path>` argv plus secret stdin.
 
@@ -132,29 +126,16 @@ tool failure for the current privileged symlink. It does not cancel the whole
 process by itself; existing `continueOnError` behavior determines whether later
 tools continue.
 
-## TUI Selection And Confirmation
+## Selection And Confirmation
 
-`binstaller tui` owns checkbox selection inside TUI-local state. The selected
-tool names are converted to core `ToolSelection` only at the action boundary for
-plan preview, dry-run apply, or confirmed real apply. Hidden entries preserved by
-filtering are not executed unless their checkbox remains selected, and visible
-bulk operations affect only the currently visible set.
+CLI selection uses `--only` and `--skip`. The selected names are converted to
+core `ToolSelection` before plan rendering, dry-run apply, lock generation, or
+real apply. Dry-run uses the core dry-run path, so it must not download, replace
+installs, create symlinks, or write state.
 
-Plan preview (`p`) and dry-run (`d`) operate only on selected entries. Dry-run
-uses the core dry-run path, so it must not download, replace installs, create
-symlinks, or write state. If no entries are selected, the TUI opens a
-no-selection modal and does not call the plan/apply service.
-
-Real apply (`r`) first opens an in-frame confirmation modal. Core apply is not
-called with non-dry-run options until the user presses `Enter` in that modal.
-`Escape`, `n`, `q`, or `Ctrl+C` leave the confirmation path without starting
-real apply.
-
-If real apply later needs sudo credentials, the TUI password modal opens inside
-the same terminal workspace. It renders only a masked character count and
-redacted operation context. `Escape`, `Ctrl+C`, `q`, end-of-input, or `/cancel`
-plus `Enter` cancels the credential request and fails only the current
-privileged operation.
+Real apply requires `--yes` when the manifest policy has
+`requireConfirmation: true`. Without confirmation, core apply fails before
+downloads, install replacement, symlinks, or state writes.
 
 ## State-File Policy
 
@@ -176,8 +157,7 @@ Current rules:
 
 Resolution derives redactions from sensitive runtime variable names. Renderers
 scrub display lines, command-output tails, plan output, versions output, apply
-errors, progress labels, state messages, TUI cells, modal bodies, root-cause
-details, and TUI log lines.
+errors, progress labels, and state messages.
 
 Redaction is display-only: raw values are preserved for filesystem and network
 behavior. This prevents corrupting legitimate paths or URLs while reducing
@@ -186,14 +166,13 @@ secret exposure in terminal output.
 Passwords have a stronger guarantee than ordinary display redactions: password
 values are wrapped as secret command input and are never part of the stable
 renderable data model. Tests cover no leakage into command argv/spec strings,
-command diagnostics, installer events, TUI logs, error/root-cause modals, prompt
-frames, or apply state.
+command diagnostics, installer events, or apply state.
 
 Terminal-control scrubbing is also display-only. Untrusted text is collapsed
 into safe terminal lines before rendering so config values, resolver output,
 download diagnostics, command stdout/stderr snippets, and modal details cannot
 inject cursor movement, alternate-screen toggles, color resets, or mouse-mode
-escape sequences into CLI/TUI output.
+escape sequences into CLI output.
 
 ## Remaining Risks
 
@@ -201,15 +180,8 @@ escape sequences into CLI/TUI output.
   chunk boundaries.
 - Missing checksums are still accepted by developer-mode profiles.
 - ZIP external attributes and native `tar.xz` pre-inspection remain deferred.
-- Dry-run and real apply actions inside `binstaller tui` currently run
-  synchronously while rendering execution updates; they do not provide
-  preemptive cancellation for long-running work.
 - Password-prompt cancellation is scoped to the credential request/current
   privileged operation. It is not a general cancellation mechanism for an
   already-running download, extraction, or command.
-- Live raw-terminal password entry, resize during password/root-cause modals,
-  and terminal cleanup require a real interactive terminal for manual
-  validation; deterministic tests cover state, rendering, redaction, and fake
-  terminal cleanup.
 - Native image validation is environment-bound when `native-image` is not
   installed locally; the release workflow remains the native build boundary.

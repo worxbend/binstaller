@@ -27,8 +27,7 @@ The GitHub Actions job:
 5. Runs `./mill __.test`.
 6. Builds `./mill app.nativeImage`.
 7. Copies the native executable to `dist/binstaller-linux-amd64`.
-8. Smokes native `--help`, `plan`, `apply --dry-run`, and static
-   `tui --config`.
+8. Smokes native `--help`, `plan`, and `apply --dry-run`.
 9. Creates `binstaller-linux-amd64.tar.gz`.
 10. Writes `SHA256SUMS`.
 11. Publishes the GitHub Release assets.
@@ -41,23 +40,17 @@ Before tagging, run:
 ./mill config.test
 ./mill core.test
 ./mill cli.test
-./mill tui.test
 ./mill __.compile
 ./mill __.test
 ./mill app.run --help
-./mill app.run tui --help
 ./mill app.run plan --config config.example.yaml
 ./mill app.run apply --config config.example.yaml --dry-run
 ./mill app.run versions --config config.example.yaml
 ./mill app.run lock --help
-./mill app.run tui --config config.example.yaml
 ./mill mill.scalalib.scalafmt/checkFormatAll
 git diff --check
 jq empty .agent-loop/tasks.json
 ```
-
-Run the manual TUI smoke in a real terminal when changing terminal lifecycle,
-input parsing, focus behavior, scrolling, or execution rendering.
 
 ## Native Smoke Checks
 
@@ -70,7 +63,6 @@ native_path="$(find out/app/nativeImage.dest -maxdepth 1 -type f -name native-ex
 "$native_path" plan --config config.example.yaml
 "$native_path" apply --config config.example.yaml --dry-run
 "$native_path" versions --config config.example.yaml
-"$native_path" tui --config config.example.yaml
 ```
 
 If local native image is blocked, record `command -v native-image` and
@@ -92,7 +84,6 @@ chmod +x dist/binstaller-linux-amd64
 ./dist/binstaller-linux-amd64 plan --config config.example.yaml
 ./dist/binstaller-linux-amd64 apply --config config.example.yaml --dry-run
 ./dist/binstaller-linux-amd64 versions --config config.example.yaml
-./dist/binstaller-linux-amd64 tui --config config.example.yaml
 ```
 
 Do not run non-dry-run apply against a real profile during release smoke unless

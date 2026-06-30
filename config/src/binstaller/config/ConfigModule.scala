@@ -33,7 +33,7 @@ enum ConfigLoadError:
   case ParseFailed(message: String)
   case ValidationFailed(errors: Vector[ValidationError])
 
-/** A manifest validation error with a YAML-like path suitable for CLI/TUI display. */
+/** A manifest validation error with a YAML-like path suitable for CLI display. */
 final case class ValidationError(path: String, message: String)
 
 /** Root manifest for the supported binary-distribution profile schema. */

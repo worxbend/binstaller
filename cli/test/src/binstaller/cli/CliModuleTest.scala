@@ -31,7 +31,7 @@ object CliModuleTest extends TestSuite:
 
   val tests: Tests = Tests:
     test("module path includes upstream modules"):
-      assert(CliModule.modulePath == Vector("config", "core", "tui", "cli"))
+      assert(CliModule.modulePath == Vector("config", "core", "cli"))
 
     test("help describes the binstaller binary installer"):
       val result = runCli(Vector("--help"))
@@ -44,7 +44,6 @@ object CliModuleTest extends TestSuite:
       val result = runCli(Vector("--help"))
 
       assert(result.out.contains("plan"))
-      assert(result.out.contains("tui"))
       assert(result.out.contains("apply"))
       assert(result.out.contains("versions"))
       assert(result.out.contains("lock"))
@@ -55,30 +54,17 @@ object CliModuleTest extends TestSuite:
       assert(!result.out.contains("apt"))
       assert(!result.out.contains("dotfiles"))
       assert(!result.out.contains("Nerd Fonts"))
-      assert(!result.out.contains("TUI"))
 
-    test("tui help advertises inherited shared options"):
-      val result = runCli(Vector("tui", "--help"))
-
-      assert(result.exitCode == 0)
-      assert(result.out.contains("Open the interactive terminal UI."))
-      assert(result.out.contains("--config"))
-      assert(result.out.contains("--state"))
-      assert(result.out.contains("--reset-state"))
-      assert(result.out.contains("--verbose"))
-
-    test("plan help does not advertise transitional tui flag"):
+    test("plan help describes non-mutating output"):
       val result = runCli(Vector("plan", "--help"))
 
       assert(result.exitCode == 0)
-      assert(!result.out.contains("--tui"))
       assert(result.out.contains("Render the binary installer plan without changing files."))
 
-    test("apply help does not advertise transitional tui flag"):
+    test("apply help describes apply output"):
       val result = runCli(Vector("apply", "--help"))
 
       assert(result.exitCode == 0)
-      assert(!result.out.contains("--tui"))
       assert(result.out.contains("Apply the binary installer plan."))
 
     test("plan requires config"):
@@ -101,12 +87,6 @@ object CliModuleTest extends TestSuite:
 
     test("lock requires config"):
       val result = runCli(Vector("lock"))
-
-      assert(result.exitCode != 0)
-      assert(result.err.trim == "Missing required option: --config")
-
-    test("tui requires config"):
-      val result = runCli(Vector("tui"))
 
       assert(result.exitCode != 0)
       assert(result.err.trim == "Missing required option: --config")
@@ -168,20 +148,6 @@ object CliModuleTest extends TestSuite:
       assert(result.out.contains("lock"))
       assert(service.lockOptions.exists(_.outputPath == "custom.lock.json"))
       assert(service.lockInstallerOptions.exists(_.selection.only == Vector("alpha")))
-
-    test("tui renders planning application and does not call plan or apply service"):
-      val tempRoot = Files.createTempDirectory("binstaller-cli-tui")
-      val appsDir  = tempRoot.resolve("apps")
-      val config   = writeConfig(tempRoot, noWriteYaml(appsDir, "state.json"))
-      val service  = RecordingInstallerService()
-      val result   = runCli(Vector("tui", "--config", config.toString), service)
-
-      assert(result.exitCode == 0)
-      assert(stripAnsi(result.out).contains("mode browse"))
-      assert(result.out.contains("Plan"))
-      assert(result.out.contains("Details: alpha"))
-      assert(service.planOptions.isEmpty)
-      assert(service.applyOptions.isEmpty)
 
     test("plan prints all example tools in manifest order"):
       val result = runCli(

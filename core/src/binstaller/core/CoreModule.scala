@@ -42,7 +42,7 @@ object VerboseOutput:
   /** Convert a boolean CLI flag into [[VerboseOutput]]. */
   def fromFlag(value: Boolean): VerboseOutput = if value then Enabled else Disabled
 
-/** Runtime options shared by plan, apply, versions, CLI, and TUI entrypoints. */
+/** Runtime options shared by plan, apply, versions, and lock entrypoints. */
 final case class InstallerOptions(
     configPath: String,
     statePath: Option[String],
@@ -84,7 +84,7 @@ object ApplyConfirmation:
   /** Convert a boolean CLI flag into [[ApplyConfirmation]]. */
   def fromFlag(value: Boolean): ApplyConfirmation = if value then Enabled else Disabled
 
-/** Boundary service consumed by CLI and TUI renderers. */
+/** Boundary service consumed by CLI commands and tests. */
 trait BinaryInstallerService:
 
   /** Render a script-friendly install plan without events. */

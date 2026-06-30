@@ -197,7 +197,7 @@ checksum:
 
 Configured SHA-256 values must be exactly 64 hexadecimal characters. Apply
 verifies checksums before staging replacement. Missing checksums remain allowed
-in developer mode, but plan/TUI surfaces mark them as risk. Strict mode rejects
+in developer mode, but plan surfaces mark them as risk. Strict mode rejects
 missing checksums unless `policy.allowMissingChecksums: true` is set.
 
 Profiles can also opt into checksum discovery from an upstream-published
