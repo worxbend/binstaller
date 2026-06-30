@@ -317,6 +317,31 @@ object CliModuleTest extends TestSuite:
       assert(result.out.contains("\u001b["))
       assert(Files.readString(appsDir.resolve("alpha/bin/alpha")) == "alpha-binary")
 
+    test("apply plain output omits ANSI and cursor controls"):
+      val tempRoot = Files.createTempDirectory("binstaller-cli-progress-plain")
+      val appsDir  = tempRoot.resolve("apps")
+      val config   = writeConfig(tempRoot, progressYaml(appsDir))
+      val service  = BinaryInstallerService.resolving(
+        FakeHttpTextClient("v1.34.0"),
+        DirectBinaryInstaller(
+          ProgressBinaryDownloadClient("alpha-binary".getBytes),
+          InstallFileSystem.nio
+        )
+      )
+
+      val result = runCli(
+        Vector("apply", "--config", config.toString),
+        service,
+        CliOutputStyle.Plain
+      )
+
+      assert(result.exitCode == 0)
+      assert(!result.out.contains("\u001b["))
+      assert(!result.out.contains("\r"))
+      assert(result.out.contains("✅ completed alpha [██████████████████████████████] 100%"))
+      assert(result.out.contains("installed alpha"))
+      assert(result.out.contains("✨ Summary"))
+
     test("apply renders overlapping downloads as separate progress lines"):
       val tempRoot = Files.createTempDirectory("binstaller-cli-parallel-progress")
       val appsDir  = tempRoot.resolve("apps")
@@ -352,13 +377,14 @@ object CliModuleTest extends TestSuite:
 
   private def runCli(
       args: Vector[String],
-      service: BinaryInstallerService = BinaryInstallerService.placeholder
+      service: BinaryInstallerService = BinaryInstallerService.placeholder,
+      outputStyle: CliOutputStyle = CliOutputStyle.Ansi
   ): CliRunResult =
     val outBuffer = StringWriter()
     val errBuffer = StringWriter()
     val out       = PrintWriter(outBuffer, true)
     val err       = PrintWriter(errBuffer, true)
-    val exitCode  = CliModule.commandLine(service, out, err).execute(args*)
+    val exitCode  = CliModule.commandLine(service, out, err, outputStyle).execute(args*)
     CliRunResult(exitCode, outBuffer.toString, errBuffer.toString)
 
   private def renderedToolNames(output: String): Vector[String] =

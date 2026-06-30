@@ -9,16 +9,16 @@ import java.util.LinkedHashMap
 
 private[cli] object RootHelpLogo:
 
-  def install(commandLine: CommandLine): Unit =
+  def install(commandLine: CommandLine, outputStyle: CliOutputStyle): Unit =
     val sectionMap = LinkedHashMap[String, IHelpSectionRenderer](commandLine.getHelpSectionMap)
-    sectionMap.put(UsageMessageSpec.SECTION_KEY_HEADER, render)
+    sectionMap.put(UsageMessageSpec.SECTION_KEY_HEADER, render(outputStyle))
     val _ = commandLine.getCommandSpec.usageMessage.sectionMap(sectionMap)
 
-  private val render: IHelpSectionRenderer = new IHelpSectionRenderer:
+  private def render(outputStyle: CliOutputStyle): IHelpSectionRenderer = new IHelpSectionRenderer:
     override def render(help: Help): String =
-      if help.commandSpec.name == "binstaller" then logo else help.header()
+      if help.commandSpec.name == "binstaller" then logo(outputStyle) else help.header()
 
-  private def logo: String =
+  private def logo(outputStyle: CliOutputStyle): String =
     val lines = Vector(
       " _     _           _        _ _           ",
       "| |__ (_)_ __  ___| |_ __ _| | | ___ _ __ ",
@@ -27,8 +27,10 @@ private[cli] object RootHelpLogo:
       "|_.__/|_|_| |_|___/\\__\\__,_|_|_|\\___|_|   "
     )
     val colors = Vector(fansi.Color.Cyan, fansi.Color.Blue, fansi.Color.Magenta)
-    val title  = fansi.Bold.On(fansi.Color.Green("binary installer"))
+    val title =
+      if outputStyle.supportsAnsi then fansi.Bold.On(fansi.Color.Green("binary installer")).toString
+      else "binary installer"
     lines.zipWithIndex
-      .map((line, index) => colors(index % colors.size)(line).toString)
-      .appended(s"  ${title.toString}")
+      .map((line, index) => outputStyle.color(line)(colors(index % colors.size)))
+      .appended(s"  $title")
       .mkString("", "\n", "\n\n")

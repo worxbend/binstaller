@@ -2,36 +2,51 @@ package binstaller.cli
 
 private[cli] object CliVersionsOutput:
 
-  def colorLines(lines: Vector[String]): Vector[String] = lines match
-    case title +: tableLines => fansi.Bold.On(fansi.Color.Magenta(title)).toString +:
-        colorTable(tableLines)
+  def colorLines(
+      lines: Vector[String],
+      outputStyle: CliOutputStyle = CliOutputStyle.Ansi
+  ): Vector[String] = lines match
+    case title +: tableLines => boldColor(title, fansi.Color.Magenta, outputStyle) +:
+        colorTable(tableLines, outputStyle)
     case empty => empty
 
-  private def colorTable(lines: Vector[String]): Vector[String] =
+  private def colorTable(lines: Vector[String], outputStyle: CliOutputStyle): Vector[String] =
     val rows   = lines.map(VersionOutputRow.parse)
     val layout = VersionOutputLayout.fromRows(rows)
     rows.zipWithIndex.map:
-      case (row, 0)     => colorHeader(row, layout)
-      case (row, index) => colorToolRow(row, layout, index)
+      case (row, 0)     => colorHeader(row, layout, outputStyle)
+      case (row, index) => colorToolRow(row, layout, index, outputStyle)
 
-  private def colorHeader(row: VersionOutputRow, layout: VersionOutputLayout): String =
-    s"${fansi.Bold.On(fansi.Color.Cyan(row.paddedPackage(layout))).toString}  " +
-      s"${fansi.Bold.On(fansi.Color.Cyan(row.paddedVersion(layout))).toString}  " +
-      fansi.Bold.On(fansi.Color.Cyan(row.newerVersion)).toString
+  private def colorHeader(
+      row: VersionOutputRow,
+      layout: VersionOutputLayout,
+      outputStyle: CliOutputStyle
+  ): String =
+    s"${boldColor(row.paddedPackage(layout), fansi.Color.Cyan, outputStyle)}  " +
+      s"${boldColor(row.paddedVersion(layout), fansi.Color.Cyan, outputStyle)}  " +
+      boldColor(row.newerVersion, fansi.Color.Cyan, outputStyle)
 
   private def colorToolRow(
       row: VersionOutputRow,
       layout: VersionOutputLayout,
-      index: Int
+      index: Int,
+      outputStyle: CliOutputStyle
   ): String =
     val packageColor = if index % 2 == 0 then fansi.Color.Blue else fansi.Color.Cyan
-    s"${packageColor(row.paddedPackage(layout)).toString}  " +
-      s"${fansi.Color.Yellow(row.paddedVersion(layout)).toString}  " +
-      colorNewerVersion(row.newerVersion)
+    s"${outputStyle.color(row.paddedPackage(layout))(packageColor)}  " +
+      s"${outputStyle.color(row.paddedVersion(layout))(fansi.Color.Yellow)}  " +
+      colorNewerVersion(row.newerVersion, outputStyle)
 
-  private def colorNewerVersion(value: String): String =
-    if value == "-" then fansi.Color.Blue(value).toString
-    else fansi.Color.Green(value).toString
+  private def colorNewerVersion(value: String, outputStyle: CliOutputStyle): String =
+    if value == "-" then outputStyle.color(value)(fansi.Color.Blue)
+    else outputStyle.color(value)(fansi.Color.Green)
+
+  private def boldColor(
+      value: String,
+      color: fansi.Attrs,
+      outputStyle: CliOutputStyle
+  ): String =
+    if outputStyle.supportsAnsi then fansi.Bold.On(color(value)).toString else value
 
 private[cli] final case class VersionOutputRow(
     packageName: String,

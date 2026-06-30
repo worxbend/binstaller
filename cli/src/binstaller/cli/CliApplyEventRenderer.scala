@@ -10,7 +10,8 @@ import java.io.PrintWriter
 import java.net.URI
 
 private[cli] final class CliApplyEventRenderer(
-    out: PrintWriter
+    out: PrintWriter,
+    outputStyle: CliOutputStyle = CliOutputStyle.Ansi
 ) extends InstallerEventObserver:
   private val width                                   = 30
   private var lastBuckets: Map[String, Int]           = Map.empty
@@ -33,7 +34,7 @@ private[cli] final class CliApplyEventRenderer(
     else clearActiveLine()
 
   def summaryLines: Vector[String] = summary match
-    case Some(value) => CliApplyOutput.summary(value)
+    case Some(value) => CliApplyOutput.summary(value, outputStyle)
     case None        => Vector.empty
 
   private def renderProgress(progress: InstallerEvent.DownloadProgress): Unit =
@@ -64,15 +65,16 @@ private[cli] final class CliApplyEventRenderer(
 
   private def renderStarted(progress: InstallerEvent.DownloadProgress): Unit =
     lastBuckets = lastBuckets.updated(progress.toolName, -1)
-    if !concurrentLineMode && activeTools.size > 1 then enableConcurrentLineMode()
-    else if concurrentLineMode then
-      addToProgressBlock(progress.toolName)
-      redrawProgressBlock()
-    else renderInPlace(renderActive(progress))
+    if outputStyle.supportsAnsi then
+      if !concurrentLineMode && activeTools.size > 1 then enableConcurrentLineMode()
+      else if concurrentLineMode then
+        addToProgressBlock(progress.toolName)
+        redrawProgressBlock()
+      else renderInPlace(renderActive(progress))
 
   private def renderAdvanced(progress: InstallerEvent.DownloadProgress): Unit =
     val bucket = progressBucket(progress.downloadedBytes, progress.totalBytes, concurrentLineMode)
-    if bucket != lastBuckets.getOrElse(progress.toolName, -1) then
+    if outputStyle.supportsAnsi && bucket != lastBuckets.getOrElse(progress.toolName, -1) then
       lastBuckets = lastBuckets.updated(progress.toolName, bucket)
       if concurrentLineMode then redrawProgressBlock()
       else renderInPlace(renderActive(progress))
@@ -83,7 +85,8 @@ private[cli] final class CliApplyEventRenderer(
       addToProgressBlock(progress.toolName)
       redrawProgressBlock()
       if activeTools.isEmpty then finishProgressBlock()
-    else renderCompleted(renderCompletedLine(progress))
+    else if outputStyle.supportsAnsi then renderCompleted(renderCompletedLine(progress))
+    else renderCompletedPlain(renderCompletedLine(progress))
 
   private def enableConcurrentLineMode(): Unit =
     clearActiveLine()
@@ -152,9 +155,9 @@ private[cli] final class CliApplyEventRenderer(
     // Progress text is rendered in-place only for the CLI surface; URL-derived labels are scrubbed
     // before they reach the terminal row.
     val plain  = s"⬇ downloading $label ${bar.plain} $bytes"
-    val styled = s"${fansi.Color.Cyan("⬇ downloading").toString} " +
-      s"${fansi.Color.Yellow(label).toString} ${bar.styled} " +
-      fansi.Color.Cyan(bytes).toString
+    val styled = s"${outputStyle.color("⬇ downloading")(fansi.Color.Cyan)} " +
+      s"${outputStyle.color(label)(fansi.Color.Yellow)} ${bar.styled} " +
+      outputStyle.color(bytes)(fansi.Color.Cyan)
     ProgressLine(plain, styled)
 
   private def renderCompletedLine(progress: InstallerEvent.DownloadProgress): ProgressLine =
@@ -171,8 +174,8 @@ private[cli] final class CliApplyEventRenderer(
     val bar    = progressBar(row.downloadedBytes, row.totalBytes)
     val bytes  = byteText(row.downloadedBytes, row.totalBytes)
     val plain  = s"✅ completed $label ${bar.plain} $bytes"
-    val styled = fansi.Color.Green(s"✅ completed $label").toString +
-      s" ${bar.styled} ${fansi.Color.Green(bytes).toString}"
+    val styled = outputStyle.color(s"✅ completed $label")(fansi.Color.Green) +
+      s" ${bar.styled} ${outputStyle.color(bytes)(fansi.Color.Green)}"
     ProgressLine(plain, styled)
 
   private def renderInPlace(line: ProgressLine): Unit =
@@ -187,6 +190,10 @@ private[cli] final class CliApplyEventRenderer(
     out.flush()
     activeLineLength = 0
 
+  private def renderCompletedPlain(line: ProgressLine): Unit =
+    out.println(line.plain)
+    out.flush()
+
   private def progressBar(downloadedBytes: Long, totalBytes: Option[Long]): ProgressLine =
     totalBytes.filter(_ > 0L) match
       case Some(total) =>
@@ -195,12 +202,13 @@ private[cli] final class CliApplyEventRenderer(
         val pct    = (ratio * 100.0).round.toInt
         val empty  = width - filled
         val plain  = s"[${"█" * filled}${"░" * empty}] $pct%"
-        val styled = s"[${barColor(ratio)("█" * filled).toString}" +
-          s"${fansi.Color.Blue("░" * empty).toString}] ${percentColor(pct)(s"$pct%").toString}"
+        val styled = s"[${outputStyle.color("█" * filled)(barColor(ratio))}" +
+          s"${outputStyle.color("░" * empty)(fansi.Color.Blue)}] " +
+          outputStyle.color(s"$pct%")(percentColor(pct))
         ProgressLine(plain, styled)
       case None =>
         val plain = s"[${"█" * width}]"
-        ProgressLine(plain, fansi.Color.Magenta(plain).toString)
+        ProgressLine(plain, outputStyle.color(plain)(fansi.Color.Magenta))
 
   private def barColor(ratio: Double): fansi.Attrs =
     if ratio >= 1.0 then fansi.Color.Green
@@ -252,24 +260,30 @@ private[cli] final case class ProgressLine(plain: String, styled: String):
 
 private[cli] object CliApplyOutput:
 
-  def colorLines(lines: Vector[String]): Vector[String] = lines.map(colorLine)
+  def colorLines(
+      lines: Vector[String],
+      outputStyle: CliOutputStyle = CliOutputStyle.Ansi
+  ): Vector[String] = lines.map(colorLine(_, outputStyle))
 
-  private def colorLine(line: String): String =
-    if line.startsWith("installed ") then fansi.Color.Green(line).toString
-    else if line.startsWith("failed ") then fansi.Color.Red(line).toString
+  private def colorLine(line: String, outputStyle: CliOutputStyle): String =
+    if line.startsWith("installed ") then outputStyle.color(line)(fansi.Color.Green)
+    else if line.startsWith("failed ") then outputStyle.color(line)(fansi.Color.Red)
     else line
 
-  def summary(event: InstallerEvent.Summary): Vector[String] =
+  def summary(
+      event: InstallerEvent.Summary,
+      outputStyle: CliOutputStyle = CliOutputStyle.Ansi
+  ): Vector[String] =
     val status =
       if event.status == InstallerRunStatus.Succeeded then
-        fansi.Color.Green("🎉 apply completed successfully").toString
-      else fansi.Color.Red("💥 apply finished with errors").toString
+        outputStyle.color("🎉 apply completed successfully")(fansi.Color.Green)
+      else outputStyle.color("💥 apply finished with errors")(fansi.Color.Red)
     Vector(
       "",
-      fansi.Color.Magenta("✨ Summary").toString,
-      s"  ${fansi.Color.Green(s"✅ installed: ${event.installed}").toString}",
-      s"  ${fansi.Color.Red(s"❌ failed: ${event.failed}").toString}",
-      s"  ${fansi.Color.Yellow(s"⏭ skipped: ${event.skipped}").toString}",
-      s"  ${fansi.Color.Cyan(s"🚦 exit code: ${event.exitCode}").toString}",
+      outputStyle.color("✨ Summary")(fansi.Color.Magenta),
+      s"  ${outputStyle.color(s"✅ installed: ${event.installed}")(fansi.Color.Green)}",
+      s"  ${outputStyle.color(s"❌ failed: ${event.failed}")(fansi.Color.Red)}",
+      s"  ${outputStyle.color(s"⏭ skipped: ${event.skipped}")(fansi.Color.Yellow)}",
+      s"  ${outputStyle.color(s"🚦 exit code: ${event.exitCode}")(fansi.Color.Cyan)}",
       s"  $status"
     )

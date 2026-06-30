@@ -53,10 +53,25 @@ final case class ApplyState(
     tools: Vector[ApplyStateTool]
 )
 
+/** Typed status for a single tool in the apply state file. */
+enum ApplyStateToolStatus(val value: String):
+  case Completed extends ApplyStateToolStatus("completed")
+  case Failed extends ApplyStateToolStatus("failed")
+
+/** Apply-state tool status constructors and JSON codec. */
+object ApplyStateToolStatus:
+  def fromString(value: String): ApplyStateToolStatus = value match
+    case Completed.value => Completed
+    case Failed.value    => Failed
+    case other           => throw IllegalArgumentException(s"unknown apply state tool status: $other")
+
+  given ReadWriter[ApplyStateToolStatus] =
+    readwriter[String].bimap[ApplyStateToolStatus](_.value, fromString)
+
 /** Serialized status for a single tool in the apply state file. */
 final case class ApplyStateTool(
     name: String,
-    status: String,
+    status: ApplyStateToolStatus,
     installDir: Option[String],
     message: Option[String],
     download: Option[UrlProvenance] = None

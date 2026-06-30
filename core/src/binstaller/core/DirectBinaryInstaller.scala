@@ -213,10 +213,7 @@ final class DirectBinaryInstaller(
       _ <-
         withPhase(tool, InstallerPhase.VerifyingChecksum, eventContext)(verifyChecksum(tool, bytes))
       staged <- withPhase(tool, InstallerPhase.Staging, eventContext)(stage(tool, bytes))
-      _      <- withPhase(tool, InstallerPhase.VerifyingExecutables, eventContext)(
-        verifyStagedExecutables(tool, staged)
-      )
-      _ <- withPhase(tool, InstallerPhase.ApplyingModes, eventContext)(applyModes(tool, staged))
+      _      <- prepareStagedInstall(tool, staged, eventContext)
       _ <- withPhase(tool, InstallerPhase.ReplacingInstall, eventContext)(replace(tool, staged))
       _ <- withPhase(tool, InstallerPhase.VerifyingExecutables, eventContext)(
         verifyExecutables(tool)
@@ -255,11 +252,27 @@ final class DirectBinaryInstaller(
       _ <-
         withPhase(tool, InstallerPhase.VerifyingChecksum, eventContext)(verifyChecksum(tool, bytes))
       staged <- withPhase(tool, InstallerPhase.Staging, eventContext)(stage(tool, bytes))
-      _      <- withPhase(tool, InstallerPhase.VerifyingExecutables, eventContext)(
-        verifyStagedExecutables(tool, staged)
-      )
-      _ <- withPhase(tool, InstallerPhase.ApplyingModes, eventContext)(applyModes(tool, staged))
+      _      <- prepareStagedInstall(tool, staged, eventContext)
     yield staged -> downloadResult.provenance
+
+  private def prepareStagedInstall(
+      tool: ResolvedTool,
+      stagedInstall: StagedInstall,
+      eventContext: InstallerEventContext
+  ): Either[ToolInstallError, Unit] =
+    val result =
+      for
+        _ <- withPhase(tool, InstallerPhase.VerifyingExecutables, eventContext)(
+          verifyStagedExecutables(tool, stagedInstall)
+        )
+        _ <- withPhase(tool, InstallerPhase.ApplyingModes, eventContext)(
+          applyModes(tool, stagedInstall)
+        )
+      yield ()
+
+    result.left.map: error =>
+      fileSystem.discardStaged(stagedInstall)
+      error
 
   private def finalizePreparedResults(
       policy: ResolvedPolicy,

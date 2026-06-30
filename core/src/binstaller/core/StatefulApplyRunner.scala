@@ -119,15 +119,21 @@ private[core] object StatefulApplyRunner:
     result.copy(lines = skippedLines ++ result.lines)
 
   private def completedToolNames(state: ApplyState): Set[String] = state.tools.collect:
-    case tool if tool.status == "completed" => tool.name
+    case tool if tool.status == ApplyStateToolStatus.Completed => tool.name
   .toSet
 
   private def updateState(state: ApplyState, result: TerminalToolResult): ApplyState =
     val updatedTool = result match
       case TerminalToolResult.Completed(toolName, installDir, download) =>
-        ApplyStateTool(toolName, "completed", Some(installDir), None, download)
+        ApplyStateTool(
+          toolName,
+          ApplyStateToolStatus.Completed,
+          Some(installDir),
+          None,
+          download
+        )
       case TerminalToolResult.Failed(toolName, message) =>
-        ApplyStateTool(toolName, "failed", None, Some(message))
+        ApplyStateTool(toolName, ApplyStateToolStatus.Failed, None, Some(message))
     state.copy(tools = replaceTool(state.tools, updatedTool))
 
   private def toolName(result: TerminalToolResult): String = result match

@@ -881,6 +881,7 @@ object CoreModuleTest extends TestSuite:
       assert(result.lines.exists(_.startsWith("failed alpha: download:")))
       assert(!result.lines.exists(_.contains("installed beta")))
       assert(!Files.exists(tempRoot.resolve("apps/beta")))
+      assert(!hasStagedInstall(tempRoot, "beta"))
 
     test("continueOnError true continues apply after failed tools"):
       val tempRoot = Files.createTempDirectory("binstaller-core-continue-on-error")
@@ -1314,6 +1315,7 @@ object CoreModuleTest extends TestSuite:
       ))
 
       assert(result == Left(ToolInstallError.MissingExecutable("alpha", "bin/missing")))
+      assert(!hasStagedInstall(tempRoot, "alpha"))
 
     test("local symlinks are created under installDir with targets resolved from installDir"):
       val tempRoot   = Files.createTempDirectory("binstaller-core-local-symlink")
@@ -1582,7 +1584,10 @@ object CoreModuleTest extends TestSuite:
       assert(retryResult.lines.exists(_.contains("installed beta")))
       assert(Files.isRegularFile(tempRoot.resolve("apps/beta/bin/beta")))
       assert(state.tools.map(tool => tool.name -> tool.status) ==
-        Vector("alpha" -> "completed", "beta" -> "completed"))
+        Vector(
+          "alpha" -> ApplyStateToolStatus.Completed,
+          "beta"  -> ApplyStateToolStatus.Completed
+        ))
       assert(!hasTempStateFile(tempRoot, "resume.state.json"))
 
     test("incompatible state fails clearly unless reset-state is enabled"):
@@ -1643,9 +1648,51 @@ object CoreModuleTest extends TestSuite:
       assert(store.savedStates.size == 2)
       assert(store.savedStates.map(_.tools.map(tool => tool.name -> tool.status)) ==
         Vector(
-          Vector("alpha" -> "completed"),
-          Vector("alpha" -> "completed", "beta" -> "completed")
+          Vector("alpha" -> ApplyStateToolStatus.Completed),
+          Vector(
+            "alpha" -> ApplyStateToolStatus.Completed,
+            "beta"  -> ApplyStateToolStatus.Completed
+          )
         ))
+
+    test("apply state status remains serialized as a stable string"):
+      val state = ApplyState.empty("profile", "fingerprint").copy(tools =
+        Vector(ApplyStateTool(
+          "alpha",
+          ApplyStateToolStatus.Completed,
+          Some("/tmp/apps/alpha"),
+          None
+        ))
+      )
+
+      val encoded = write(state, indent = 2)
+      val decoded = read[ApplyState](encoded)
+
+      assert(encoded.contains(""""status": "completed""""))
+      assert(decoded.tools.head.status == ApplyStateToolStatus.Completed)
+
+    test("apply state status decodes existing string state files"):
+      val decoded = read[ApplyState](
+        """
+          |{
+          |  "schemaVersion": 1,
+          |  "profileName": "profile",
+          |  "manifestFingerprint": "fingerprint",
+          |  "tools": [
+          |    {
+          |      "name": "alpha",
+          |      "status": "failed",
+          |      "installDir": null,
+          |      "message": "network unavailable",
+          |      "download": null
+          |    }
+          |  ]
+          |}
+          |""".stripMargin
+      )
+
+      assert(decoded.tools.head.status == ApplyStateToolStatus.Failed)
+      assert(decoded.tools.head.message.contains("network unavailable"))
 
     test("plan emits resolving plan-ready and summary events in order"):
       val tempRoot = Files.createTempDirectory("binstaller-core-events-plan")
@@ -2047,6 +2094,13 @@ object CoreModuleTest extends TestSuite:
       .iterator()
       .asScala
       .exists(path => path.getFileName.toString.startsWith(s".$name.tmp-"))
+
+  private def hasStagedInstall(tempRoot: Path, installName: String): Boolean =
+    Using.resource(Files.walk(tempRoot)): stream =>
+      stream
+        .iterator()
+        .asScala
+        .exists(path => path.getFileName.toString.startsWith(s".$installName.stage-"))
 
   private def sha256(bytes: Array[Byte]): String =
     val digest = MessageDigest.getInstance("SHA-256").digest(bytes)

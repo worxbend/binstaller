@@ -28,18 +28,33 @@ object CliModule:
   def run(args: Vector[String]): Int = run(
     args,
     PrintWriter(System.out, true),
-    PrintWriter(System.err, true)
+    PrintWriter(System.err, true),
+    CliOutputStyle.forProcessOutput
   )
 
   /** Run the CLI with injectable writers for tests or alternate launchers. */
   def run(args: Vector[String], out: PrintWriter, err: PrintWriter): Int =
-    commandLine(productionService(err), out, err).execute(args*)
+    run(args, out, err, CliOutputStyle.Ansi)
+
+  private[cli] def run(
+      args: Vector[String],
+      out: PrintWriter,
+      err: PrintWriter,
+      outputStyle: CliOutputStyle
+  ): Int = commandLine(productionService(err), out, err, outputStyle).execute(args*)
 
   /** Build the root command with an injectable core service. */
   def commandLine(
       service: BinaryInstallerService,
       out: PrintWriter,
       err: PrintWriter
+  ): CommandLine = commandLine(service, out, err, CliOutputStyle.Ansi)
+
+  private[cli] def commandLine(
+      service: BinaryInstallerService,
+      out: PrintWriter,
+      err: PrintWriter,
+      outputStyle: CliOutputStyle
   ): CommandLine =
     val root        = BinstallerCommand(out)
     val commandLine = CommandLine(root)
@@ -51,17 +66,17 @@ object CliModule:
     )
     commandLine.addSubcommand(
       "apply",
-      subcommandLine(ApplyCommand(root, service, out), out, err)
+      subcommandLine(ApplyCommand(root, service, out, outputStyle), out, err)
     )
     commandLine.addSubcommand(
       "versions",
-      subcommandLine(VersionsCommand(root, service, out), out, err)
+      subcommandLine(VersionsCommand(root, service, out, outputStyle), out, err)
     )
     commandLine.addSubcommand(
       "lock",
       subcommandLine(LockCommand(root, service, out), out, err)
     )
-    RootHelpLogo.install(commandLine)
+    RootHelpLogo.install(commandLine, outputStyle)
     commandLine
 
   private def productionService(err: PrintWriter): BinaryInstallerService =
@@ -249,7 +264,8 @@ private[cli] final class PlanCommand(
 private[cli] final class ApplyCommand(
     root: BinstallerCommand,
     service: BinaryInstallerService,
-    out: PrintWriter
+    out: PrintWriter,
+    outputStyle: CliOutputStyle
 ) extends SelectableCommand(root, out):
   private var lockedApply: LockedApplyMode       = LockedApplyMode.Disabled
   private var lockPath: String                   = LockOptions.defaultOutputPath
@@ -285,10 +301,12 @@ private[cli] final class ApplyCommand(
       applyParallelism = applyParallelism
     ),
     options =>
-      val eventRenderer = CliApplyEventRenderer(out)
+      val eventRenderer = CliApplyEventRenderer(out, outputStyle)
       val result        = service.applyWithEvents(options, eventRenderer)
       eventRenderer.finish()
-      result.copy(lines = CliApplyOutput.colorLines(result.lines) ++ eventRenderer.summaryLines)
+      result.copy(lines =
+        CliApplyOutput.colorLines(result.lines, outputStyle) ++ eventRenderer.summaryLines
+      )
   )
 
 @Command(
@@ -299,13 +317,15 @@ private[cli] final class ApplyCommand(
 private[cli] final class VersionsCommand(
     root: BinstallerCommand,
     service: BinaryInstallerService,
-    out: PrintWriter
+    out: PrintWriter,
+    outputStyle: CliOutputStyle
 ) extends ConfiguredCommand(root, out):
 
   override def call(): Integer = executeRendered(
     service.versions,
     result =>
-      if result.exitCode == 0 then result.copy(lines = CliVersionsOutput.colorLines(result.lines))
+      if result.exitCode == 0 then
+        result.copy(lines = CliVersionsOutput.colorLines(result.lines, outputStyle))
       else result
   )
 
