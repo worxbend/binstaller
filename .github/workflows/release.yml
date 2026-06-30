@@ -86,11 +86,12 @@ jobs:
           ./mill __.test
           echo "::endgroup::"
 
-      - name: 🔥 Build native image
+      - name: 🔥 Build GraalVM native CLI image
         id: native-image
         shell: bash
         run: |
-          echo "::group::🔥 Native image"
+          echo "::group::🔥 GraalVM native CLI image"
+          echo "🔥 Building CLI app with Mill target app.nativeImage"
           native_ref="$(./mill show app.nativeImage | sed -n 's/^"\(.*\)"$/\1/p' | tail -n 1)"
           image_path="${native_ref#ref:v0:*:}"
           if [[ "${image_path}" == "${native_ref}" && ! -f "${image_path}" ]]; then
@@ -102,11 +103,11 @@ jobs:
             exit 1
           fi
 
-          echo "✅ Native image ready: ${image_path}"
+          echo "✅ GraalVM native CLI image ready: ${image_path}"
           echo "path=${image_path}" >> "${GITHUB_OUTPUT}"
           echo "::endgroup::"
 
-      - name: 📦 Package artifact
+      - name: 📦 Package native CLI artifact
         shell: bash
         run: |
           version="${{ steps.version.outputs.value }}"
@@ -118,6 +119,11 @@ jobs:
           mkdir -p "${package_root}"
           cp "${{ steps.native-image.outputs.path }}" "${package_root}/binstaller"
           chmod +x "${package_root}/binstaller"
+
+          echo "::group::🧪 Native CLI smoke test"
+          "${package_root}/binstaller" --help >/tmp/binstaller-help.txt
+          echo "✅ Native CLI starts and renders help"
+          echo "::endgroup::"
 
           tar -C dist -czf "${archive}" "binstaller-${version}-${target}"
           shasum -a 256 "${archive}" > "${archive}.sha256"
@@ -226,7 +232,7 @@ jobs:
         shell: bash
         run: |
           version="${{ steps.version.outputs.value }}"
-          notes=$'🚀 Automated binstaller release for '"${version}"$'.\n\nArtifacts:\n- 🐧 Linux amd64\n- 🐧 Linux arm64\n- 🍎 macOS amd64\n- 🍎 macOS arm64\n- 🧰 Example configuration\n\nEach asset includes a 🔐 SHA-256 checksum.'
+          notes=$'🚀 Automated binstaller release for '"${version}"$'.\n\nArtifacts:\n- 🐧 Linux amd64 GraalVM native CLI\n- 🐧 Linux arm64 GraalVM native CLI\n- 🍎 macOS amd64 GraalVM native CLI\n- 🍎 macOS arm64 GraalVM native CLI\n- 🧰 Example configuration\n\nEach asset includes a 🔐 SHA-256 checksum.'
 
           if gh release view "${version}" >/dev/null 2>&1; then
             echo "♻️ Updating existing release ${version}"
