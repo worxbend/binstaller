@@ -2,9 +2,13 @@ package binstaller.tui
 
 import binstaller.config.SymlinkPrivilege
 import binstaller.core.BinaryInstallerService
+import binstaller.core.BinaryDownloadClient
+import binstaller.core.CommandExecutor
 import binstaller.core.CoreModule
+import binstaller.core.DirectBinaryInstaller
 import binstaller.core.DownloadProgressStatus
 import binstaller.core.HttpTextClient
+import binstaller.core.InstallFileSystem
 import binstaller.core.InstallerEvent
 import binstaller.core.InstallerEventObserver
 import binstaller.core.InstallerOptions
@@ -22,6 +26,7 @@ import binstaller.core.ResolvedTool
 import binstaller.core.ResolvedVersion
 import binstaller.core.RenderSafety
 import binstaller.core.SensitiveValueRedactions
+import binstaller.core.SudoCredentialProvider
 import binstaller.core.ToolResultStatus
 import binstaller.core.UrlProvenance
 
@@ -69,7 +74,10 @@ object TuiModule:
     case TuiMode.Plan  => startPlanningInteractive(request, httpTextClient, settings, terminal)
     case TuiMode.Apply => startApplyExecutionInteractive(
         request,
-        BinaryInstallerService.resolving(httpTextClient),
+        interactiveService(
+          httpTextClient,
+          new TerminalSudoCredentialProvider(terminal, SensitiveValueRedactions.empty)
+        ),
         ExecutionTuiSettings.fromPlanning(settings),
         terminal
       )
@@ -97,9 +105,13 @@ object TuiModule:
       InstallerResult(TuiFailureScreen.render(failure, settings.viewport), 1)
     case Right(snapshot) =>
       val initial = PlanningTuiState.initial(snapshot, settings)
+      val service = interactiveService(
+        httpTextClient,
+        new TerminalSudoCredentialProvider(terminal, snapshot.plan.redactions)
+      )
       val actions = TuiAppActions.fromService(
         request.options,
-        BinaryInstallerService.resolving(httpTextClient)
+        service
       )
       if terminal.isInteractive then PlanningTuiSession.run(initial, terminal, actions)
       else
@@ -142,6 +154,18 @@ object TuiModule:
         case NonFatal(error) =>
           val failure = TuiFailure.terminal(s"binstaller ${request.entrypointName}", error)
           InstallerResult(TuiFailureScreen.render(failure, settings.viewport), 1)
+
+  private def interactiveService(
+      httpTextClient: HttpTextClient,
+      sudoCredentials: SudoCredentialProvider
+  ): BinaryInstallerService =
+    val installer = DirectBinaryInstaller(
+      BinaryDownloadClient.jdk,
+      InstallFileSystem.nio,
+      CommandExecutor.process,
+      sudoCredentials
+    )
+    BinaryInstallerService.resolving(httpTextClient, installer)
 
 /** TUI workflow mode selected by the CLI. */
 enum TuiMode:
@@ -1019,6 +1043,12 @@ private[tui] object TuiModalRenderer:
         fit("Press Enter to apply now, or Escape/n to cancel.", width),
         separator(width)
       )
+    case Some(TuiModal.PasswordPrompt(prompt)) => titled(
+        "Sudo password required",
+        passwordPromptLines(prompt),
+        PlanningTuiStatus.Warning,
+        width
+      )
     case Some(TuiModal.Message(title, lines)) => titled(
         title,
         lines,
@@ -1037,6 +1067,17 @@ private[tui] object TuiModalRenderer:
         PlanningTuiStatus.Failed,
         width
       )
+
+  private def passwordPromptLines(prompt: TuiPasswordPromptView): Vector[String] = Vector(
+    s"operation: ${prompt.operation}",
+    s"tool: ${prompt.toolName}"
+  ) ++
+    prompt.destinationPath.map(value => s"destination: $value").toVector ++
+    prompt.targetPath.map(value => s"target: $value").toVector ++
+    Vector(
+      s"password: ${"*" * prompt.maskedLength}",
+      "Press Enter to submit. Escape, Ctrl+C, or /cancel then Enter cancels this operation."
+    )
 
   private def titled(
       title: String,
@@ -1874,6 +1915,17 @@ object PlanningTuiRenderer:
     case TuiModal.Error(failure)        => failure.title +: failure.renderLines
     case TuiModal.RootCause(failure)    =>
       s"Root cause: ${failure.toolName.getOrElse(failure.title)}" +: failure.renderLines
+    case TuiModal.PasswordPrompt(prompt) => Vector(
+        "Sudo password required",
+        s"operation: ${prompt.operation}",
+        s"tool: ${prompt.toolName}"
+      ) ++
+        prompt.destinationPath.map(value => s"destination: $value").toVector ++
+        prompt.targetPath.map(value => s"target: $value").toVector ++
+        Vector(
+          s"password: ${"*" * prompt.maskedLength}",
+          "Enter submits; Escape, Ctrl+C, or /cancel cancels this operation."
+        )
 
   private def visibleText(lines: Vector[String], offset: Int, height: Int): Vector[String] =
     val clippedOffset = offset.max(0).min((lines.size - height).max(0))

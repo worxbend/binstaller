@@ -2,11 +2,21 @@ package binstaller.tui
 
 import binstaller.config.ChecksumAlgorithm
 import binstaller.core.ApplyConfirmation
+import binstaller.core.BinaryDownloadClient
+import binstaller.core.BinaryDownloadError
+import binstaller.core.BinaryDownloadProgressObserver
+import binstaller.core.BinaryDownloadResult
 import binstaller.core.BinaryInstallerService
+import binstaller.core.CommandExecutionError
+import binstaller.core.CommandExecutor
+import binstaller.core.CommandSpec
+import binstaller.core.CommandOutput
+import binstaller.core.DirectBinaryInstaller
 import binstaller.core.DownloadProgressStatus
 import binstaller.core.DryRunMode
 import binstaller.core.HttpTextClient
 import binstaller.core.HttpTextError
+import binstaller.core.InstallFileSystem
 import binstaller.core.InstallerEvent
 import binstaller.core.InstallerEventObserver
 import binstaller.core.InstallerPhase
@@ -20,6 +30,9 @@ import binstaller.core.ResolutionOptions
 import binstaller.core.ResolvedPlanSnapshot
 import binstaller.core.ResolvedVersion
 import binstaller.core.SensitiveValueRedactions
+import binstaller.core.SudoCredentialError
+import binstaller.core.SudoCredentialProvider
+import binstaller.core.SudoCredentialRequest
 import binstaller.core.ToolResultStatus
 import binstaller.core.ToolSelection
 import binstaller.core.UrlProvenance
@@ -35,6 +48,7 @@ import java.io.InputStream
 import java.io.PrintWriter
 import java.nio.file.Files
 import java.nio.file.Path
+import java.security.MessageDigest
 import java.time.Duration
 
 object TuiModuleTest extends TestSuite:
@@ -723,6 +737,209 @@ object TuiModuleTest extends TestSuite:
       assert(!logs.contains(secret))
       assert(!logs.contains("\u001b[31m"))
 
+    test("password modal explains privileged operation and masks typed input"):
+      val request = SudoCredentialRequest(
+        "alpha",
+        "/usr/local/bin/alpha",
+        "/tmp/apps/alpha/bin/alpha",
+        "create sudo symlink /tmp/apps/alpha/bin/alpha -> /usr/local/bin/alpha"
+      )
+      val prompt = TuiPasswordPromptView.fromRequest(
+        request,
+        maskedLength = 6,
+        SensitiveValueRedactions.empty
+      )
+      val plain = stripAnsi(
+        TuiModalRenderer.render(Some(TuiModal.PasswordPrompt(prompt)), 90).mkString("\n")
+      )
+
+      assert(plain.contains("Sudo password required"))
+      assert(plain.contains("operation: create sudo symlink"))
+      assert(plain.contains("tool: alpha"))
+      assert(plain.contains("destination: /usr/local/bin/alpha"))
+      assert(plain.contains("target: /tmp/apps/alpha/bin/alpha"))
+      assert(plain.contains("password: ******"))
+      assert(!plain.contains("secret"))
+
+    test("terminal password provider submits a masked password without rendering it"):
+      val password = "tui-secret"
+      val terminal = FakeTuiTerminal(
+        interactive = true,
+        TuiViewport(90, 20),
+        inputs = password.map(TuiInput.Character.apply).toVector :+ TuiInput.Enter
+      )
+      val provider = new TerminalSudoCredentialProvider(
+        terminal,
+        SensitiveValueRedactions.empty
+      )
+
+      val result = provider.requestSudoPassword(sudoRequest())
+      val output = stripAnsi(terminal.rendered.flatten.mkString("\n"))
+
+      assert(result.isRight)
+      assert(output.contains("password: **********"))
+      assert(!output.contains(password))
+      assert(!result.toString.contains(password))
+
+    test("terminal password provider cancels on escape ctrl-c and explicit cancel input"):
+      val escape = new TerminalSudoCredentialProvider(
+        FakeTuiTerminal(true, TuiViewport(90, 20), inputs = Vector(TuiInput.Escape)),
+        SensitiveValueRedactions.empty
+      )
+      val ctrlC = new TerminalSudoCredentialProvider(
+        FakeTuiTerminal(true, TuiViewport(90, 20), inputs = Vector(TuiInput.CtrlC)),
+        SensitiveValueRedactions.empty
+      )
+      val explicit = new TerminalSudoCredentialProvider(
+        FakeTuiTerminal(
+          true,
+          TuiViewport(90, 20),
+          inputs = Vector(
+            TuiInput.Slash,
+            TuiInput.Character('c'),
+            TuiInput.Character('a'),
+            TuiInput.Character('n'),
+            TuiInput.Character('c'),
+            TuiInput.Character('e'),
+            TuiInput.Character('l'),
+            TuiInput.Enter
+          )
+        ),
+        SensitiveValueRedactions.empty
+      )
+
+      assert(escape.requestSudoPassword(sudoRequest()) == Left(SudoCredentialError.Canceled))
+      assert(ctrlC.requestSudoPassword(sudoRequest()) == Left(SudoCredentialError.Canceled))
+      assert(explicit.requestSudoPassword(sudoRequest()) == Left(SudoCredentialError.Canceled))
+
+    test("password modal survives resize while open and keeps input masked"):
+      val password = "ab"
+      val terminal = FakeTuiTerminal(
+        interactive = true,
+        TuiViewport(90, 20),
+        inputs = Vector(
+          TuiInput.Character('a'),
+          TuiInput.Resize(TuiViewport(36, 14)),
+          TuiInput.Character('b'),
+          TuiInput.Enter
+        )
+      )
+      val provider = new TerminalSudoCredentialProvider(
+        terminal,
+        SensitiveValueRedactions.empty
+      )
+
+      val result        = provider.requestSudoPassword(sudoRequest())
+      val resizedFrames = terminal.rendered.drop(2)
+
+      assert(result.isRight)
+      assert(resizedFrames.nonEmpty)
+      assert(resizedFrames.forall(lines => lines.forall(line => stripAnsi(line).length <= 36)))
+      assert(!terminal.rendered.flatten.mkString("\n").contains(password))
+
+    test("tui apply skips password modal when sudo credentials are cached"):
+      val fixture         = writeSudoApplyFixture("cached")
+      val commandExecutor = RecordingSudoCommandExecutor(cacheAvailable = true)
+      val terminal        = FakeTuiTerminal(
+        interactive = true,
+        TuiViewport(90, 20),
+        inputs = Vector.empty
+      )
+      val provider = new TerminalSudoCredentialProvider(
+        terminal,
+        SensitiveValueRedactions.empty
+      )
+      val service    = sudoApplyService(commandExecutor, provider)
+      val actions    = TuiAppActions.fromService(fixture.options, service)
+      val finalState = PlanningTuiSession.run(
+        sessionState(fixture),
+        Vector(TuiInput.Character('r'), TuiInput.Enter),
+        actions
+      )
+
+      assert(finalState.appState.mode == TuiBrowsingMode.Apply)
+      assert(finalState.appState.executionState.exists(_.summary.nonEmpty))
+      assert(terminal.rendered.isEmpty)
+      assert(commandExecutor.commands.map(_.argv).contains(Vector("sudo", "-n", "true")))
+      assert(commandExecutor.commands.exists(_.argv.startsWith(Vector("sudo", "-n", "ln"))))
+      assert(Files.exists(fixture.stateFile))
+      assert(!Files.readString(fixture.stateFile).contains("password"))
+      val _ = Files.deleteIfExists(fixture.stateFile)
+
+    test("tui password cancellation reports a clear current-operation failure"):
+      val fixture         = writeSudoApplyFixture("cancel")
+      val commandExecutor = RecordingSudoCommandExecutor(cacheAvailable = false)
+      val terminal        = FakeTuiTerminal(
+        interactive = true,
+        TuiViewport(100, 28),
+        inputs = Vector(TuiInput.Escape)
+      )
+      val provider = new TerminalSudoCredentialProvider(
+        terminal,
+        SensitiveValueRedactions.empty
+      )
+      val service    = sudoApplyService(commandExecutor, provider)
+      val actions    = TuiAppActions.fromService(fixture.options, service)
+      val finalState = PlanningTuiSession.run(
+        sessionState(fixture),
+        Vector(TuiInput.Character('r'), TuiInput.Enter),
+        actions
+      )
+      val rendered = stripAnsi(TuiAppRenderer.render(finalState.appState).mkString("\n"))
+
+      assert(finalState.appState.modal.exists:
+        case TuiModal.Error(failure) => failure.rootCause.contains("sudo credentials canceled") &&
+          failure.toolName.contains("alpha")
+        case _ => false)
+      assert(rendered.contains("sudo credentials canceled"))
+      assert(terminal.rendered.nonEmpty)
+      assert(!commandExecutor.commands.exists(_.argv.startsWith(Vector("sudo", "-S"))))
+      val _ = Files.deleteIfExists(fixture.stateFile)
+
+    test("tui password value does not leak into apply logs errors diagnostics or state"):
+      val password        = "tui-apply-secret"
+      val fixture         = writeSudoApplyFixture("leak")
+      val commandExecutor = RecordingSudoCommandExecutor(
+        cacheAvailable = false,
+        passwordToLeak = Some(password),
+        passwordCommandFails = true
+      )
+      val terminal = FakeTuiTerminal(
+        interactive = true,
+        TuiViewport(100, 28),
+        inputs = password.map(TuiInput.Character.apply).toVector :+ TuiInput.Enter
+      )
+      val provider = new TerminalSudoCredentialProvider(
+        terminal,
+        SensitiveValueRedactions.empty
+      )
+      val service    = sudoApplyService(commandExecutor, provider)
+      val actions    = TuiAppActions.fromService(fixture.options, service)
+      val finalState = PlanningTuiSession.run(
+        sessionState(fixture),
+        Vector(TuiInput.Character('r'), TuiInput.Enter),
+        actions
+      )
+      val rendered  = stripAnsi(TuiAppRenderer.render(finalState.appState).mkString("\n"))
+      val logs      = finalState.appState.logs.mkString("\n")
+      val prompt    = stripAnsi(terminal.rendered.flatten.mkString("\n"))
+      val stateText =
+        if Files.exists(fixture.stateFile) then Files.readString(fixture.stateFile) else ""
+
+      assert(finalState.appState.modal.exists:
+        case TuiModal.Error(failure) => !failure.renderLines.mkString("\n").contains(password) &&
+          failure.renderLines.mkString("\n").contains("<redacted>")
+        case _ => false)
+      assert(!rendered.contains(password))
+      assert(!logs.contains(password))
+      assert(!prompt.contains(password))
+      assert(prompt.contains("password: ********"))
+      assert(!stateText.contains(password))
+      assert(!commandExecutor.commands.exists(_.argv.contains(password)))
+      assert(!commandExecutor.commands.map(_.toString).exists(_.contains(password)))
+      assert(rendered.contains("<redacted>"))
+      val _ = Files.deleteIfExists(fixture.stateFile)
+
     test("r opens a confirmation modal before real apply starts"):
       val fixture  = writeFixture()
       val service  = RecordingDryRunService(InstallerResult(Vector("apply ok"), 0))
@@ -1382,6 +1599,83 @@ object TuiModuleTest extends TestSuite:
       snapshot.copy(plan = snapshot.plan.copy(redactions = redactions))
     ))
 
+  private def sudoRequest(): SudoCredentialRequest = SudoCredentialRequest(
+    "alpha",
+    "/usr/local/bin/alpha",
+    "/tmp/apps/alpha/bin/alpha",
+    "create sudo symlink /tmp/apps/alpha/bin/alpha -> /usr/local/bin/alpha"
+  )
+
+  private def writeSudoApplyFixture(suffix: String): TuiFixture =
+    val root      = Files.createTempDirectory(s"binstaller-tui-sudo-$suffix")
+    val appsDir   = root.resolve("apps")
+    val stateFile = Path.of(s"tui-password-$suffix-${System.nanoTime()}.state.json")
+    val _         = Files.deleteIfExists(stateFile)
+    val config    = root.resolve("profile.yaml")
+    val install   = appsDir.resolve("alpha")
+    val bytes     = sudoBinaryBytes
+    val checksum  = sha256Hex(bytes)
+    val url       = "https://example.invalid/releases/alpha"
+    val linkPath  = root.resolve("sudo-bin").resolve("alpha")
+    Files.writeString(
+      config,
+      s"""
+         |apiVersion: binstaller.io/v1alpha1
+         |kind: BinaryDistributionProfile
+         |metadata:
+         |  name: sudo-profile
+         |spec:
+         |  policy:
+         |    appsDir: "$appsDir"
+         |    stateFile: "$stateFile"
+         |    allowSudoSymlinks: true
+         |    continueOnError: false
+         |  vars: {}
+         |  versions:
+         |    alpha: "1.0.0"
+         |  plan:
+         |    - name: alpha
+         |      kind: binary-tool
+         |      spec:
+         |        versionRef: alpha
+         |        installDir: "$install"
+         |        download:
+         |          url: "$url"
+         |          filename: alpha
+         |          checksum:
+         |            algorithm: sha256
+         |            value: "$checksum"
+         |        executables:
+         |          - path: bin/alpha
+         |        symlinks:
+         |          - path: "$linkPath"
+         |            target: bin/alpha
+         |            sudo: true
+         |""".stripMargin
+    )
+    TuiFixture(root, config, appsDir, stateFile, url, install, installerOptions(config))
+
+  private def sudoApplyService(
+      commandExecutor: RecordingSudoCommandExecutor,
+      credentials: SudoCredentialProvider
+  ): BinaryInstallerService =
+    val installer = DirectBinaryInstaller(
+      StaticBinaryDownloadClient(sudoBinaryBytes),
+      InstallFileSystem.nio,
+      commandExecutor,
+      credentials
+    )
+    BinaryInstallerService.resolving(FakeHttpTextClient(""), installer)
+
+  private def sudoBinaryBytes: Array[Byte] =
+    "binary\n".getBytes(java.nio.charset.StandardCharsets.UTF_8)
+
+  private def sha256Hex(bytes: Array[Byte]): String = MessageDigest
+    .getInstance("SHA-256")
+    .digest(bytes)
+    .map(byte => f"${byte & 0xff}%02x")
+    .mkString
+
   private def writeFixture(longValues: Boolean = false): TuiFixture =
     val root         = Files.createTempDirectory("binstaller-tui")
     val appsDir      = root.resolve("apps")
@@ -1565,6 +1859,61 @@ private final case class TuiFixture(
 private final class FakeHttpTextClient(text: String) extends HttpTextClient:
 
   def getText(url: String): Either[HttpTextError, String] = Right(text)
+
+private final case class StaticBinaryDownloadClient(bytes: Array[Byte])
+    extends BinaryDownloadClient:
+
+  def download(url: String): Either[BinaryDownloadError, Array[Byte]] = Right(bytes)
+
+  override def download(
+      url: String,
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[BinaryDownloadError, Array[Byte]] =
+    progressObserver.onProgress(binstaller.core.BinaryDownloadProgress.Started(
+      url,
+      Some(bytes.length.toLong)
+    ))
+    progressObserver.onProgress(binstaller.core.BinaryDownloadProgress.Finished(
+      url,
+      bytes.length.toLong,
+      Some(bytes.length.toLong)
+    ))
+    Right(bytes)
+
+  override def downloadWithProvenance(
+      url: String,
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[BinaryDownloadError, BinaryDownloadResult] = download(url, progressObserver).map(
+    value => BinaryDownloadResult(value, UrlProvenance.direct(url))
+  )
+
+private final class RecordingSudoCommandExecutor(
+    cacheAvailable: Boolean,
+    passwordToLeak: Option[String] = None,
+    passwordCommandFails: Boolean = false
+) extends CommandExecutor:
+  var commands: Vector[CommandSpec] = Vector.empty
+
+  def run(spec: CommandSpec): Either[CommandExecutionError, Unit] =
+    commands = commands :+ spec
+    spec.argv match
+      case Vector("sudo", "-n", "true") if cacheAvailable => Right(())
+      case Vector("sudo", "-n", "true")                   =>
+        Left(CommandExecutionError(spec, "sudo password required", Some(1)))
+      case argv if argv.startsWith(Vector("sudo", "-n", "ln"))           => Right(())
+      case argv if argv.startsWith(Vector("sudo", "-S", "-p", "", "ln")) =>
+        if passwordCommandFails then Left(leakingFailure(spec))
+        else Right(())
+      case _ => Right(())
+
+  private def leakingFailure(spec: CommandSpec): CommandExecutionError =
+    val leaked = passwordToLeak.getOrElse("password")
+    CommandExecutionError(
+      spec,
+      s"authentication failed with $leaked",
+      Some(1),
+      CommandOutput(s"stdout $leaked", s"stderr $leaked")
+    )
 
 private final class RecordingPlanService(result: InstallerResult) extends BinaryInstallerService:
   var planOptions: Vector[InstallerOptions]  = Vector.empty

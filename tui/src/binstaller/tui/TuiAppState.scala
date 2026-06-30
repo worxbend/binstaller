@@ -26,6 +26,7 @@ enum TuiModal:
   case Error(failure: TuiFailure)
   case RootCause(failure: TuiFailure)
   case ConfirmApply(selectedToolNames: Vector[String])
+  case PasswordPrompt(prompt: TuiPasswordPromptView)
 
 /** One TUI-local plan entry, preserving the resolved core tool without using CLI selection. */
 final case class TuiPlanEntry(index: Int, tool: ResolvedTool):

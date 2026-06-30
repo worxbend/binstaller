@@ -488,3 +488,16 @@ baseline and close the remaining gaps in this order:
   command-input redaction for process output/errors. Validation passed:
   `./mill core.test`, `./mill tui.test`, `./mill __.compile`,
   `./mill mill.scalalib.scalafmt/checkFormatAll`, and `git diff --check`.
+- 2026-06-30: Implementation iteration 48 completed T006. Interactive TUI
+  apply now wires sudo credential requests to a focused terminal-backed
+  password modal. The modal shows the privileged operation, tool, destination,
+  and target path when available; typed input is represented only by a masked
+  character count in render state.
+- T006 cancellation through Escape, Ctrl+C, or `/cancel` followed by Enter
+  returns the typed core cancellation outcome, so only the current privileged
+  operation fails and the TUI reports a clear apply error. Cached sudo
+  credentials still skip the modal because core completes the `sudo -n true`
+  path before requesting credentials. Validation passed: `./mill tui.test`,
+  `./mill core.test`, `./mill __.compile`, `./mill
+  mill.scalalib.scalafmt/checkFormatAll`, `jq empty .agent-loop/tasks.json`,
+  and `git diff --check`.
