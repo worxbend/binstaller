@@ -1,44 +1,84 @@
 [
   {
-    "name": "binstaller.cli.BinstallerCommand",
-    "allDeclaredConstructors": true,
-    "allDeclaredMethods": true,
-    "allDeclaredFields": true
+    "name" : "binstaller.cli.ApplyCommand",
+    "allDeclaredConstructors" : true,
+    "allPublicConstructors" : true,
+    "allDeclaredMethods" : true,
+    "allPublicMethods" : true,
+    "methods" : [
+      { "name" : "setLockPath", "parameterTypes" : ["java.lang.String"] },
+      { "name" : "setLockedApply", "parameterTypes" : ["boolean"] },
+      { "name" : "setParallelism", "parameterTypes" : ["int"] }
+    ]
   },
   {
-    "name": "binstaller.cli.PlanCommand",
-    "allDeclaredConstructors": true,
-    "allDeclaredMethods": true,
-    "allDeclaredFields": true
+    "name" : "binstaller.cli.BinstallerCommand",
+    "allDeclaredConstructors" : true,
+    "allPublicConstructors" : true,
+    "allDeclaredMethods" : true,
+    "allPublicMethods" : true,
+    "methods" : [
+      { "name" : "setConfigPath", "parameterTypes" : ["java.lang.String"] },
+      { "name" : "setResetState", "parameterTypes" : ["boolean"] },
+      { "name" : "setStatePath", "parameterTypes" : ["java.lang.String"] },
+      { "name" : "setVerboseOutput", "parameterTypes" : ["boolean"] }
+    ]
   },
   {
-    "name": "binstaller.cli.ApplyCommand",
-    "allDeclaredConstructors": true,
-    "allDeclaredMethods": true,
-    "allDeclaredFields": true
+    "name" : "binstaller.cli.ConfiguredCommand",
+    "allDeclaredConstructors" : true,
+    "allPublicConstructors" : true,
+    "allDeclaredMethods" : true,
+    "allPublicMethods" : true
   },
   {
-    "name": "binstaller.cli.VersionsCommand",
-    "allDeclaredConstructors": true,
-    "allDeclaredMethods": true,
-    "allDeclaredFields": true
+    "name" : "binstaller.cli.LockCommand",
+    "allDeclaredConstructors" : true,
+    "allPublicConstructors" : true,
+    "allDeclaredMethods" : true,
+    "allPublicMethods" : true,
+    "methods" : [
+      { "name" : "setOutputPath", "parameterTypes" : ["java.lang.String"] }
+    ]
   },
   {
-    "name": "binstaller.cli.LockCommand",
-    "allDeclaredConstructors": true,
-    "allDeclaredMethods": true,
-    "allDeclaredFields": true
+    "name" : "binstaller.cli.PlanCommand",
+    "allDeclaredConstructors" : true,
+    "allPublicConstructors" : true,
+    "allDeclaredMethods" : true,
+    "allPublicMethods" : true,
+    "methods" : [
+      { "name" : "setLockPath", "parameterTypes" : ["java.lang.String"] },
+      { "name" : "setLockedApply", "parameterTypes" : ["boolean"] }
+    ]
   },
   {
-    "name": "binstaller.cli.SelectableCommand",
-    "allDeclaredConstructors": true,
-    "allDeclaredMethods": true,
-    "allDeclaredFields": true
+    "name" : "binstaller.cli.SelectableCommand",
+    "allDeclaredConstructors" : true,
+    "allPublicConstructors" : true,
+    "allDeclaredMethods" : true,
+    "allPublicMethods" : true,
+    "methods" : [
+      { "name" : "addOnlyTool", "parameterTypes" : ["java.lang.String"] },
+      { "name" : "addSkippedTool", "parameterTypes" : ["java.lang.String"] }
+    ]
   },
   {
-    "name": "picocli.CommandLine$AutoHelpMixin",
-    "allDeclaredConstructors": true,
-    "allDeclaredMethods": true,
-    "allDeclaredFields": true
+    "name" : "binstaller.cli.VersionsCommand",
+    "allDeclaredConstructors" : true,
+    "allPublicConstructors" : true,
+    "allDeclaredMethods" : true,
+    "allPublicMethods" : true
+  },
+  {
+    "name" : "picocli.CommandLine$AutoHelpMixin",
+    "allDeclaredConstructors" : true,
+    "allPublicConstructors" : true,
+    "allDeclaredMethods" : true,
+    "allPublicMethods" : true,
+    "fields" : [
+      { "name" : "helpRequested" },
+      { "name" : "versionRequested" }
+    ]
   }
 ]
