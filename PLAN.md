@@ -537,3 +537,16 @@ baseline and close the remaining gaps in this order:
   `./mill app.run tui --config config.example.yaml`,
   `./mill mill.scalalib.scalafmt/checkFormatAll`,
   `jq empty .agent-loop/tasks.json`, and `git diff --check`.
+- 2026-06-30: Validation iteration 52 completed T010, the responsive UI
+  checkpoint after T008/T009. No source or test fixes were required. Focused
+  config/core/CLI/TUI tests, recursive compile/test, scalafmt check, Mill
+  resolution, app help and command smokes, static first-class TUI smoke, JSON
+  validation, and whitespace checks all passed. Full logs are in
+  `.agent-loop/validations/validation-52-20260630-124145-final/`.
+- The T010 static TUI smoke rendered the current footer shortcuts
+  `p plan | d dry-run | r apply | tab focus | enter details | l logs | space |
+  a/c/i | / filter | ? help | q quit` and printed
+  `non-interactive terminal detected; rendered a static TUI frame`. Live TTY
+  resize/password/error smoke remains environment-blocked here because
+  `test -t 0` exits 1 and reports `stdin_is_tty=false`; `command -v
+  native-image` also exits 1 while `java -version` reports OpenJDK 25.0.3.
