@@ -1285,10 +1285,13 @@ object CoreModuleTest extends TestSuite:
       val tempRoot        = Files.createTempDirectory("binstaller-core-sudo-apply")
       val installDir      = tempRoot.resolve("alpha")
       val commandExecutor = RecordingCommandExecutor()
-      val installer       = DirectBinaryInstaller(
+      val credentials     =
+        RecordingSudoCredentialProvider(Right(SudoPassword.fromString("unused-secret")))
+      val installer = DirectBinaryInstaller(
         FakeBinaryDownloadClient.success("alpha-binary".getBytes(StandardCharsets.UTF_8)),
         InstallFileSystem.nio,
-        commandExecutor
+        commandExecutor,
+        credentials
       )
       val plan = ResolvedPlan(
         ResolvedPolicy(
@@ -1304,13 +1307,166 @@ object CoreModuleTest extends TestSuite:
       val result = installer.installPlan(plan, ApplyConfirmation.Enabled)
 
       assert(result.exitCode == 0)
-      assert(commandExecutor.commands.map(_.argv) == Vector(Vector(
-        "sudo",
-        "ln",
-        "-sfn",
+      assert(credentials.requests.isEmpty)
+      assert(commandExecutor.commands.map(_.argv) == Vector(
+        Vector("sudo", "-n", "true"),
+        Vector(
+          "sudo",
+          "-n",
+          "ln",
+          "-sfn",
+          installDir.toAbsolutePath.normalize().resolve("bin/alpha").toString,
+          "/usr/local/bin/alpha"
+        )
+      ))
+      assert(commandExecutor.commands.forall(_.env == CommandEnvironment.baseline))
+
+    test("sudo symlink apply requests credentials when sudo cache is unavailable"):
+      val tempRoot        = Files.createTempDirectory("binstaller-core-sudo-credentials")
+      val installDir      = tempRoot.resolve("alpha")
+      val password        = "core-test-password"
+      val commandExecutor =
+        SequencedCommandExecutor(Vector(Left("sudo password required"), Right(())))
+      val credentials = RecordingSudoCredentialProvider(Right(SudoPassword.fromString(password)))
+      val installer   = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success("alpha-binary".getBytes(StandardCharsets.UTF_8)),
+        InstallFileSystem.nio,
+        commandExecutor,
+        credentials
+      )
+      val plan = ResolvedPlan(
+        ResolvedPolicy(
+          tempRoot.toString,
+          None,
+          AllowSudoSymlinks.Enabled,
+          RequireConfirmation.Disabled,
+          ContinueOnError.Disabled
+        ),
+        Vector(sudoSymlinkTool(installDir))
+      )
+
+      val result = installer.installPlan(plan, ApplyConfirmation.Enabled)
+
+      assert(result.exitCode == 0)
+      assert(credentials.requests == Vector(SudoCredentialRequest(
+        "alpha",
+        "/usr/local/bin/alpha",
         installDir.toAbsolutePath.normalize().resolve("bin/alpha").toString,
-        "/usr/local/bin/alpha"
+        s"create sudo symlink ${installDir.toAbsolutePath.normalize().resolve("bin/alpha")} -> /usr/local/bin/alpha"
       )))
+      assert(commandExecutor.commands.map(_.argv) == Vector(
+        Vector("sudo", "-n", "true"),
+        Vector(
+          "sudo",
+          "-S",
+          "-p",
+          "",
+          "ln",
+          "-sfn",
+          installDir.toAbsolutePath.normalize().resolve("bin/alpha").toString,
+          "/usr/local/bin/alpha"
+        )
+      ))
+      assert(!commandExecutor.commands.exists(_.argv.contains(password)))
+      assert(!commandExecutor.commands.map(_.toString).exists(_.contains(password)))
+
+    test("sudo credential cancellation fails current operation and continues when policy allows"):
+      val tempRoot        = Files.createTempDirectory("binstaller-core-sudo-cancel")
+      val alphaInstall    = tempRoot.resolve("alpha")
+      val betaInstall     = tempRoot.resolve("beta")
+      val commandExecutor = SequencedCommandExecutor(Vector(Left("sudo password required")))
+      val credentials     = RecordingSudoCredentialProvider(Left(SudoCredentialError.Canceled))
+      val installer       = DirectBinaryInstaller(
+        RoutingBinaryDownloadClient(Map(
+          "https://example.invalid/alpha" -> Right("alpha-binary".getBytes(StandardCharsets.UTF_8)),
+          "https://example.invalid/beta"  -> Right("beta-binary".getBytes(StandardCharsets.UTF_8))
+        )),
+        InstallFileSystem.nio,
+        commandExecutor,
+        credentials
+      )
+      val beta = directTool(betaInstall).copy(name = "beta")
+      val plan = ResolvedPlan(
+        ResolvedPolicy(
+          tempRoot.toString,
+          None,
+          AllowSudoSymlinks.Enabled,
+          RequireConfirmation.Disabled,
+          ContinueOnError.Enabled
+        ),
+        Vector(sudoSymlinkTool(alphaInstall), beta)
+      )
+
+      val result = installer.installPlan(plan, ApplyConfirmation.Enabled)
+
+      assert(result.exitCode == 1)
+      assert(result.lines.exists(_.contains("sudo credentials canceled")))
+      assert(result.lines.exists(_.contains("installed beta")))
+      assert(credentials.requests.map(_.toolName) == Vector("alpha"))
+
+    test("sudo command failure rendering redacts password from diagnostics"):
+      val tempRoot        = Files.createTempDirectory("binstaller-core-sudo-redaction")
+      val installDir      = tempRoot.resolve("alpha")
+      val password        = "super-secret-password"
+      val commandExecutor = PasswordLeakingCommandExecutor(password)
+      val credentials = RecordingSudoCredentialProvider(Right(SudoPassword.fromString(password)))
+      val installer   = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success("alpha-binary".getBytes(StandardCharsets.UTF_8)),
+        InstallFileSystem.nio,
+        commandExecutor,
+        credentials
+      )
+      val plan = ResolvedPlan(
+        ResolvedPolicy(
+          tempRoot.toString,
+          None,
+          AllowSudoSymlinks.Enabled,
+          RequireConfirmation.Disabled,
+          ContinueOnError.Disabled
+        ),
+        Vector(sudoSymlinkTool(installDir))
+      )
+
+      val result = installer.installPlan(plan, ApplyConfirmation.Enabled)
+
+      assert(result.exitCode == 1)
+      assert(result.lines.mkString("\n").contains("<redacted>"))
+      assert(!result.lines.mkString("\n").contains(password))
+      assert(!commandExecutor.commands.exists(_.argv.contains(password)))
+      assert(!commandExecutor.commands.map(_.toString).exists(_.contains(password)))
+
+    test("sudo password is redacted from events and apply state"):
+      val tempRoot        = Files.createTempDirectory("binstaller-core-sudo-state-redaction")
+      val installDir      = tempRoot.resolve("alpha")
+      val stateFile       = "sudo-redaction.state.json"
+      val password        = "state-secret-password"
+      val commandExecutor = PasswordLeakingCommandExecutor(password)
+      val credentials = RecordingSudoCredentialProvider(Right(SudoPassword.fromString(password)))
+      val installer   = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success("alpha-binary".getBytes(StandardCharsets.UTF_8)),
+        InstallFileSystem.nio,
+        commandExecutor,
+        credentials
+      )
+      val service = BinaryInstallerService.resolving(
+        FakeHttpTextClient(""),
+        installer,
+        ApplyStateStore.nio(tempRoot)
+      )
+      val config   = writeConfig(tempRoot, sudoSymlinkYaml(tempRoot, installDir, stateFile))
+      val observer = RecordingInstallerEventObserver()
+
+      val result   = service.applyWithEvents(applyOptions(config), observer)
+      val state    = loadState(tempRoot, stateFile)
+      val rendered =
+        (result.lines ++
+          observer.events.map(_.toString) ++
+          state.tools.flatMap(_.message)).mkString("\n")
+
+      assert(result.exitCode == 1)
+      assert(rendered.contains("<redacted>"))
+      assert(!rendered.contains(password))
+      assert(!commandExecutor.commands.exists(_.argv.contains(password)))
 
     test("completed state entries are skipped and failed entries are retried"):
       val tempRoot     = Files.createTempDirectory("binstaller-core-state-resume")
@@ -1850,6 +2006,41 @@ object CoreModuleTest extends TestSuite:
       ResolvedSymlink("/usr/local/bin/alpha", "bin/alpha", SymlinkPrivilege.Sudo)
     )
   )
+
+  private def sudoSymlinkYaml(
+      tempRoot: Path,
+      installDir: Path,
+      stateFile: String
+  ): String = s"""
+                 |apiVersion: binstaller.io/v1alpha1
+                 |kind: BinaryDistributionProfile
+                 |metadata:
+                 |  name: sudo-redaction
+                 |spec:
+                 |  policy:
+                 |    appsDir: "$tempRoot"
+                 |    stateFile: "$stateFile"
+                 |    allowSudoSymlinks: true
+                 |  versions:
+                 |    alpha: "1.0.0"
+                 |  plan:
+                 |    - name: alpha
+                 |      kind: binary-tool
+                 |      spec:
+                 |        versionRef: alpha
+                 |        installDir: "$installDir"
+                 |        createDirectories:
+                 |          - bin
+                 |        download:
+                 |          url: "https://example.invalid/alpha"
+                 |          filename: alpha
+                 |        executables:
+                 |          - path: bin/alpha
+                 |        symlinks:
+                 |          - path: /usr/local/bin/alpha
+                 |            target: "$installDir/bin/alpha"
+                 |            sudo: true
+                 |""".stripMargin
 
   private def archiveTool(
       installDir: Path,
@@ -2749,6 +2940,51 @@ private final class RecordingCommandExecutor(result: Either[String, Unit] = Righ
   def run(spec: CommandSpec): Either[CommandExecutionError, Unit] =
     recordedCommands = recordedCommands :+ spec
     result.left.map(message => CommandExecutionError(spec, message, None))
+
+private final class SequencedCommandExecutor(results: Vector[Either[String, Unit]])
+    extends CommandExecutor:
+
+  private var recordedCommands: Vector[CommandSpec] = Vector.empty
+
+  def commands: Vector[CommandSpec] = recordedCommands
+
+  def run(spec: CommandSpec): Either[CommandExecutionError, Unit] =
+    recordedCommands = recordedCommands :+ spec
+    val index  = recordedCommands.size - 1
+    val result = results.lift(index).getOrElse(Right(()))
+    result.left.map(message => CommandExecutionError(spec, message, None))
+
+private final class PasswordLeakingCommandExecutor(password: String) extends CommandExecutor:
+
+  private var recordedCommands: Vector[CommandSpec] = Vector.empty
+
+  def commands: Vector[CommandSpec] = recordedCommands
+
+  def run(spec: CommandSpec): Either[CommandExecutionError, Unit] =
+    recordedCommands = recordedCommands :+ spec
+    if spec.argv == Vector("sudo", "-n", "true") then
+      Left(CommandExecutionError(spec, "sudo password required", Some(1)))
+    else
+      Left(CommandExecutionError(
+        spec,
+        s"authentication failed with $password",
+        Some(1),
+        CommandOutput(s"stdout $password", s"stderr $password")
+      ))
+
+private final class RecordingSudoCredentialProvider(
+    result: Either[SudoCredentialError, SudoPassword]
+) extends SudoCredentialProvider:
+
+  private var recordedRequests: Vector[SudoCredentialRequest] = Vector.empty
+
+  def requests: Vector[SudoCredentialRequest] = recordedRequests
+
+  def requestSudoPassword(
+      request: SudoCredentialRequest
+  ): Either[SudoCredentialError, SudoPassword] =
+    recordedRequests = recordedRequests :+ request
+    result
 
 private final class RecordingInstallFileSystem(
     stageFailure: Option[String] = None,

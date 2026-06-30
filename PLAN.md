@@ -477,3 +477,14 @@ baseline and close the remaining gaps in this order:
   so it did not enter raw mode in this shell. Environment blockers remain
   explicit: `command -v native-image` exits 1, `java -version` reports OpenJDK
   25.0.3, and `test -t 0` exits 1.
+- 2026-06-30: Implementation iteration 47 completed T005. Sudo symlink
+  creation now probes cached credentials with fixed `sudo -n true` argv, runs
+  cached privileged links with fixed `sudo -n ln -sfn ...` argv, and requests
+  credentials through an injected core `SudoCredentialProvider` only when the
+  cache probe fails. Password-backed sudo execution uses modeled secret stdin
+  with fixed `sudo -S -p "" ln -sfn ...` argv; passwords are not stored in argv,
+  env, command diagnostics, installer events, or apply state.
+- T005 added typed credential cancellation/unavailable install errors and
+  command-input redaction for process output/errors. Validation passed:
+  `./mill core.test`, `./mill tui.test`, `./mill __.compile`,
+  `./mill mill.scalalib.scalafmt/checkFormatAll`, and `git diff --check`.

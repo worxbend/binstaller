@@ -184,7 +184,8 @@ private final case class ObservedInstallResults(
 final class DirectBinaryInstaller(
     downloadClient: BinaryDownloadClient,
     fileSystem: InstallFileSystem,
-    commandExecutor: CommandExecutor = CommandExecutor.process
+    commandExecutor: CommandExecutor = CommandExecutor.process,
+    sudoCredentials: SudoCredentialProvider = SudoCredentialProvider.unavailable
 ):
 
   /** Install every tool in a plan and render terminal result lines. */
@@ -426,7 +427,7 @@ final class DirectBinaryInstaller(
         verifyExecutables(tool)
       )
       _ <- withPhase(tool, InstallerPhase.CreatingSymlinks, eventContext)(
-        SymlinkInstaller.create(policy, tool, commandExecutor)
+        SymlinkInstaller.create(policy, tool, commandExecutor, sudoCredentials)
       )
     yield ToolInstallSuccess(tool.name, tool.installDir, Some(downloadResult.provenance))
 

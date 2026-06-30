@@ -37,22 +37,26 @@ enum ToolInstallError:
   case SymlinkFailed(toolName: String, path: String, target: String, message: String)
   case SudoSymlinkNotAllowed(toolName: String)
   case SudoSymlinkConfirmationRequired(toolName: String)
+  case SudoCredentialCanceled(toolName: String, path: String, target: String)
+  case SudoCredentialsUnavailable(toolName: String, path: String, target: String, message: String)
 
 /** Rendering and inspection helpers for install failures. */
 object ToolInstallError:
 
   /** Extract the tool name associated with an install failure. */
   def toolName(error: ToolInstallError): String = error match
-    case ToolInstallError.DownloadFailed(toolName, _, _, _)         => toolName
-    case ToolInstallError.ChecksumMismatch(toolName, _, _, _)       => toolName
-    case ToolInstallError.StagingFailed(toolName, _)                => toolName
-    case ToolInstallError.ModeApplicationFailed(toolName, _, _, _)  => toolName
-    case ToolInstallError.ReplacementFailed(toolName, _)            => toolName
-    case ToolInstallError.ArchiveExtractionFailed(toolName, _)      => toolName
-    case ToolInstallError.MissingExecutable(toolName, _)            => toolName
-    case ToolInstallError.SymlinkFailed(toolName, _, _, _)          => toolName
-    case ToolInstallError.SudoSymlinkNotAllowed(toolName)           => toolName
-    case ToolInstallError.SudoSymlinkConfirmationRequired(toolName) => toolName
+    case ToolInstallError.DownloadFailed(toolName, _, _, _)             => toolName
+    case ToolInstallError.ChecksumMismatch(toolName, _, _, _)           => toolName
+    case ToolInstallError.StagingFailed(toolName, _)                    => toolName
+    case ToolInstallError.ModeApplicationFailed(toolName, _, _, _)      => toolName
+    case ToolInstallError.ReplacementFailed(toolName, _)                => toolName
+    case ToolInstallError.ArchiveExtractionFailed(toolName, _)          => toolName
+    case ToolInstallError.MissingExecutable(toolName, _)                => toolName
+    case ToolInstallError.SymlinkFailed(toolName, _, _, _)              => toolName
+    case ToolInstallError.SudoSymlinkNotAllowed(toolName)               => toolName
+    case ToolInstallError.SudoSymlinkConfirmationRequired(toolName)     => toolName
+    case ToolInstallError.SudoCredentialCanceled(toolName, _, _)        => toolName
+    case ToolInstallError.SudoCredentialsUnavailable(toolName, _, _, _) => toolName
 
   /** Render an install failure with terminal safety and redaction applied. */
   def render(
@@ -110,6 +114,27 @@ object ToolInstallError:
       "sudo symlinks are not allowed by policy.allowSudoSymlinks"
     case ToolInstallError.SudoSymlinkConfirmationRequired(_) =>
       "sudo symlinks require apply confirmation; rerun apply with --yes"
+    case ToolInstallError.SudoCredentialCanceled(toolName, path, target) => detailBlock(
+        s"sudo credentials canceled for $target -> $path",
+        Vector(
+          "tool"       -> toolName,
+          "path"       -> path,
+          "target"     -> target,
+          "credential" -> "canceled"
+        ),
+        redactions
+      )
+    case ToolInstallError.SudoCredentialsUnavailable(toolName, path, target, message) =>
+      detailBlock(
+        s"sudo credentials unavailable for $target -> $path",
+        Vector(
+          "tool"       -> toolName,
+          "path"       -> path,
+          "target"     -> target,
+          "credential" -> message
+        ),
+        redactions
+      )
 
   private def detailBlock(
       summary: String,

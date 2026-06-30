@@ -14,12 +14,14 @@ private[core] object SymlinkInstaller:
   def create(
       policy: ResolvedPolicy,
       tool: ResolvedTool,
-      commandExecutor: CommandExecutor
+      commandExecutor: CommandExecutor,
+      sudoCredentials: SudoCredentialProvider
   ): Either[ToolInstallError, Unit] =
     val writes = tool.symlinks.map: symlink =>
       symlink.privilege match
         case SymlinkPrivilege.User => createLocalSymlink(tool, symlink)
-        case SymlinkPrivilege.Sudo => createSudoSymlink(policy, tool, symlink, commandExecutor)
+        case SymlinkPrivilege.Sudo =>
+          createSudoSymlink(policy, tool, symlink, commandExecutor, sudoCredentials)
     writes.collectFirst:
       case Left(error) => error
     match
@@ -51,7 +53,8 @@ private[core] object SymlinkInstaller:
       policy: ResolvedPolicy,
       tool: ResolvedTool,
       symlink: ResolvedSymlink,
-      commandExecutor: CommandExecutor
+      commandExecutor: CommandExecutor,
+      sudoCredentials: SudoCredentialProvider
   ): Either[ToolInstallError, Unit] = policy.allowSudoSymlinks match
     case AllowSudoSymlinks.Disabled => Left(ToolInstallError.SudoSymlinkNotAllowed(tool.name))
     case AllowSudoSymlinks.Enabled  =>
@@ -69,20 +72,81 @@ private[core] object SymlinkInstaller:
         )
       else
         resolveSymlinkTarget(tool, symlink).flatMap: target =>
-          // Sudo is reached only through this fixed argv shape; manifest values are data args, not
-          // shell text.
-          val spec = CommandSpec(
-            Vector("sudo", "ln", "-sfn", target.toString, path.toString),
-            Path.of(tool.installDir).toAbsolutePath.normalize(),
-            CommandEnvironment.baseline
-          )
-          commandExecutor.run(spec).left.map: error =>
-            ToolInstallError.SymlinkFailed(
+          runSudoSymlink(tool, path, target, commandExecutor, sudoCredentials)
+
+  private def runSudoSymlink(
+      tool: ResolvedTool,
+      path: Path,
+      target: Path,
+      commandExecutor: CommandExecutor,
+      sudoCredentials: SudoCredentialProvider
+  ): Either[ToolInstallError, Unit] =
+    val cwd = Path.of(tool.installDir).toAbsolutePath.normalize()
+    commandExecutor.run(cachedCredentialCheck(cwd)) match
+      case Right(()) =>
+        runSudoCommand(tool, path, target, cachedSudoSpec(cwd, path, target), commandExecutor)
+      case Left(_) =>
+        val request = SudoCredentialRequest(
+          tool.name,
+          path.toString,
+          target.toString,
+          s"create sudo symlink ${target} -> ${path}"
+        )
+        sudoCredentials.requestSudoPassword(request) match
+          case Right(password) => runSudoCommand(
+              tool,
+              path,
+              target,
+              passwordSudoSpec(cwd, path, target, password),
+              commandExecutor
+            )
+          case Left(SudoCredentialError.Canceled) =>
+            Left(ToolInstallError.SudoCredentialCanceled(tool.name, path.toString, target.toString))
+          case Left(SudoCredentialError.Unavailable(message)) =>
+            Left(ToolInstallError.SudoCredentialsUnavailable(
               tool.name,
               path.toString,
               target.toString,
-              CommandFailureDetails.render(error)
-            )
+              message
+            ))
+
+  private def cachedCredentialCheck(cwd: Path): CommandSpec = CommandSpec(
+    Vector("sudo", "-n", "true"),
+    cwd,
+    CommandEnvironment.baseline
+  )
+
+  private def cachedSudoSpec(cwd: Path, path: Path, target: Path): CommandSpec = CommandSpec(
+    Vector("sudo", "-n", "ln", "-sfn", target.toString, path.toString),
+    cwd,
+    CommandEnvironment.baseline
+  )
+
+  private def passwordSudoSpec(
+      cwd: Path,
+      path: Path,
+      target: Path,
+      password: SudoPassword
+  ): CommandSpec = CommandSpec(
+    Vector("sudo", "-S", "-p", "", "ln", "-sfn", target.toString, path.toString),
+    cwd,
+    CommandEnvironment.baseline,
+    password.commandInput
+  )
+
+  private def runSudoCommand(
+      tool: ResolvedTool,
+      path: Path,
+      target: Path,
+      spec: CommandSpec,
+      commandExecutor: CommandExecutor
+  ): Either[ToolInstallError, Unit] = commandExecutor.run(spec).left.map: error =>
+    ToolInstallError.SymlinkFailed(
+      tool.name,
+      path.toString,
+      target.toString,
+      CommandFailureDetails.render(error)
+    )
 
   private def resolveSymlinkTarget(
       tool: ResolvedTool,
