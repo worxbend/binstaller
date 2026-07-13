@@ -245,3 +245,105 @@ jobs:
               --notes "${notes}"
           fi
           echo "🎉 Release ${version} is published"
+
+  snap:
+    name: 📦 Snap ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    needs:
+      - release
+    if: ${{ needs.release.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: linux-amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            target: linux-arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🏷️ Resolve release version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ -z "${version}" ]]; then
+            echo "❌ Release version is empty" >&2
+            exit 1
+          fi
+
+          echo "🏷️ Building snap ${version} for ${{ matrix.arch }}"
+          echo "value=${version}" >> "${GITHUB_OUTPUT}"
+          echo "number=${version#v}" >> "${GITHUB_OUTPUT}"
+
+      - name: 📥 Download native CLI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: binstaller-${{ steps.version.outputs.value }}-${{ matrix.target }}
+          path: release-artifacts
+
+      - name: 📦 Stage snap payload
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.value }}"
+          target="${{ matrix.target }}"
+          archive="release-artifacts/binstaller-${version}-${target}.tar.gz"
+
+          echo "::group::📦 Extract ${archive}"
+          mkdir -p snap-stage
+          tar -xzf "${archive}" -C snap-stage --strip-components=1 "binstaller-${version}-${target}/binstaller"
+          chmod +x snap-stage/binstaller
+          echo "::endgroup::"
+
+      - name: 🏷️ Set snap version
+        shell: bash
+        run: |
+          sed -i "s/^version: .*/version: \"${{ steps.version.outputs.number }}\"/" snap/snapcraft.yaml
+
+      - name: 🛠️ Install snapcraft
+        shell: bash
+        run: sudo snap install snapcraft --classic
+
+      - name: 🔥 Build classic snap
+        shell: bash
+        run: snapcraft --destructive-mode --verbosity=verbose
+
+      - name: 🔎 Locate built snap
+        id: snap-file
+        shell: bash
+        run: |
+          snap_file="$(find . -maxdepth 1 -name '*.snap' | head -n 1)"
+          if [[ -z "${snap_file}" ]]; then
+            echo "❌ No .snap file was produced" >&2
+            exit 1
+          fi
+          echo "✅ Built ${snap_file}"
+          echo "path=${snap_file}" >> "${GITHUB_OUTPUT}"
+
+      - name: ⬆️ Upload snap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binstaller-${{ steps.version.outputs.value }}-snap-${{ matrix.arch }}
+          path: ${{ steps.snap-file.outputs.path }}
+          if-no-files-found: error
+
+      - name: 🚀 Publish to Snap Store (stable, classic)
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        shell: bash
+        run: |
+          if [[ -z "${SNAPCRAFT_STORE_CREDENTIALS}" ]]; then
+            echo "⚠️ SNAPCRAFT_STORE_CREDENTIALS is not set; skipping Snap Store upload" >&2
+            exit 0
+          fi
+          snapcraft upload "${{ steps.snap-file.outputs.path }}" --release=stable

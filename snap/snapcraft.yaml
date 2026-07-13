@@ -1,0 +1,36 @@
+name: binstaller
+title: binstaller
+summary: Command-line installer for curated binary tool distributions
+description: |
+  binstaller is a command-line installer for Linux binary tool distributions
+  described by a single YAML profile. It resolves versions, previews what
+  will be downloaded and unpacked, then installs selected tools under a
+  user-controlled apps directory such as ${HOME}/.apps.
+
+  The supported scope is deliberately narrow: command-line plan/apply
+  workflows, direct binary downloads, zip, tar.gz, and tar.xz archives,
+  executable checks, local symlinks, optional sudo symlinks, plan previews,
+  apply state/resume, CLI progress, and version reporting.
+website: https://github.com/worxbend/binstaller
+issues: https://github.com/worxbend/binstaller/issues
+source-code: https://github.com/worxbend/binstaller
+
+version: "0.0.0"
+grade: stable
+confinement: classic
+base: core22
+
+architectures:
+  - build-on: amd64
+  - build-on: arm64
+
+apps:
+  binstaller:
+    command: bin/binstaller
+
+parts:
+  binstaller:
+    plugin: dump
+    source: snap-stage
+    organize:
+      binstaller: bin/binstaller
