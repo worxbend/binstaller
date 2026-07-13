@@ -20,20 +20,30 @@ workstation provisioner.
 
 ## Install
 
-Native Linux amd64 builds are published from `v*` tags by GitHub Actions.
+Native Linux amd64 and arm64 builds are published from `v*` tags by GitHub
+Actions.
+
+Install with the curl-pipe script, which downloads the release tarball,
+verifies its SHA-256 checksum, installs `binstaller` to `~/.local/bin` (set
+`BINSTALLER_INSTALL_DIR` to override), and wires that directory into `PATH`
+via `~/.bashrc` and `~/.zshrc`:
 
 ```bash
-curl -L -o binstaller \
-  https://github.com/worxbend/initkit/releases/latest/download/binstaller-linux-amd64
-chmod +x binstaller
-sudo mv binstaller /usr/local/bin/binstaller
+curl --proto '=https' --tlsv1.2 -sSf \
+  https://github.com/worxbend/binstaller/releases/latest/download/install.sh | sh
 ```
 
-Release artifacts:
+Pin a specific version with `BINSTALLER_VERSION=v0.3.0`.
 
-- `binstaller-linux-amd64`
-- `binstaller-linux-amd64.tar.gz`
-- `SHA256SUMS`
+Release artifacts (each `.tar.gz` and the example config ship with a
+`.sha256` checksum file):
+
+- `binstaller-<version>-linux-amd64.tar.gz`
+- `binstaller-<version>-linux-arm64.tar.gz`
+- `binstaller-<version>-macos-amd64.tar.gz`
+- `binstaller-<version>-macos-arm64.tar.gz`
+- `config.example.<version>.yaml`
+- `install.sh`
 
 ## Quick Start
 

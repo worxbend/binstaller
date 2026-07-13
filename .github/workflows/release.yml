@@ -189,6 +189,15 @@ jobs:
           echo "🔐 Checksum ready: ${example}.sha256"
           echo "::endgroup::"
 
+      - name: 🧰 Add install script
+        shell: bash
+        run: |
+          echo "::group::🧰 Install script"
+          cp scripts/install.sh release-artifacts/install.sh
+          chmod +x release-artifacts/install.sh
+          echo "✅ Install script ready: release-artifacts/install.sh"
+          echo "::endgroup::"
+
       - name: 🔎 Verify release artifacts
         shell: bash
         run: |
@@ -208,6 +217,12 @@ jobs:
             exit 1
           fi
           echo "✅ Example config"
+
+          if [[ ! -f release-artifacts/install.sh ]]; then
+            echo "❌ Missing install script" >&2
+            exit 1
+          fi
+          echo "✅ Install script"
 
           echo "::group::🧾 Required target check"
           expected_targets=(linux-amd64 linux-arm64 macos-amd64 macos-arm64)
@@ -232,7 +247,7 @@ jobs:
         shell: bash
         run: |
           version="${{ steps.version.outputs.value }}"
-          notes=$'🚀 Automated binstaller release for '"${version}"$'.\n\nArtifacts:\n- 🐧 Linux amd64 GraalVM native CLI\n- 🐧 Linux arm64 GraalVM native CLI\n- 🍎 macOS amd64 GraalVM native CLI\n- 🍎 macOS arm64 GraalVM native CLI\n- 🧰 Example configuration\n\nEach asset includes a 🔐 SHA-256 checksum.'
+          notes=$'🚀 Automated binstaller release for '"${version}"$'.\n\nInstall on Linux:\n\n```\ncurl --proto \'=https\' --tlsv1.2 -sSf https://github.com/worxbend/binstaller/releases/latest/download/install.sh | sh\n```\n\nArtifacts:\n- 🐧 Linux amd64 GraalVM native CLI\n- 🐧 Linux arm64 GraalVM native CLI\n- 🍎 macOS amd64 GraalVM native CLI\n- 🍎 macOS arm64 GraalVM native CLI\n- 🧰 Example configuration\n- 📜 install.sh\n\nEach binary and config asset includes a 🔐 SHA-256 checksum.'
 
           if gh release view "${version}" >/dev/null 2>&1; then
             echo "♻️ Updating existing release ${version}"
