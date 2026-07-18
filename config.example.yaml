@@ -14,8 +14,6 @@ spec:
     mode: developer
     continueOnError: false
     appsDir: "${HOME}/.apps"
-    cleanInstall: true
-    requireConfirmation: true
     allowSudoSymlinks: true
     stateFile: developer-binaries.state.json
 

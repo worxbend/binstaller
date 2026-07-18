@@ -238,6 +238,26 @@ object ConfigModuleTest extends TestSuite:
         "checksum must declare either value or discover, not both"
       )))
 
+    test("unknown fields are rejected at every manifest level"):
+      val yaml = policyModeYaml("")
+        .replace("metadata:\n", "metadata:\n  unexpectedMetadata: value\n")
+        .replace("    appsDir:", "    cleanInstall: true\n    appsDir:")
+        .replace("          filename: alpha", "          filename: alpha\n          unexpectedDownload: value")
+      val errors = validationErrors(yaml)
+
+      assert(errors.contains(ValidationError(
+        "metadata.unexpectedMetadata",
+        "unknown field 'unexpectedMetadata'"
+      )))
+      assert(errors.contains(ValidationError(
+        "spec.policy.cleanInstall",
+        "unknown field 'cleanInstall'"
+      )))
+      assert(errors.contains(ValidationError(
+        "spec.plan[0].spec.download.unexpectedDownload",
+        "unknown field 'unexpectedDownload'"
+      )))
+
   private def validationErrors(yaml: String): Vector[ValidationError] =
     ConfigModule.loadString(yaml) match
       case Left(ConfigLoadError.ValidationFailed(errors)) => errors

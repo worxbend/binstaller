@@ -2,10 +2,15 @@ package binstaller.core
 
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import java.io.OutputStream
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
@@ -20,6 +25,16 @@ final case class BinaryDownloadError(
 
 /** Downloaded artifact bytes paired with effective URL metadata. */
 final case class BinaryDownloadResult(bytes: Array[Byte], provenance: UrlProvenance)
+
+/** File-backed downloaded artifact used by the installation pipeline. */
+final case class BinaryDownloadArtifact(
+    path: Path,
+    provenance: UrlProvenance,
+    sha256: Sha256Digest,
+    sizeBytes: Long
+):
+  def discard(): Unit =
+    val _ = Try(Files.deleteIfExists(path))
 
 /** Download progress events emitted by binary download clients. */
 enum BinaryDownloadProgress:
@@ -61,6 +76,27 @@ trait BinaryDownloadClient:
     bytes => BinaryDownloadResult(bytes, UrlProvenance.direct(url))
   )
 
+  /** Stream an artifact to an owned temporary file. Callers must discard it after staging. */
+  def downloadArtifactWithProvenance(
+      url: String,
+      progressObserver: BinaryDownloadProgressObserver = BinaryDownloadProgressObserver.none
+  ): Either[BinaryDownloadError, BinaryDownloadArtifact] = downloadWithProvenance(
+    url,
+    progressObserver
+  ).flatMap: result =>
+    Try:
+      val path = Files.createTempFile("binstaller-download-", ".artifact")
+      Files.write(path, result.bytes)
+      BinaryDownloadArtifact(
+        path,
+        result.provenance,
+        Sha256Digest.trusted(Sha256.digest(result.bytes)),
+        result.bytes.length.toLong
+      )
+    match
+      case Success(artifact) => Right(artifact)
+      case Failure(error)    => Left(BinaryDownloadError(url, error.getMessage, Some(result.provenance)))
+
 /** Binary download client constructors. */
 object BinaryDownloadClient:
   /** JDK HTTP implementation with HTTPS, redirects, timeout, size, and body-time limits. */
@@ -95,7 +131,18 @@ private[core] final class JdkBinaryDownloadClient(
   override def downloadWithProvenance(
       url: String,
       progressObserver: BinaryDownloadProgressObserver
-  ): Either[BinaryDownloadError, BinaryDownloadResult] = RuntimeUrl.httpsUri(url) match
+  ): Either[BinaryDownloadError, BinaryDownloadResult] = downloadArtifactWithProvenance(
+    url,
+    progressObserver
+  ).flatMap: artifact =>
+    try Right(BinaryDownloadResult(Files.readAllBytes(artifact.path), artifact.provenance))
+    catch case error: Exception => Left(BinaryDownloadError(url, error.getMessage, Some(artifact.provenance)))
+    finally artifact.discard()
+
+  override def downloadArtifactWithProvenance(
+      url: String,
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[BinaryDownloadError, BinaryDownloadArtifact] = RuntimeUrl.httpsUri(url) match
     case Left(message) => Left(BinaryDownloadError(url, message))
     case Right(uri)    =>
       val request = HttpRequest.newBuilder(uri).timeout(RuntimeHttpClient.requestTimeout).GET()
@@ -105,41 +152,88 @@ private[core] final class JdkBinaryDownloadClient(
           val provenance = UrlProvenance.fromResponse(url, response)
           RuntimeUrl.httpsUri(provenance.finalUrl) match
             case Left(message) => Left(BinaryDownloadError(url, message, Some(provenance)))
-            case Right(_)      => readBody(provenance, response, progressObserver)
+            case Right(_)      => readBodyToFile(provenance, response, progressObserver)
         case Success(response) =>
           val provenance = UrlProvenance.fromResponse(url, response)
           Left(BinaryDownloadError(url, s"HTTP ${response.statusCode()}", Some(provenance)))
         case Failure(error) => Left(BinaryDownloadError(url, error.getMessage))
 
-  private def readBody(
+  private def readBodyToFile(
       provenance: UrlProvenance,
       response: HttpResponse[InputStream],
       progressObserver: BinaryDownloadProgressObserver
-  ): Either[BinaryDownloadError, BinaryDownloadResult] =
+  ): Either[BinaryDownloadError, BinaryDownloadArtifact] =
     val totalBytes = response.headers().firstValueAsLong("Content-Length") match
       case value if value.isPresent && value.getAsLong >= 0L => Some(value.getAsLong)
       case _                                                 => None
 
-    Try:
+    val tempPath = Try(Files.createTempFile("binstaller-download-", ".artifact")) match
+      case Failure(error) => return Left(BinaryDownloadError(
+          provenance.initialUrl, error.getMessage, Some(provenance)
+        ))
+      case Success(path) => path
+    (Try:
       Using.resource(response.body()): input =>
-        // The whole artifact is currently materialized because checksum and archive extraction
-        // operate on bytes; size and body-time limits bound that risk until streaming exists.
-        BoundedBinaryBodyReader.read(
-          provenance.finalUrl,
-          input,
-          totalBytes,
-          limits,
-          progressObserver
-        )
-    match
+        val outputStream = Files.newOutputStream(
+            tempPath,
+            StandardOpenOption.TRUNCATE_EXISTING,
+            StandardOpenOption.WRITE
+          )
+        Using.resource(outputStream): output =>
+          BoundedBinaryBodyReader.write(
+            provenance.finalUrl,
+            input,
+            output,
+            totalBytes,
+            limits,
+            progressObserver
+          )
+    ) match
       case Success(result) => result
-          .map(bytes => BinaryDownloadResult(bytes, provenance))
+          .map((digest, size) => BinaryDownloadArtifact(tempPath, provenance, digest, size))
           .left
-          .map(error => error.copy(url = provenance.initialUrl, provenance = Some(provenance)))
+          .map: error =>
+            val _ = Files.deleteIfExists(tempPath)
+            error.copy(url = provenance.initialUrl, provenance = Some(provenance))
       case Failure(error) =>
+        val _ = Files.deleteIfExists(tempPath)
         Left(BinaryDownloadError(provenance.initialUrl, error.getMessage, Some(provenance)))
 
 private[core] object BoundedBinaryBodyReader:
+
+  def write(
+      url: String,
+      input: InputStream,
+      output: OutputStream,
+      totalBytes: Option[Long],
+      limits: BinaryDownloadLimits,
+      progressObserver: BinaryDownloadProgressObserver,
+      nowNanos: () => Long = () => System.nanoTime()
+  ): Either[BinaryDownloadError, (Sha256Digest, Long)] = totalBytes match
+    case Some(length) if length > limits.maxBytes =>
+      Left(BinaryDownloadError(url, maxSizeMessage(length, limits.maxBytes)))
+    case _ => (Try:
+        val deadline = nowNanos() + limits.bodyTimeout.toNanos
+        val digest   = MessageDigest.getInstance("SHA-256")
+        val buffer   = Array.ofDim[Byte](64 * 1024)
+        var total    = 0L
+        progressObserver.onProgress(BinaryDownloadProgress.Started(url, totalBytes))
+        var count = input.read(buffer)
+        while count != -1 do
+          rejectAfterDeadline(nowNanos(), deadline, limits.bodyTimeout)
+          total += count
+          if total > limits.maxBytes then
+            throw IllegalArgumentException(maxSizeMessage(total, limits.maxBytes))
+          output.write(buffer, 0, count)
+          digest.update(buffer, 0, count)
+          progressObserver.onProgress(BinaryDownloadProgress.Advanced(url, total, totalBytes))
+          count = input.read(buffer)
+        rejectAfterDeadline(nowNanos(), deadline, limits.bodyTimeout)
+        progressObserver.onProgress(BinaryDownloadProgress.Finished(url, total, totalBytes))
+        Sha256Digest.trusted(digest.digest().map(byte => f"${byte & 0xff}%02x").mkString) -> total
+      ) match
+        case Success(result) => Right(result)
+        case Failure(error)  => Left(BinaryDownloadError(url, error.getMessage))
 
   def read(
       url: String,

@@ -118,10 +118,9 @@ private[core] object LockedApplyValidator:
   )(s"tool '${tool.name}' has incomplete download provenance")
     .orElse:
       Option.when(
-        lockedTool.dynamicSource && lockedTool.sizeBytes.isEmpty && lockedTool.checksum.isEmpty
+        lockedTool.checksum.isEmpty
       )(
-        s"tool '${tool.name}' has incomplete dynamic lock data; " +
-          "dynamic sources require size or checksum metadata"
+        s"tool '${tool.name}' has no locked sha256 digest; regenerate the lock file"
       )
 
   private def versionProblem(tool: ResolvedTool, lockedTool: LockFileTool): Option[String] =
@@ -151,15 +150,19 @@ private[core] object LockedApplyValidator:
   private def checksumProblem(tool: ResolvedTool, lockedTool: LockFileTool): Option[String] =
     val current = tool.download.checksum.map(lockChecksum)
     (current, lockedTool.checksum) match
-      case (Some(expected), Some(actual)) if expected != actual =>
+      case (Some(expected), Some(actual))
+          if expected.algorithm != actual.algorithm ||
+            !expected.value.equalsIgnoreCase(actual.value) =>
         Some(
           s"tool '${tool.name}' checksum changed: lock has ${render(actual)}, " +
             s"manifest has ${render(expected)}"
         )
       case (Some(expected), None) =>
         Some(s"tool '${tool.name}' is missing locked checksum ${render(expected)}")
-      case (None, Some(actual)) =>
-        Some(s"tool '${tool.name}' lock has checksum ${render(actual)} but manifest has none")
+      case (None, Some(actual)) if actual.algorithm != "sha256" ||
+          !actual.value.matches("(?i)^[0-9a-f]{64}$") =>
+        Some(s"tool '${tool.name}' has invalid locked checksum ${render(actual)}")
+      case (None, Some(_)) => None
       case _ => None
 
   private def downloadUrlProblem(tool: ResolvedTool, lockedTool: LockFileTool): Option[String] =
@@ -179,6 +182,7 @@ private[core] object LockedApplyValidator:
       )
     case Right(metadata) => provenanceDriftProblem(tool, lockedTool, metadata)
         .orElse(sizeDriftProblem(tool, lockedTool, metadata))
+        .orElse(digestDriftProblem(tool, lockedTool, metadata))
 
   private def provenanceDriftProblem(
       tool: ResolvedTool,
@@ -198,6 +202,18 @@ private[core] object LockedApplyValidator:
     case (Some(expected), Some(actual)) if expected != actual =>
       Some(s"tool '${tool.name}' size changed: lock has $expected bytes, current is $actual bytes")
     case _ => None
+
+  private def digestDriftProblem(
+      tool: ResolvedTool,
+      lockedTool: LockFileTool,
+      metadata: BinaryMetadata
+  ): Option[String] = (lockedTool.checksum, metadata.sha256) match
+    case (Some(expected), Some(actual)) if !expected.value.equalsIgnoreCase(actual.value) =>
+      Some(
+        s"tool '${tool.name}' sha256 changed: lock has ${expected.value}, current GET has ${actual.value}"
+      )
+    case (Some(_), None) => Some(s"tool '${tool.name}' metadata verification returned no sha256")
+    case _               => None
 
   private def lockChecksum(checksum: ResolvedChecksum): LockFileChecksum =
     LockFileChecksum.fromResolved(checksum)

@@ -25,19 +25,22 @@ private[core] object StrictPolicyValidator:
   def validate(
       profile: BinaryDistributionProfile,
       policy: ResolvedPolicy,
-      tools: Vector[ResolvedTool]
-  ): Vector[ValidationError] = dynamicLatestUrlErrors(profile, policy) ++
+      tools: Vector[ResolvedTool],
+      activeVersionRefs: Set[String]
+  ): Vector[ValidationError] = dynamicLatestUrlErrors(profile, policy, activeVersionRefs) ++
     latestDownloadUrlErrors(policy, tools) ++
     missingChecksumErrors(policy, tools) ++
     tarXzFallbackErrors(policy, tools)
 
   private def dynamicLatestUrlErrors(
       profile: BinaryDistributionProfile,
-      policy: ResolvedPolicy
+      policy: ResolvedPolicy,
+      activeVersionRefs: Set[String]
   ): Vector[ValidationError] = policy.allowDynamicLatestUrls match
     case PolicyAllowance.Allowed  => Vector.empty
     case PolicyAllowance.Rejected => profile.spec.versions.toVector.collect:
-        case (name, VersionSource.Dynamic(DynamicVersionKind.LatestUrl, _)) => strictError(
+        case (name, VersionSource.Dynamic(DynamicVersionKind.LatestUrl, _))
+            if activeVersionRefs(name) => strictError(
             s"spec.versions.$name.dynamic.type",
             "dynamic-latest-url",
             "dynamic latest-url version sources are rejected by policy.mode=strict",

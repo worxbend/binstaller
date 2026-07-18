@@ -16,6 +16,7 @@ enum ApplyStateError:
   case ReadFailed(path: Path, message: String)
   case WriteFailed(path: Path, message: String)
   case DecodeFailed(path: Path, message: String)
+  case UnsupportedSchema(path: Path, expected: Int, actual: Int)
 
   case IncompatibleState(
       path: Path,
@@ -34,6 +35,9 @@ object ApplyStateError:
     case ApplyStateError.ReadFailed(path, message)   => s"state read failed for $path: $message"
     case ApplyStateError.WriteFailed(path, message)  => s"state write failed for $path: $message"
     case ApplyStateError.DecodeFailed(path, message) => s"state decode failed for $path: $message"
+    case ApplyStateError.UnsupportedSchema(path, expected, actual) =>
+      s"state file $path uses schema version $actual, expected $expected; " +
+        "rerun with --reset-state to ignore saved state"
     case ApplyStateError.IncompatibleState(
           path,
           expectedProfileName,

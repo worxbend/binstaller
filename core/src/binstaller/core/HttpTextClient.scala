@@ -1,11 +1,15 @@
 package binstaller.core
 
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.nio.charset.StandardCharsets
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
+import scala.util.Using
 
 /** Expected failure from a text version resolver. */
 final case class HttpTextError(
@@ -33,6 +37,8 @@ object HttpTextClient:
 
 private[core] final class JdkHttpTextClient(client: HttpClient) extends HttpTextClient:
 
+  private val maxResponseBytes = 4L * 1024L * 1024L
+
   def getText(url: String): Either[HttpTextError, String] = getTextWithProvenance(url).map(_.text)
 
   override def getTextWithProvenance(
@@ -42,13 +48,33 @@ private[core] final class JdkHttpTextClient(client: HttpClient) extends HttpText
     case Right(uri)    =>
       val request = HttpRequest.newBuilder(uri).timeout(RuntimeHttpClient.requestTimeout).GET()
         .build()
-      Try(client.send(request, HttpResponse.BodyHandlers.ofString())) match
+      Try(client.send(request, HttpResponse.BodyHandlers.ofInputStream())) match
         case Success(response) if response.statusCode() >= 200 && response.statusCode() < 300 =>
           val provenance = UrlProvenance.fromResponse(url, response)
           RuntimeUrl.httpsUri(provenance.finalUrl) match
-            case Right(_)      => Right(HttpTextResponse(response.body(), provenance))
+            case Right(_)      => readBounded(response.body(), maxResponseBytes)
+                .map(text => HttpTextResponse(text, provenance))
+                .left
+                .map(message => HttpTextError(url, message, Some(provenance)))
             case Left(message) => Left(HttpTextError(url, message, Some(provenance)))
         case Success(response) =>
           val provenance = UrlProvenance.fromResponse(url, response)
           Left(HttpTextError(url, s"HTTP ${response.statusCode()}", Some(provenance)))
         case Failure(error) => Left(HttpTextError(url, error.getMessage))
+
+  private def readBounded(input: InputStream, maxBytes: Long): Either[String, String] = Try:
+    Using.resource(input): stream =>
+      val output = ByteArrayOutputStream()
+      val buffer = Array.ofDim[Byte](8192)
+      var total  = 0L
+      var count  = stream.read(buffer)
+      while count != -1 do
+        total += count
+        if total > maxBytes then
+          throw IllegalArgumentException(s"text response exceeds max allowed $maxBytes bytes")
+        output.write(buffer, 0, count)
+        count = stream.read(buffer)
+      output.toString(StandardCharsets.UTF_8)
+  match
+    case Success(text)  => Right(text)
+    case Failure(error) => Left(error.getMessage)

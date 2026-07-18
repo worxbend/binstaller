@@ -131,7 +131,6 @@ final class DirectBinaryInstaller(
       tool.installDir,
       None,
       AllowSudoSymlinks.Disabled,
-      RequireConfirmation.Disabled,
       ContinueOnError.Disabled
     )
     if tool.symlinks.exists(_.privilege == SymlinkPrivilege.Sudo) then
@@ -205,23 +204,25 @@ final class DirectBinaryInstaller(
       eventContext: InstallerEventContext,
       redactions: SensitiveValueRedactions
   ): Either[ToolInstallError, ToolInstallSuccess] =
-    for
-      downloadResult <- download(tool, eventContext, redactions)
-      bytes = downloadResult.bytes
-      // Integrity is checked before staging/replacement so a bad artifact cannot overwrite a
-      // previously working install.
-      _ <-
-        withPhase(tool, InstallerPhase.VerifyingChecksum, eventContext)(verifyChecksum(tool, bytes))
-      staged <- withPhase(tool, InstallerPhase.Staging, eventContext)(stage(tool, bytes))
-      _      <- prepareStagedInstall(tool, staged, eventContext)
-      _ <- withPhase(tool, InstallerPhase.ReplacingInstall, eventContext)(replace(tool, staged))
-      _ <- withPhase(tool, InstallerPhase.VerifyingExecutables, eventContext)(
-        verifyExecutables(tool)
-      )
-      _ <- withPhase(tool, InstallerPhase.CreatingSymlinks, eventContext)(
-        SymlinkInstaller.create(policy, tool, commandExecutor, sudoCredentials)
-      )
-    yield ToolInstallSuccess(tool.name, tool.installDir, Some(downloadResult.provenance))
+    download(tool, eventContext, redactions).flatMap: artifact =>
+      val result = for
+        // Integrity is checked before staging/replacement so a bad artifact cannot overwrite a
+        // previously working install.
+        _ <- withPhase(tool, InstallerPhase.VerifyingChecksum, eventContext)(
+          verifyChecksum(tool, artifact.sha256)
+        )
+        staged <- withPhase(tool, InstallerPhase.Staging, eventContext)(stage(tool, artifact.path))
+        _      <- prepareStagedInstall(tool, staged, eventContext)
+        _ <- withPhase(tool, InstallerPhase.ReplacingInstall, eventContext)(replace(tool, staged))
+        _ <- withPhase(tool, InstallerPhase.VerifyingExecutables, eventContext)(
+          verifyExecutables(tool)
+        )
+        _ <- withPhase(tool, InstallerPhase.CreatingSymlinks, eventContext)(
+          SymlinkInstaller.create(policy, tool, commandExecutor, sudoCredentials)
+        )
+      yield ToolInstallSuccess(tool.name, tool.installDir, Some(artifact.provenance))
+      artifact.discard()
+      result
 
   private def prepareTool(
       tool: ResolvedTool,
@@ -244,16 +245,18 @@ final class DirectBinaryInstaller(
       eventContext: InstallerEventContext,
       redactions: SensitiveValueRedactions
   ): Either[ToolInstallError, (StagedInstall, UrlProvenance)] =
-    for
-      downloadResult <- download(tool, eventContext, redactions)
-      bytes = downloadResult.bytes
-      // Integrity is checked before staging/replacement so a bad artifact cannot overwrite a
-      // previously working install.
-      _ <-
-        withPhase(tool, InstallerPhase.VerifyingChecksum, eventContext)(verifyChecksum(tool, bytes))
-      staged <- withPhase(tool, InstallerPhase.Staging, eventContext)(stage(tool, bytes))
-      _      <- prepareStagedInstall(tool, staged, eventContext)
-    yield staged -> downloadResult.provenance
+    download(tool, eventContext, redactions).flatMap: artifact =>
+      val result = for
+        // Integrity is checked before staging/replacement so a bad artifact cannot overwrite a
+        // previously working install.
+        _ <- withPhase(tool, InstallerPhase.VerifyingChecksum, eventContext)(
+          verifyChecksum(tool, artifact.sha256)
+        )
+        staged <- withPhase(tool, InstallerPhase.Staging, eventContext)(stage(tool, artifact.path))
+        _      <- prepareStagedInstall(tool, staged, eventContext)
+      yield staged -> artifact.provenance
+      artifact.discard()
+      result
 
   private def prepareStagedInstall(
       tool: ResolvedTool,
@@ -360,7 +363,7 @@ final class DirectBinaryInstaller(
       tool: ResolvedTool,
       eventContext: InstallerEventContext,
       redactions: SensitiveValueRedactions
-  ): Either[ToolInstallError, BinaryDownloadResult] = downloadClient.downloadWithProvenance(
+  ): Either[ToolInstallError, BinaryDownloadArtifact] = downloadClient.downloadArtifactWithProvenance(
     tool.download.url,
     downloadProgressObserver(tool, eventContext, redactions)
   ).left.map: error =>
@@ -415,30 +418,29 @@ final class DirectBinaryInstaller(
 
   private def verifyChecksum(
       tool: ResolvedTool,
-      bytes: Array[Byte]
+      actual: Sha256Digest
   ): Either[ToolInstallError, Unit] = tool.download.checksum match
     case None           => Right(())
     case Some(checksum) =>
-      val actual = Sha256.digest(bytes)
-      if actual.equalsIgnoreCase(checksum.value) then Right(())
+      if actual.value.equalsIgnoreCase(checksum.value) then Right(())
       else
         Left(ToolInstallError.ChecksumMismatch(
           tool.name,
           checksum.value,
-          actual,
+          actual.value,
           ResolvedChecksum.sourceDescription(checksum)
         ))
 
   private def stage(
       tool: ResolvedTool,
-      bytes: Array[Byte]
+      artifact: Path
   ): Either[ToolInstallError, StagedInstall] = tool.download.archive match
     case Some(archive) => fileSystem
-        .stageArchive(
+        .stageArchiveFromFile(
           Path.of(tool.installDir),
           tool.createDirectories,
           archive,
-          bytes,
+          artifact,
           commandExecutor
         )
         .left
@@ -446,11 +448,11 @@ final class DirectBinaryInstaller(
     case None => tool.executables.headOption match
         case None                  => Left(ToolInstallError.MissingExecutable(tool.name, "<none>"))
         case Some(firstExecutable) => fileSystem
-            .stageDirectBinary(
+            .stageDirectBinaryFromFile(
               Path.of(tool.installDir),
               tool.createDirectories,
               firstExecutable.path,
-              bytes
+              artifact
             )
             .left
             .map(error => ToolInstallError.StagingFailed(tool.name, error.message))

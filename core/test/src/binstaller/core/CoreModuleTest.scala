@@ -3,51 +3,24 @@ package binstaller.core
 import binstaller.config.ChecksumAlgorithm
 import binstaller.config.ConfigModule
 import binstaller.config.ExecutableMode
-import binstaller.config.ArchiveExtract
-import binstaller.config.ArchiveSpec
 import binstaller.config.ArchiveType
 import binstaller.config.AllowSudoSymlinks
-import binstaller.config.ExtractMapping
-import binstaller.config.ValidationError
 import binstaller.config.SymlinkPrivilege
 import utest.*
 
 import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
-import java.net.Authenticator
-import java.net.CookieHandler
-import java.net.ProxySelector
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpHeaders
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.net.http.WebSocket
+import java.io.InputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
-import java.security.MessageDigest
 import java.time.Duration
-import java.util.Optional
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentLinkedQueue
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.Executor
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.zip.GZIPOutputStream
-import java.util.zip.CRC32
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLParameters
-import javax.net.ssl.SSLSession
 import scala.jdk.CollectionConverters.*
 import scala.util.Using
 import upickle.default.read
 import upickle.default.write
 
-object CoreModuleTest extends TestSuite:
+object CoreModuleTest extends TestSuite with CoreTestSupport:
 
   val tests: Tests = Tests:
     test("module path includes config before core"):
@@ -77,11 +50,33 @@ object CoreModuleTest extends TestSuite:
       assert(ResolvedVersion.render(tool.version) == "v1.33.0")
       assert(tool.download.url == "https://dl.k8s.io/release/v1.33.0/bin/linux/amd64/kubectl")
 
+    test("host selectors exclude non-matching tools before version resolution"):
+      val requestedUrls = ConcurrentLinkedQueue[String]()
+      val client = new HttpTextClient:
+        def getText(url: String): Either[HttpTextError, String] =
+          requestedUrls.add(url)
+          Right("1.0.0")
+
+      val profile = ConfigModule.loadString(hostSelectedYaml) match
+        case Right(value) => value
+        case Left(error)  => abort(s"expected valid config, got $error")
+      val options = ResolutionOptions(
+        Map("HOME" -> "/home/test"),
+        SensitiveValueRedactions.empty,
+        HostPlatform("linux", "amd64")
+      )
+      val plan = PlanResolver.resolve(profile, options, client) match
+        case Right(value) => value
+        case Left(error)  => abort(s"expected resolved plan, got $error")
+
+      assert(plan.tools.map(_.name) == Vector("linux-tool"))
+      assert(requestedUrls.asScala.toVector == Vector("https://example.invalid/linux-version"))
+
     test("JDK http-text client records direct no-redirect provenance"):
-      val response = FakeHttpResponse[String](
+      val response = FakeHttpResponse[InputStream](
         responseUri = "https://example.invalid/stable.txt",
         responseStatusCode = 200,
-        responseBody = "v1.0.0"
+        responseBody = ByteArrayInputStream("v1.0.0".getBytes(StandardCharsets.UTF_8))
       )
       val client = JdkHttpTextClient(StaticHttpClient(response))
 
@@ -96,21 +91,21 @@ object CoreModuleTest extends TestSuite:
         case Left(error) => abort(s"expected text response, got $error")
 
     test("JDK http-text client records multiple redirects"):
-      val first = FakeHttpResponse[String](
+      val first = FakeHttpResponse[InputStream](
         responseUri = "https://example.invalid/stable.txt",
         responseStatusCode = 302,
-        responseBody = ""
+        responseBody = ByteArrayInputStream(Array.emptyByteArray)
       )
-      val second = FakeHttpResponse[String](
+      val second = FakeHttpResponse[InputStream](
         responseUri = "https://cdn.example.invalid/releases/stable.txt",
         responseStatusCode = 301,
-        responseBody = "",
+        responseBody = ByteArrayInputStream(Array.emptyByteArray),
         previous = Some(first)
       )
-      val finalResponse = FakeHttpResponse[String](
+      val finalResponse = FakeHttpResponse[InputStream](
         responseUri = "https://mirror.example.invalid/releases/stable.txt",
         responseStatusCode = 200,
-        responseBody = "v1.0.1",
+        responseBody = ByteArrayInputStream("v1.0.1".getBytes(StandardCharsets.UTF_8)),
         previous = Some(second)
       )
       val client = JdkHttpTextClient(StaticHttpClient(finalResponse))
@@ -573,7 +568,8 @@ object CoreModuleTest extends TestSuite:
         RoutingBinaryMetadataClient(Map(
           "https://example.invalid/alpha-1.0.0" -> BinaryMetadata(
             Some(11L),
-            UrlProvenance.direct("https://example.invalid/alpha-1.0.0")
+            UrlProvenance.direct("https://example.invalid/alpha-1.0.0"),
+            Some(Sha256Digest.trusted("a" * 64))
           ),
           "https://example.invalid/beta-2.0.0" -> BinaryMetadata(
             Some(22L),
@@ -585,11 +581,13 @@ object CoreModuleTest extends TestSuite:
                 "https://cdn.example.invalid/beta-2.0.0",
                 301
               ))
-            )
+            ),
+            Some(Sha256Digest.trusted("b" * 64))
           ),
           "https://example.invalid/latest/gamma" -> BinaryMetadata(
             None,
-            UrlProvenance.direct("https://example.invalid/latest/gamma")
+            UrlProvenance.direct("https://example.invalid/latest/gamma"),
+            Some(Sha256Digest.trusted("c" * 64))
           )
         )),
         LockFileStore.nio
@@ -620,7 +618,7 @@ object CoreModuleTest extends TestSuite:
       assert(tools("gamma").resolvedVersion.isEmpty)
       assert(tools("gamma").versionProvenance.isEmpty)
       assert(tools("gamma").sizeBytes.isEmpty)
-      assert(tools("gamma").checksum.isEmpty)
+      assert(tools("gamma").checksum.exists(_.value == "c" * 64))
       assert(tools("gamma").dynamicSource)
       assert(!Files.exists(tempRoot.resolve("lock.state.json")))
       assert(!Files.exists(tempRoot.resolve("apps")))
@@ -649,7 +647,8 @@ object CoreModuleTest extends TestSuite:
         RoutingBinaryMetadataClient(Map(
           "https://example.invalid/releases/1.0.0/alpha-1.0.0.tar.gz" -> BinaryMetadata(
             Some(artifactBytes.length.toLong),
-            UrlProvenance.direct("https://example.invalid/releases/1.0.0/alpha-1.0.0.tar.gz")
+            UrlProvenance.direct("https://example.invalid/releases/1.0.0/alpha-1.0.0.tar.gz"),
+            Some(Sha256Digest.trusted(artifactHash))
           )
         )),
         LockFileStore.nio
@@ -671,7 +670,7 @@ object CoreModuleTest extends TestSuite:
       assert(Files.readString(tempRoot.resolve("apps/alpha/bin/alpha")) == "alpha-binary")
       assert(lockResult.exitCode == 0)
       assert(lockResult.lines.exists(_.contains(
-        "checksums: configured 0, discovered 1, missing 0"
+        "checksums: configured 0, discovered 1, inspected 0, missing 0"
       )))
       assert(lock.tools.head.checksum.exists(checksum =>
         checksum.source == "discovered" &&
@@ -831,7 +830,7 @@ object CoreModuleTest extends TestSuite:
       )
 
       assert(result.exitCode == 1)
-      assert(result.lines.exists(_.contains("incomplete dynamic lock data")))
+      assert(result.lines.exists(_.contains("no locked sha256 digest")))
       assert(!Files.exists(tempRoot.resolve("apps")))
       assert(!Files.exists(tempRoot.resolve("lock.state.json")))
 
@@ -853,7 +852,57 @@ object CoreModuleTest extends TestSuite:
       assert(result.lines.exists(_.contains("is missing")))
       assert(!Files.exists(installDir))
 
-    test("apply is confirmed by default when policy requireConfirmation is true"):
+    test("locked apply verifies digest against bytes from the installation GET"):
+      val tempRoot     = Files.createTempDirectory("binstaller-core-locked-get-digest")
+      val installDir   = tempRoot.resolve("alpha")
+      val config       = writeConfig(tempRoot, directBinaryYaml(installDir))
+      val lockPath     = tempRoot.resolve("binstaller.lock.json")
+      val expected     = "expected".getBytes(StandardCharsets.UTF_8)
+      val changed      = "changed!".getBytes(StandardCharsets.UTF_8)
+      val expectedHash = sha256(expected)
+      val profile = ConfigModule.load(config) match
+        case Right(value) => value
+        case Left(error)  => abort(s"expected valid config, got $error")
+      val url = "https://example.invalid/alpha"
+      writeLock(lockPath, LockFile(
+        LockFile.schemaVersion,
+        profile.metadata.name,
+        ManifestFingerprint.profile(profile),
+        Vector(LockFileTool(
+          "alpha",
+          Some("1.0.0"),
+          None,
+          UrlProvenance.direct(url),
+          Some(expected.length.toLong),
+          Some(LockFileChecksum("sha256", expectedHash, "inspected", None, None, None)),
+          false
+        ))
+      ))
+      val service = BinaryInstallerService.resolving(
+        FakeHttpTextClient(""),
+        DirectBinaryInstaller(
+          RoutingBinaryDownloadClient(Map(url -> Right(changed))),
+          InstallFileSystem.nio
+        ),
+        ApplyStateStore.nio(tempRoot),
+        RoutingBinaryMetadataClient(Map(url -> BinaryMetadata(
+          Some(expected.length.toLong),
+          UrlProvenance.direct(url),
+          Some(Sha256Digest.trusted(expectedHash))
+        ))),
+        LockFileStore.nio
+      )
+
+      val result = service.apply(applyOptions(config).copy(
+        lockPath = lockPath.toString,
+        lockedApply = LockedApplyMode.Enabled
+      ))
+
+      assert(result.exitCode == 1)
+      assert(result.lines.exists(_.contains("checksum: sha256 expected")))
+      assert(!Files.exists(installDir))
+
+    test("apply installs a resolved plan"):
       val tempRoot   = Files.createTempDirectory("binstaller-core-confirm")
       val installDir = tempRoot.resolve("alpha")
       val config     = writeConfig(tempRoot, directBinaryYaml(installDir))
@@ -922,6 +971,21 @@ object CoreModuleTest extends TestSuite:
       assert(client.maxInFlight >= 2)
       assert(Files.isRegularFile(tempRoot.resolve("apps/alpha/bin/alpha")))
       assert(Files.isRegularFile(tempRoot.resolve("apps/beta/bin/beta")))
+
+    test("service honors apply parallelism of one"):
+      val tempRoot = Files.createTempDirectory("binstaller-core-serial-downloads")
+      val config   = writeConfig(tempRoot, twoToolYaml(tempRoot, "serial.state.json"))
+      val client   = ParallelismProbeDownloadClient()
+      val service = BinaryInstallerService.resolving(
+        FakeHttpTextClient(""),
+        DirectBinaryInstaller(client, InstallFileSystem.nio),
+        ApplyStateStore.nio(tempRoot)
+      )
+
+      val result = service.apply(applyOptions(config).copy(applyParallelism = ApplyParallelism(1)))
+
+      assert(result.exitCode == 0)
+      assert(client.maxInFlight == 1)
 
     test("sudo password requests stay serialized after parallel downloads"):
       val tempRoot = Files.createTempDirectory("binstaller-core-parallel-sudo")
@@ -1114,8 +1178,10 @@ object CoreModuleTest extends TestSuite:
 
       assertInstallSuccess(result, installDir.toString)
       assert(Files.readString(installDir.resolve("bin/zig")) == "zig")
-      assert(commandExecutor.commands.map(_.argv.take(2)) == Vector(Vector("tar", "-xJf")))
-      assert(commandExecutor.commands.exists(_.argv.contains("-C")))
+      assert(commandExecutor.commands.map(_.argv.take(2)) == Vector(Vector("tar", "--extract")))
+      assert(commandExecutor.commands.head.argv.contains("--no-same-owner"))
+      assert(commandExecutor.commands.head.argv.contains("--no-same-permissions"))
+      assert(commandExecutor.commands.exists(_.argv.contains("--directory")))
 
     test("process command executor times out long-running commands"):
       val tempRoot = Files.createTempDirectory("binstaller-core-process-timeout")
@@ -1153,7 +1219,6 @@ object CoreModuleTest extends TestSuite:
           "/tmp/apps",
           None,
           AllowSudoSymlinks.Disabled,
-          RequireConfirmation.Disabled,
           ContinueOnError.Disabled
         ),
         Vector(directTool(Path.of("/tmp/apps/alpha")).copy(download =
@@ -1186,7 +1251,6 @@ object CoreModuleTest extends TestSuite:
           "/tmp/apps",
           None,
           AllowSudoSymlinks.Disabled,
-          RequireConfirmation.Disabled,
           ContinueOnError.Disabled
         ),
         Vector(directTool(Path.of("/tmp/apps/alpha")).copy(download =
@@ -1264,7 +1328,6 @@ object CoreModuleTest extends TestSuite:
           "/tmp/apps",
           None,
           AllowSudoSymlinks.Disabled,
-          RequireConfirmation.Disabled,
           ContinueOnError.Disabled
         ),
         Vector(directTool(Path.of("/tmp/apps/alpha"))),
@@ -1350,7 +1413,6 @@ object CoreModuleTest extends TestSuite:
           tempRoot.toString,
           None,
           AllowSudoSymlinks.Disabled,
-          RequireConfirmation.Disabled,
           ContinueOnError.Disabled
         ),
         Vector(sudoSymlinkTool(installDir))
@@ -1380,7 +1442,6 @@ object CoreModuleTest extends TestSuite:
           tempRoot.toString,
           None,
           AllowSudoSymlinks.Enabled,
-          RequireConfirmation.Disabled,
           ContinueOnError.Disabled
         ),
         Vector(sudoSymlinkTool(installDir))
@@ -1421,7 +1482,6 @@ object CoreModuleTest extends TestSuite:
           tempRoot.toString,
           None,
           AllowSudoSymlinks.Enabled,
-          RequireConfirmation.Disabled,
           ContinueOnError.Disabled
         ),
         Vector(sudoSymlinkTool(installDir))
@@ -1473,7 +1533,6 @@ object CoreModuleTest extends TestSuite:
           tempRoot.toString,
           None,
           AllowSudoSymlinks.Enabled,
-          RequireConfirmation.Disabled,
           ContinueOnError.Enabled
         ),
         Vector(sudoSymlinkTool(alphaInstall), beta)
@@ -1503,7 +1562,6 @@ object CoreModuleTest extends TestSuite:
           tempRoot.toString,
           None,
           AllowSudoSymlinks.Enabled,
-          RequireConfirmation.Disabled,
           ContinueOnError.Disabled
         ),
         Vector(sudoSymlinkTool(installDir))
@@ -1611,6 +1669,41 @@ object CoreModuleTest extends TestSuite:
       assert(mismatchResult.lines.exists(_.contains("--reset-state")))
       assert(resetResult.exitCode == 0)
       assert(loadState(tempRoot, "mismatch.state.json").profileName == "resume-profile")
+
+    test("state schema version is validated before resume"):
+      val tempRoot = Files.createTempDirectory("binstaller-core-state-schema")
+      val stateFile = "schema.state.json"
+      val config = writeConfig(tempRoot, twoToolYaml(tempRoot, stateFile))
+      val service = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
+      assert(service.apply(applyOptions(config)).exitCode == 0)
+      val store = ApplyStateStore.nio(tempRoot)
+      val incompatible = loadState(tempRoot, stateFile).copy(schemaVersion = 999)
+      store.save(tempRoot.resolve(stateFile), incompatible) match
+        case Left(error) => abort(s"failed to seed state: $error")
+        case Right(())   => ()
+
+      val result = service.apply(applyOptions(config))
+
+      assert(result.exitCode == 1)
+      assert(result.lines.exists(_.contains("schema version 999")))
+      assert(result.lines.exists(_.contains("expected 1")))
+
+    test("completed state is retried when installed executables disappear"):
+      val tempRoot = Files.createTempDirectory("binstaller-core-state-drift")
+      val stateFile = "drift.state.json"
+      val config = writeConfig(tempRoot, twoToolYaml(tempRoot, stateFile))
+      val service = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
+      assert(service.apply(applyOptions(config)).exitCode == 0)
+      val alpha = tempRoot.resolve("apps/alpha/bin/alpha")
+      Files.delete(alpha)
+
+      val result = service.apply(
+        applyOptions(config).copy(selection = ToolSelection(Vector("alpha"), Vector.empty))
+      )
+
+      assert(result.exitCode == 0)
+      assert(result.lines.exists(_.contains("installed alpha")))
+      assert(Files.isRegularFile(alpha))
 
     test("state paths must be cwd-local filenames"):
       val tempRoot = Files.createTempDirectory("binstaller-core-state-path")
@@ -1901,1454 +1994,3 @@ object CoreModuleTest extends TestSuite:
       assert(planResult.lines.exists(_.contains("suggestion[missing-checksum]")))
       assert(planResult.lines.exists(_.contains("strict-policy[tar-xz-fallback]")))
       assert(planResult.lines.exists(_.contains("suggestion[tar-xz-fallback]")))
-
-  private def resolve(
-      yaml: String,
-      httpTextClient: HttpTextClient = FakeHttpTextClient("")
-  ): ResolvedPlan =
-    val profile = ConfigModule.loadString(yaml) match
-      case Right(value) => value
-      case Left(error)  => abort(s"expected valid config, got $error")
-
-    PlanResolver.resolve(profile, testResolutionOptions, httpTextClient) match
-      case Right(plan)                                     => plan
-      case Left(ResolvePlanError.ValidationFailed(errors)) =>
-        abort(s"expected resolved plan, got ${errors.mkString(", ")}")
-
-  private def resolveErrors(yaml: String): Vector[ValidationError] =
-    val profile = ConfigModule.loadString(yaml) match
-      case Right(value) => value
-      case Left(error)  => abort(s"expected config decode success, got $error")
-
-    PlanResolver.resolve(profile, testResolutionOptions, FakeHttpTextClient("")) match
-      case Left(ResolvePlanError.ValidationFailed(errors)) => errors
-      case Right(plan) => abort(s"expected resolution errors, got $plan")
-
-  private def resolveExampleConfig(httpTextClient: HttpTextClient): ResolvedPlan =
-    val profile = ConfigModule.load(exampleConfigPath) match
-      case Right(value) => value
-      case Left(error)  => abort(s"expected valid example config, got $error")
-
-    PlanResolver.resolve(profile, testResolutionOptions, httpTextClient) match
-      case Right(plan)                                     => plan
-      case Left(ResolvePlanError.ValidationFailed(errors)) =>
-        abort(s"expected resolved example config, got ${errors.mkString(", ")}")
-
-  private def onlyTool(plan: ResolvedPlan): ResolvedTool = plan.tools match
-    case Vector(tool) => tool
-    case other        => abort(s"expected one tool, got ${other.size}")
-
-  private def assertInstallSuccess(
-      result: Either[ToolInstallError, ToolInstallSuccess],
-      installDir: String
-  ): Unit = result match
-    case Right(success) =>
-      assert(success.toolName == "alpha")
-      assert(success.installDir == installDir)
-    case Left(error) => abort(s"expected install success, got $error")
-
-  private def errorAt(path: String)(error: ValidationError): Boolean = error.path == path
-
-  private def versionSummaryRowExists(
-      lines: Vector[String],
-      packageName: String,
-      version: String,
-      newerVersion: String
-  ): Boolean = lines.exists(line =>
-    line.startsWith(packageName) &&
-      line.contains(version) &&
-      line.endsWith(newerVersion)
-  )
-
-  private def eventIndex(
-      events: Vector[InstallerEvent],
-      matches: PartialFunction[InstallerEvent, Boolean]
-  ): Int =
-    val index = events.indexWhere(event => matches.applyOrElse(event, (_: InstallerEvent) => false))
-    if index >= 0 then index
-    else abort(s"event not found in ${events.mkString(", ")}")
-
-  private def abort(message: String): Nothing = throw java.lang.AssertionError(message)
-
-  private def statefulService(
-      cwd: Path,
-      downloadClient: BinaryDownloadClient
-  ): BinaryInstallerService = BinaryInstallerService.resolving(
-    FakeHttpTextClient(""),
-    DirectBinaryInstaller(downloadClient, InstallFileSystem.nio),
-    ApplyStateStore.nio(cwd)
-  )
-
-  private def lockedApplyService(
-      tempRoot: Path,
-      dynamicSize: Option[Long],
-      installer: DirectBinaryInstaller = DirectBinaryInstaller(
-        RoutingBinaryDownloadClient.success,
-        InstallFileSystem.nio
-      )
-  ): BinaryInstallerService = BinaryInstallerService.resolving(
-    LockHttpTextClient("2.0.0", betaVersionProvenance),
-    installer,
-    ApplyStateStore.nio(tempRoot),
-    lockMetadataClient(dynamicSize),
-    LockFileStore.nio
-  )
-
-  private def applyOptions(config: Path): InstallerOptions = InstallerOptions(
-    configPath = config.toString,
-    statePath = None,
-    resetState = ResetState.Disabled,
-    verboseOutput = VerboseOutput.Disabled
-  )
-
-  private def writeLock(path: Path, lockFile: LockFile): Unit =
-    val _ = Files.writeString(path, write(lockFile, indent = 2))
-
-  private def currentLockFile(config: Path, dynamicSize: Option[Long]): LockFile =
-    val profile = ConfigModule.load(config.toString) match
-      case Right(value) => value
-      case Left(error)  => abort(s"expected valid config, got $error")
-    LockFile(
-      LockFile.schemaVersion,
-      profile.metadata.name,
-      ManifestFingerprint.profile(profile),
-      Vector(
-        LockFileTool(
-          name = "alpha",
-          resolvedVersion = Some("1.0.0"),
-          versionProvenance = None,
-          downloadProvenance = UrlProvenance.direct("https://example.invalid/alpha-1.0.0"),
-          sizeBytes = Some(11L),
-          checksum = Some(LockFileChecksum("sha256", "a" * 64)),
-          dynamicSource = false
-        ),
-        LockFileTool(
-          name = "beta",
-          resolvedVersion = Some("2.0.0"),
-          versionProvenance = Some(betaVersionProvenance),
-          downloadProvenance = betaDownloadProvenance,
-          sizeBytes = Some(22L),
-          checksum = None,
-          dynamicSource = false
-        ),
-        LockFileTool(
-          name = "gamma",
-          resolvedVersion = None,
-          versionProvenance = None,
-          downloadProvenance = UrlProvenance.direct("https://example.invalid/latest/gamma"),
-          sizeBytes = dynamicSize,
-          checksum = None,
-          dynamicSource = true
-        )
-      )
-    )
-
-  private def lockMetadataClient(dynamicSize: Option[Long]): BinaryMetadataClient =
-    RoutingBinaryMetadataClient(Map(
-      "https://example.invalid/alpha-1.0.0" -> BinaryMetadata(
-        Some(11L),
-        UrlProvenance.direct("https://example.invalid/alpha-1.0.0")
-      ),
-      "https://example.invalid/beta-2.0.0"   -> BinaryMetadata(Some(22L), betaDownloadProvenance),
-      "https://example.invalid/latest/gamma" -> BinaryMetadata(
-        dynamicSize,
-        UrlProvenance.direct("https://example.invalid/latest/gamma")
-      )
-    ))
-
-  private val betaVersionProvenance: UrlProvenance = UrlProvenance(
-    "https://example.invalid/beta-version",
-    "https://cdn.example.invalid/beta-version",
-    Vector(UrlRedirectHop(
-      "https://example.invalid/beta-version",
-      "https://cdn.example.invalid/beta-version",
-      302
-    ))
-  )
-
-  private val betaDownloadProvenance: UrlProvenance = UrlProvenance(
-    "https://example.invalid/beta-2.0.0",
-    "https://cdn.example.invalid/beta-2.0.0",
-    Vector(UrlRedirectHop(
-      "https://example.invalid/beta-2.0.0",
-      "https://cdn.example.invalid/beta-2.0.0",
-      301
-    ))
-  )
-
-  private def writeConfig(tempRoot: Path, content: String): Path =
-    val config = tempRoot.resolve("profile.yaml")
-    Files.writeString(config, content)
-    config
-
-  private def loadState(tempRoot: Path, name: String): ApplyState =
-    ApplyStateStore.nio(tempRoot).load(tempRoot.resolve(name)) match
-      case Right(Some(state)) => state
-      case other              => abort(s"expected saved state, got $other")
-
-  private def hasTempStateFile(
-      tempRoot: Path,
-      name: String
-  ): Boolean = Using.resource(Files.list(tempRoot)): stream =>
-    stream
-      .iterator()
-      .asScala
-      .exists(path => path.getFileName.toString.startsWith(s".$name.tmp-"))
-
-  private def hasStagedInstall(tempRoot: Path, installName: String): Boolean =
-    Using.resource(Files.walk(tempRoot)): stream =>
-      stream
-        .iterator()
-        .asScala
-        .exists(path => path.getFileName.toString.startsWith(s".$installName.stage-"))
-
-  private def sha256(bytes: Array[Byte]): String =
-    val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
-    digest.map(byte => f"${byte & 0xff}%02x").mkString
-
-  private def exampleConfigPath: Path = repoRootCandidates
-    .map(_.resolve("config.example.yaml"))
-    .find(Files.exists(_))
-    .getOrElse(abort("could not locate config.example.yaml"))
-
-  private def repoRootCandidates: Iterator[Path] =
-    sys.props.get("binstaller.repoRoot").iterator.map(Path.of(_).toAbsolutePath) ++
-      upwardPaths(Path.of("").toAbsolutePath)
-
-  private def upwardPaths(start: Path): Iterator[Path] =
-    Iterator.iterate(start)(_.getParent).takeWhile(_ != null)
-
-  private def directTool(
-      installDir: Path,
-      checksum: Option[ResolvedChecksum] = None,
-      executables: Vector[ResolvedExecutable] = Vector(ResolvedExecutable("bin/alpha", None)),
-      symlinks: Vector[ResolvedSymlink] = Vector.empty
-  ): ResolvedTool = ResolvedTool(
-    name = "alpha",
-    description = None,
-    version = ResolvedVersion.Concrete("1.0.0"),
-    installDir = installDir.toString,
-    createDirectories = Vector("bin"),
-    download = ResolvedDownload(
-      url = "https://example.invalid/alpha",
-      filename = "alpha",
-      checksum = checksum,
-      archive = None
-    ),
-    executables = executables,
-    symlinks = symlinks
-  )
-
-  private def sudoSymlinkTool(installDir: Path): ResolvedTool = directTool(
-    installDir,
-    symlinks = Vector(
-      ResolvedSymlink("/usr/local/bin/alpha", "bin/alpha", SymlinkPrivilege.Sudo)
-    )
-  )
-
-  private def sudoSymlinkYaml(
-      tempRoot: Path,
-      installDir: Path,
-      stateFile: String
-  ): String = s"""
-                 |apiVersion: binstaller.io/v1alpha1
-                 |kind: BinaryDistributionProfile
-                 |metadata:
-                 |  name: sudo-redaction
-                 |spec:
-                 |  policy:
-                 |    appsDir: "$tempRoot"
-                 |    stateFile: "$stateFile"
-                 |    allowSudoSymlinks: true
-                 |  versions:
-                 |    alpha: "1.0.0"
-                 |  plan:
-                 |    - name: alpha
-                 |      kind: binary-tool
-                 |      spec:
-                 |        versionRef: alpha
-                 |        installDir: "$installDir"
-                 |        createDirectories:
-                 |          - bin
-                 |        download:
-                 |          url: "https://example.invalid/alpha"
-                 |          filename: alpha
-                 |        executables:
-                 |          - path: bin/alpha
-                 |        symlinks:
-                 |          - path: /usr/local/bin/alpha
-                 |            target: "$installDir/bin/alpha"
-                 |            sudo: true
-                 |""".stripMargin
-
-  private def archiveTool(
-      installDir: Path,
-      archiveType: ArchiveType,
-      files: Vector[(String, String)] = Vector.empty,
-      directories: Vector[(String, String)] = Vector.empty,
-      executable: String = "bin/alpha"
-  ): ResolvedTool = ResolvedTool(
-    name = "alpha",
-    description = None,
-    version = ResolvedVersion.Concrete("1.0.0"),
-    installDir = installDir.toString,
-    createDirectories = Vector.empty,
-    download = ResolvedDownload(
-      url = "https://example.invalid/alpha-archive",
-      filename = "alpha-archive",
-      checksum = None,
-      archive = Some(
-        ResolvedArchive(
-          ArchiveSpec(
-            archiveType,
-            ArchiveExtract(
-              files.map((from, to) => ExtractMapping(from, to)),
-              directories.map((from, to) => ExtractMapping(from, to))
-            )
-          ),
-          files.map((from, to) => ResolvedExtractMapping(from, to)),
-          directories.map((from, to) => ResolvedExtractMapping(from, to))
-        )
-      )
-    ),
-    executables = Vector(ResolvedExecutable(executable, None)),
-    symlinks = Vector.empty
-  )
-
-  private def zipArchive(entries: Vector[(String, String)]): Array[Byte] =
-    val output = ByteArrayOutputStream()
-    Using.resource(ZipOutputStream(output)): zip =>
-      entries.foreach:
-        case (name, content) =>
-          zip.putNextEntry(ZipEntry(name))
-          zip.write(content.getBytes(StandardCharsets.UTF_8))
-          zip.closeEntry()
-    output.toByteArray
-
-  private def zipArchiveWithDuplicateLocalEntries(entries: Vector[(String, String)]): Array[Byte] =
-    val output = ByteArrayOutputStream()
-    entries.foreach:
-      case (name, content) =>
-        val nameBytes    = name.getBytes(StandardCharsets.UTF_8)
-        val contentBytes = content.getBytes(StandardCharsets.UTF_8)
-        val crc          = CRC32()
-        crc.update(contentBytes)
-        writeLittleInt(output, 0x04034b50)
-        writeLittleShort(output, 20)
-        writeLittleShort(output, 0)
-        writeLittleShort(output, 0)
-        writeLittleShort(output, 0)
-        writeLittleShort(output, 0)
-        writeLittleInt(output, crc.getValue.toInt)
-        writeLittleInt(output, contentBytes.length)
-        writeLittleInt(output, contentBytes.length)
-        writeLittleShort(output, nameBytes.length)
-        writeLittleShort(output, 0)
-        output.write(nameBytes)
-        output.write(contentBytes)
-    output.toByteArray
-
-  private def writeLittleShort(output: ByteArrayOutputStream, value: Int): Unit =
-    output.write(value & 0xff)
-    output.write((value >>> 8) & 0xff)
-
-  private def writeLittleInt(output: ByteArrayOutputStream, value: Int): Unit =
-    writeLittleShort(output, value & 0xffff)
-    writeLittleShort(output, (value >>> 16) & 0xffff)
-
-  private def tarGzArchive(entries: Vector[(String, String)]): Array[Byte] =
-    val output = ByteArrayOutputStream()
-    val gzip   = GZIPOutputStream(output)
-    entries.foreach:
-      case (name, content) =>
-        val bytes = content.getBytes(StandardCharsets.UTF_8)
-        gzip.write(tarHeader(name, bytes.length, '0'))
-        gzip.write(bytes)
-        val padding = (512 - (bytes.length % 512)) % 512
-        gzip.write(Array.fill[Byte](padding)(0))
-    gzip.write(Array.fill[Byte](1024)(0))
-    gzip.close()
-    output.toByteArray
-
-  private def tarGzArchiveWithDirectories(
-      directories: Vector[String],
-      files: Vector[(String, String)]
-  ): Array[Byte] =
-    val output = ByteArrayOutputStream()
-    val gzip   = GZIPOutputStream(output)
-    directories.foreach: name =>
-      gzip.write(tarHeader(name, 0, '5'))
-    files.foreach:
-      case (name, content) =>
-        val bytes = content.getBytes(StandardCharsets.UTF_8)
-        gzip.write(tarHeader(name, bytes.length, '0'))
-        gzip.write(bytes)
-        val padding = (512 - (bytes.length % 512)) % 512
-        gzip.write(Array.fill[Byte](padding)(0))
-    gzip.write(Array.fill[Byte](1024)(0))
-    gzip.close()
-    output.toByteArray
-
-  private def tarGzArchiveWithEntryTypes(entries: Vector[(String, String, Char)]): Array[Byte] =
-    val output = ByteArrayOutputStream()
-    val gzip   = GZIPOutputStream(output)
-    entries.foreach:
-      case (name, content, entryType) =>
-        val bytes = content.getBytes(StandardCharsets.UTF_8)
-        gzip.write(tarHeader(name, bytes.length, entryType))
-        if entryType == '0' then
-          gzip.write(bytes)
-          val padding = (512 - (bytes.length % 512)) % 512
-          gzip.write(Array.fill[Byte](padding)(0))
-    gzip.write(Array.fill[Byte](1024)(0))
-    gzip.close()
-    output.toByteArray
-
-  private def tarHeader(name: String, size: Int, entryType: Char): Array[Byte] =
-    val header = Array.fill[Byte](512)(0)
-    writeTarField(header, 0, 100, name)
-    writeTarField(header, 124, 12, f"$size%011o")
-    header(156) = entryType.toByte
-    header
-
-  private def writeTarField(header: Array[Byte], offset: Int, length: Int, value: String): Unit =
-    val bytes = value.getBytes(StandardCharsets.UTF_8)
-    Array.copy(bytes, 0, header, offset, math.min(bytes.length, length))
-
-  private def directBinaryYaml(installDir: Path): String =
-    s"""
-       |apiVersion: binstaller.io/v1alpha1
-       |kind: BinaryDistributionProfile
-       |metadata:
-       |  name: direct-apply
-       |spec:
-       |  policy:
-       |    appsDir: "${installDir.getParent}"
-       |  vars: {}
-       |  versions:
-       |    alpha: "1.0.0"
-       |  plan:
-       |    - name: alpha
-       |      kind: binary-tool
-       |      spec:
-       |        versionRef: alpha
-       |        installDir: "$installDir"
-       |        createDirectories:
-       |          - bin
-       |        download:
-       |          url: https://example.invalid/alpha
-       |          filename: alpha
-       |        executables:
-       |          - path: bin/alpha
-       |""".stripMargin
-
-  private def twoToolYaml(
-      tempRoot: Path,
-      stateFile: String,
-      continueOnError: Boolean = false
-  ): String =
-    val appsDir = tempRoot.resolve("apps")
-    s"""
-       |apiVersion: binstaller.io/v1alpha1
-       |kind: BinaryDistributionProfile
-       |metadata:
-       |  name: resume-profile
-       |spec:
-       |  policy:
-       |    appsDir: "$appsDir"
-       |    stateFile: "$stateFile"
-       |    continueOnError: $continueOnError
-       |  vars: {}
-       |  versions:
-       |    alpha: "1.0.0"
-       |    beta: "1.0.0"
-       |  plan:
-       |    - name: alpha
-       |      kind: binary-tool
-       |      spec:
-       |        versionRef: alpha
-       |        installDir: "$appsDir/alpha"
-       |        createDirectories:
-       |          - bin
-       |        download:
-       |          url: https://example.invalid/alpha
-       |          filename: alpha
-       |        executables:
-       |          - path: bin/alpha
-       |    - name: beta
-       |      kind: binary-tool
-       |      spec:
-       |        versionRef: beta
-       |        installDir: "$appsDir/beta"
-       |        createDirectories:
-       |          - bin
-       |        download:
-       |          url: https://example.invalid/beta
-       |          filename: beta
-       |        executables:
-       |          - path: bin/beta
-       |""".stripMargin
-
-  private def twoSudoToolYaml(tempRoot: Path): String =
-    val appsDir = tempRoot.resolve("apps")
-    s"""
-       |apiVersion: binstaller.io/v1alpha1
-       |kind: BinaryDistributionProfile
-       |metadata:
-       |  name: sudo-profile
-       |spec:
-       |  policy:
-       |    appsDir: "$appsDir"
-       |    allowSudoSymlinks: true
-       |  vars: {}
-       |  versions:
-       |    alpha: "1.0.0"
-       |    beta: "1.0.0"
-       |  plan:
-       |    - name: alpha
-       |      kind: binary-tool
-       |      spec:
-       |        versionRef: alpha
-       |        installDir: "$appsDir/alpha"
-       |        createDirectories:
-       |          - bin
-       |        download:
-       |          url: https://example.invalid/alpha
-       |          filename: alpha
-       |        executables:
-       |          - path: bin/alpha
-       |        symlinks:
-       |          - path: ${tempRoot.resolve("alpha-link")}
-       |            target: bin/alpha
-       |            sudo: true
-       |    - name: beta
-       |      kind: binary-tool
-       |      spec:
-       |        versionRef: beta
-       |        installDir: "$appsDir/beta"
-       |        createDirectories:
-       |          - bin
-       |        download:
-       |          url: https://example.invalid/beta
-       |          filename: beta
-       |        executables:
-       |          - path: bin/beta
-       |        symlinks:
-       |          - path: ${tempRoot.resolve("beta-link")}
-       |            target: bin/beta
-       |            sudo: true
-       |""".stripMargin
-
-  private def invalidConfigYaml(tempRoot: Path): String =
-    s"""
-       |apiVersion: wrong.example/v1
-       |kind: WrongKind
-       |metadata:
-       |  name: invalid
-       |spec:
-       |  policy:
-       |    appsDir: "${tempRoot.resolve("apps")}"
-       |    continueOnError: no
-       |  vars: {}
-       |  versions:
-       |    alpha: "1.0.0"
-       |  plan:
-       |    - name: alpha
-       |      kind: binary-tool
-       |      spec:
-       |        versionRef: alpha
-       |        installDir: "${tempRoot.resolve("apps/alpha")}"
-       |        download:
-       |          url: https://example.invalid/alpha
-       |          filename: alpha
-       |        executables:
-       |          - path: bin/alpha
-       |""".stripMargin
-
-  private val testResolutionOptions: ResolutionOptions = ResolutionOptions(
-    Map("HOME" -> "/home/test")
-  )
-
-  private val exampleToolNames: Vector[String] = Vector(
-    "yazi",
-    "zig",
-    "minikube",
-    "xplr",
-    "kind",
-    "zellij",
-    "helm",
-    "kubectl",
-    "kustomize",
-    "neovide",
-    "neovim",
-    "lazygit",
-    "jujutsu",
-    "dotbot",
-    "nerd-font-installer"
-  )
-
-  private val validPinnedYaml: String =
-    """
-      |apiVersion: binstaller.io/v1alpha1
-      |kind: BinaryDistributionProfile
-      |metadata:
-      |  name: pinned
-      |spec:
-      |  policy:
-      |    appsDir: "${HOME}/.apps"
-      |    allowSudoSymlinks: true
-      |  vars:
-      |    linuxArch: x86_64
-      |  versions:
-      |    alpha: "1.2.3"
-      |  plan:
-      |    - name: alpha
-      |      kind: binary-tool
-      |      spec:
-      |        versionRef: alpha
-      |        installDir: "${appsDir}/alpha-${version}"
-      |        download:
-      |          url: "https://example.invalid/alpha-${version}-${linuxArch}.tar.gz"
-      |          filename: "alpha-${version}.tar.gz"
-      |          archive:
-      |            type: tar.gz
-      |            extract:
-      |              files:
-      |                - from: "alpha-${version}/alpha"
-      |                  to: bin/alpha
-      |        executables:
-      |          - path: bin/alpha
-      |        symlinks:
-      |          - path: bin/a
-      |            target: "${installDir}/bin/alpha"
-      |""".stripMargin
-
-  private def lockYaml(tempRoot: Path): String =
-    val appsDir = tempRoot.resolve("apps")
-    s"""
-       |apiVersion: binstaller.io/v1alpha1
-       |kind: BinaryDistributionProfile
-       |metadata:
-       |  name: lock-profile
-       |spec:
-       |  policy:
-       |    appsDir: "$appsDir"
-       |    stateFile: lock.state.json
-       |  vars: {}
-       |  versions:
-       |    alpha: "1.0.0"
-       |    beta:
-       |      resolver:
-       |        type: http-text
-       |        url: https://example.invalid/beta-version
-       |    gamma:
-       |      dynamic:
-       |        type: latest-url
-       |        note: latest endpoint
-       |  plan:
-       |    - name: alpha
-       |      kind: binary-tool
-       |      spec:
-       |        versionRef: alpha
-       |        installDir: "$appsDir/alpha"
-       |        download:
-       |          url: https://example.invalid/alpha-$${version}
-       |          filename: alpha
-       |          checksum:
-       |            algorithm: sha256
-       |            value: ${"a" * 64}
-       |        executables:
-       |          - path: bin/alpha
-       |    - name: beta
-       |      kind: binary-tool
-       |      spec:
-       |        versionRef: beta
-       |        installDir: "$appsDir/beta"
-       |        download:
-       |          url: https://example.invalid/beta-$${version}
-       |          filename: beta
-       |        executables:
-       |          - path: bin/beta
-       |    - name: gamma
-       |      kind: binary-tool
-       |      spec:
-       |        versionRef: gamma
-       |        installDir: "$appsDir/gamma"
-       |        download:
-       |          url: https://example.invalid/latest/gamma
-       |          filename: gamma
-       |        executables:
-       |          - path: bin/gamma
-       |""".stripMargin
-
-  private def githubReleaseYaml(tempRoot: Path, version: String): String =
-    val appsDir = tempRoot.resolve("apps")
-    s"""
-       |apiVersion: binstaller.io/v1alpha1
-       |kind: BinaryDistributionProfile
-       |metadata:
-       |  name: github-latest
-       |spec:
-       |  policy:
-       |    appsDir: "$appsDir"
-       |  vars:
-       |    muslTarget: x86_64-unknown-linux-musl
-       |  versions:
-       |    jujutsu: "$version"
-       |  plan:
-       |    - name: jujutsu
-       |      kind: binary-tool
-       |      spec:
-       |        versionRef: jujutsu
-       |        installDir: "$appsDir/jj"
-       |        download:
-       |          url: "https://github.com/jj-vcs/jj/releases/download/v$version/jj-v$version-$${muslTarget}.tar.gz"
-       |          filename: jj.tar.gz
-       |          archive:
-       |            type: tar.gz
-       |            extract:
-       |              files:
-       |                - from: jj
-       |                  to: bin/jj
-       |        executables:
-       |          - path: bin/jj
-       |""".stripMargin
-
-  private def checksumDiscoveryYaml(tempRoot: Path, checksumFileUrl: String): String =
-    val appsDir = tempRoot.resolve("apps")
-    s"""
-       |apiVersion: binstaller.io/v1alpha1
-       |kind: BinaryDistributionProfile
-       |metadata:
-       |  name: checksum-discovery
-       |spec:
-       |  policy:
-       |    appsDir: "$appsDir"
-       |  vars: {}
-       |  versions:
-       |    alpha: "1.0.0"
-       |  plan:
-       |    - name: alpha
-       |      kind: binary-tool
-       |      spec:
-       |        versionRef: alpha
-       |        installDir: "$appsDir/alpha"
-       |        createDirectories:
-       |          - bin
-       |        download:
-       |          url: https://example.invalid/releases/$${version}/alpha-$${version}.tar.gz
-       |          filename: alpha-$${version}.tar.gz
-       |          checksum:
-       |            algorithm: sha256
-       |            discover:
-       |              type: sha256sum
-       |              url: $checksumFileUrl
-       |        executables:
-       |          - path: bin/alpha
-       |""".stripMargin
-
-  private val kubectlResolverYaml: String =
-    """
-      |apiVersion: binstaller.io/v1alpha1
-      |kind: BinaryDistributionProfile
-      |metadata:
-      |  name: kubectl
-      |spec:
-      |  policy:
-      |    appsDir: "${HOME}/.apps"
-      |  vars: {}
-      |  versions:
-      |    kubectl:
-      |      resolver:
-      |        type: http-text
-      |        url: https://dl.k8s.io/release/stable.txt
-      |  plan:
-      |    - name: kubectl
-      |      kind: binary-tool
-      |      spec:
-      |        versionRef: kubectl
-      |        installDir: "${appsDir}/kubectl"
-      |        download:
-      |          url: "https://dl.k8s.io/release/${version}/bin/linux/amd64/kubectl"
-      |          filename: kubectl
-      |        executables:
-      |          - path: bin/kubectl
-      |""".stripMargin
-
-  private val dynamicLatestUrlYaml: String =
-    """
-      |apiVersion: binstaller.io/v1alpha1
-      |kind: BinaryDistributionProfile
-      |metadata:
-      |  name: dynamic
-      |spec:
-      |  policy:
-      |    appsDir: "${HOME}/.apps"
-      |  vars: {}
-      |  versions:
-      |    beta:
-      |      dynamic:
-      |        type: latest-url
-      |        note: upstream latest endpoint
-      |  plan:
-      |    - name: beta
-      |      kind: binary-tool
-      |      spec:
-      |        versionRef: beta
-      |        installDir: "${appsDir}/beta"
-      |        download:
-      |          url: https://example.invalid/latest/download/beta
-      |          filename: beta
-      |        executables:
-      |          - path: bin/beta
-      |""".stripMargin
-
-  private def strictPolicyYaml(overrides: String = ""): String =
-    s"""
-       |apiVersion: binstaller.io/v1alpha1
-       |kind: BinaryDistributionProfile
-       |metadata:
-       |  name: strict-policy
-       |spec:
-       |  policy:
-       |    mode: strict
-       |    appsDir: "$${HOME}/.apps"
-       |    $overrides
-       |  vars: {}
-       |  versions:
-       |    alpha:
-       |      dynamic:
-       |        type: latest-url
-       |        note: upstream latest endpoint
-       |  plan:
-       |    - name: alpha
-       |      kind: binary-tool
-       |      spec:
-       |        versionRef: alpha
-       |        installDir: "$${appsDir}/alpha"
-       |        download:
-       |          url: https://example.invalid/latest/download/alpha.tar.xz
-       |          filename: alpha.tar.xz
-       |          archive:
-       |            type: tar.xz
-       |            extract:
-       |              files:
-       |                - from: alpha
-       |                  to: bin/alpha
-       |        executables:
-       |          - path: bin/alpha
-       |""".stripMargin
-
-  private val invalidVariablesYaml: String =
-    """
-      |apiVersion: binstaller.io/v1alpha1
-      |kind: BinaryDistributionProfile
-      |metadata:
-      |  name: invalid-vars
-      |spec:
-      |  policy:
-      |    appsDir: "${HOME}/.apps"
-      |  vars: {}
-      |  versions:
-      |    alpha: "1.0.0"
-      |    beta:
-      |      dynamic:
-      |        type: latest-url
-      |  plan:
-      |    - name: alpha
-      |      kind: binary-tool
-      |      spec:
-      |        versionRef: alpha
-      |        installDir: "${appsDir}/${MISSING}"
-      |        download:
-      |          url: https://example.invalid/alpha
-      |          filename: alpha
-      |        executables:
-      |          - path: bin/alpha
-      |    - name: beta
-      |      kind: binary-tool
-      |      spec:
-      |        versionRef: beta
-      |        installDir: "${appsDir}/beta"
-      |        download:
-      |          url: "https://example.invalid/releases/${version}/beta"
-      |          filename: beta
-      |        executables:
-      |          - path: bin/beta
-      |""".stripMargin
-
-  private val shellSyntaxYaml: String = """
-                                          |apiVersion: binstaller.io/v1alpha1
-                                          |kind: BinaryDistributionProfile
-                                          |metadata:
-                                          |  name: shell-text
-                                          |spec:
-                                          |  policy:
-                                          |    appsDir: "${HOME}/.apps"
-                                          |  vars:
-                                          |    shellText: "$(echo should-not-run)"
-                                          |  versions:
-                                          |    alpha: "1.0.0"
-                                          |  plan:
-                                          |    - name: alpha
-                                          |      kind: binary-tool
-                                          |      spec:
-                                          |        versionRef: alpha
-                                          |        installDir: "${appsDir}/${shellText}"
-                                          |        createDirectories:
-                                          |          - bin
-                                          |        download:
-                                          |          url: "https://example.invalid/alpha"
-                                          |          filename: alpha
-                                          |        executables:
-                                          |          - path: bin/alpha
-                                          |""".stripMargin
-
-  private val insecureUrlYaml: String = """
-                                          |apiVersion: binstaller.io/v1alpha1
-                                          |kind: BinaryDistributionProfile
-                                          |metadata:
-                                          |  name: insecure
-                                          |spec:
-                                          |  policy:
-                                          |    appsDir: "${HOME}/.apps"
-                                          |  vars: {}
-                                          |  versions:
-                                          |    alpha:
-                                          |      resolver:
-                                          |        type: http-text
-                                          |        url: http://example.invalid/stable.txt
-                                          |  plan:
-                                          |    - name: alpha
-                                          |      kind: binary-tool
-                                          |      spec:
-                                          |        versionRef: alpha
-                                          |        installDir: "${appsDir}/alpha"
-                                          |        download:
-                                          |          url: http://example.invalid/alpha
-                                          |          filename: alpha
-                                          |        executables:
-                                          |          - path: bin/alpha
-                                          |""".stripMargin
-
-  private val unsafeInstallDirYaml: String = """
-                                               |apiVersion: binstaller.io/v1alpha1
-                                               |kind: BinaryDistributionProfile
-                                               |metadata:
-                                               |  name: unsafe-install-dir
-                                               |spec:
-                                               |  policy:
-                                               |    appsDir: "${HOME}/.apps"
-                                               |  vars: {}
-                                               |  versions:
-                                               |    alpha: "1.0.0"
-                                               |    beta: "1.0.0"
-                                               |    gamma: "1.0.0"
-                                               |  plan:
-                                               |    - name: alpha
-                                               |      kind: binary-tool
-                                               |      spec:
-                                               |        versionRef: alpha
-                                               |        installDir: /tmp/alpha
-                                               |        download:
-                                               |          url: https://example.invalid/alpha
-                                               |          filename: alpha
-                                               |        executables:
-                                               |          - path: bin/alpha
-                                               |    - name: beta
-                                               |      kind: binary-tool
-                                               |      spec:
-                                               |        versionRef: beta
-                                               |        installDir: "${appsDir}/beta"
-                                               |        download:
-                                               |          url: https://example.invalid/beta
-                                               |          filename: beta
-                                               |        executables:
-                                               |          - path: bin/beta
-                                               |    - name: gamma
-                                               |      kind: binary-tool
-                                               |      spec:
-                                               |        versionRef: gamma
-                                               |        installDir: "${appsDir}/beta/nested"
-                                               |        download:
-                                               |          url: https://example.invalid/gamma
-                                               |          filename: gamma
-                                               |        executables:
-                                               |          - path: bin/gamma
-                                               |""".stripMargin
-
-  private val unsafeInterpolatedPathsYaml: String =
-    """
-      |apiVersion: binstaller.io/v1alpha1
-      |kind: BinaryDistributionProfile
-      |metadata:
-      |  name: unsafe-interpolated-paths
-      |spec:
-      |  policy:
-      |    appsDir: "${HOME}/.apps"
-      |    stateFile: "${badTraversal}"
-      |    allowSudoSymlinks: true
-      |  vars:
-      |    badAbsolute: /tmp/binstaller-escape
-      |    badTraversal: "../escape"
-      |    badControl: "alpha\a"
-      |  versions:
-      |    alpha: "1.0.0"
-      |  plan:
-      |    - name: alpha
-      |      kind: binary-tool
-      |      spec:
-      |        versionRef: alpha
-      |        installDir: "${appsDir}/alpha"
-      |        createDirectories:
-      |          - "bin/${badTraversal}"
-      |        download:
-      |          url: https://example.invalid/alpha
-      |          filename: "${badControl}"
-      |          archive:
-      |            type: tar.gz
-      |            extract:
-      |              files:
-      |                - from: alpha
-      |                  to: "bin/${badTraversal}"
-      |        executables:
-      |          - path: "${badAbsolute}"
-      |        symlinks:
-      |          - path: "bin/${badTraversal}"
-      |            target: "${badAbsolute}/alpha"
-      |    - name: beta
-      |      kind: binary-tool
-      |      spec:
-      |        versionRef: alpha
-      |        installDir: "${appsDir}/${badTraversal}"
-      |        download:
-      |          url: https://example.invalid/beta
-      |          filename: beta
-      |        executables:
-      |          - path: bin/beta
-      |    - name: gamma
-      |      kind: binary-tool
-      |      spec:
-      |        versionRef: alpha
-      |        installDir: "${badAbsolute}/gamma"
-      |        download:
-      |          url: https://example.invalid/gamma
-      |          filename: gamma
-      |        executables:
-      |          - path: bin/gamma
-      |""".stripMargin
-
-private final class FakeHttpTextClient(text: String) extends HttpTextClient:
-
-  def getText(url: String): Either[HttpTextError, String] =
-    if url == "https://dl.k8s.io/release/stable.txt" then Right(text)
-    else Left(HttpTextError(url, s"unexpected URL $url"))
-
-private final class RoutingHttpTextClient(
-    responses: Map[String, Either[HttpTextError, HttpTextResponse]]
-) extends HttpTextClient:
-
-  def getText(url: String): Either[HttpTextError, String] = getTextWithProvenance(url).map(_.text)
-
-  override def getTextWithProvenance(url: String): Either[HttpTextError, HttpTextResponse] =
-    responses.getOrElse(url, Left(HttpTextError(url, s"unexpected URL $url")))
-
-private final class LockHttpTextClient(text: String, provenance: UrlProvenance)
-    extends HttpTextClient:
-
-  def getText(url: String): Either[HttpTextError, String] = getTextWithProvenance(url).map(_.text)
-
-  override def getTextWithProvenance(url: String): Either[HttpTextError, HttpTextResponse] =
-    if url == provenance.initialUrl then Right(HttpTextResponse(text, provenance))
-    else Left(HttpTextError(url, s"unexpected URL $url"))
-
-private final class FakeBinaryDownloadClient(result: Either[BinaryDownloadError, Array[Byte]])
-    extends BinaryDownloadClient:
-
-  def download(url: String): Either[BinaryDownloadError, Array[Byte]] =
-    result.left.map(error => error.copy(url = url))
-
-private object FakeBinaryDownloadClient:
-
-  def success(bytes: Array[Byte]): FakeBinaryDownloadClient = FakeBinaryDownloadClient(Right(bytes))
-
-  def failure(message: String): FakeBinaryDownloadClient =
-    FakeBinaryDownloadClient(Left(BinaryDownloadError("", message)))
-
-private final class ProgressingBinaryDownloadClient(bytes: Array[Byte])
-    extends BinaryDownloadClient:
-
-  def download(url: String): Either[BinaryDownloadError, Array[Byte]] = Right(bytes)
-
-  override def download(
-      url: String,
-      progressObserver: BinaryDownloadProgressObserver
-  ): Either[BinaryDownloadError, Array[Byte]] =
-    val halfway = bytes.length.toLong / 2L
-    val total   = Some(bytes.length.toLong)
-    progressObserver.onProgress(BinaryDownloadProgress.Started(url, total))
-    progressObserver.onProgress(BinaryDownloadProgress.Advanced(url, halfway, total))
-    progressObserver.onProgress(BinaryDownloadProgress.Finished(url, bytes.length.toLong, total))
-    Right(bytes)
-
-private final class RedirectingBinaryDownloadClient(provenance: UrlProvenance)
-    extends BinaryDownloadClient:
-
-  def download(url: String): Either[BinaryDownloadError, Array[Byte]] =
-    Right("alpha".getBytes(StandardCharsets.UTF_8))
-
-  override def downloadWithProvenance(
-      url: String,
-      progressObserver: BinaryDownloadProgressObserver
-  ): Either[BinaryDownloadError, BinaryDownloadResult] =
-    val bytes = "alpha".getBytes(StandardCharsets.UTF_8)
-    progressObserver.onProgress(BinaryDownloadProgress.Started(provenance.finalUrl, Some(5L)))
-    progressObserver.onProgress(BinaryDownloadProgress.Advanced(provenance.finalUrl, 5L, Some(5L)))
-    progressObserver.onProgress(BinaryDownloadProgress.Finished(provenance.finalUrl, 5L, Some(5L)))
-    Right(BinaryDownloadResult(bytes, provenance))
-
-private final class RecordingBinaryDownloadProgressObserver extends BinaryDownloadProgressObserver:
-  private var recordedUrls: Vector[String] = Vector.empty
-
-  def urls: Vector[String] = recordedUrls
-
-  def onProgress(progress: BinaryDownloadProgress): Unit =
-    val url = progress match
-      case BinaryDownloadProgress.Started(value, _)     => value
-      case BinaryDownloadProgress.Advanced(value, _, _) => value
-      case BinaryDownloadProgress.Finished(value, _, _) => value
-    recordedUrls = recordedUrls :+ url
-
-private final class RoutingBinaryDownloadClient(
-    results: Map[String, Either[String, Array[Byte]]]
-) extends BinaryDownloadClient:
-
-  def download(url: String): Either[BinaryDownloadError, Array[Byte]] = results
-    .getOrElse(url, Left(s"unexpected URL $url"))
-    .left
-    .map(message => BinaryDownloadError(url, message))
-
-private object RoutingBinaryDownloadClient:
-
-  def success: RoutingBinaryDownloadClient = RoutingBinaryDownloadClient(Map(
-    "https://example.invalid/alpha" -> Right("alpha".getBytes(StandardCharsets.UTF_8)),
-    "https://example.invalid/beta"  -> Right("beta".getBytes(StandardCharsets.UTF_8))
-  ))
-
-private final class ConcurrentTrackingDownloadClient(urls: Vector[String])
-    extends BinaryDownloadClient:
-
-  private val expectedStarts = CountDownLatch(urls.size)
-  private val active         = AtomicInteger(0)
-  private val peak           = AtomicInteger(0)
-
-  private val payloads =
-    urls.map(url => url -> fileName(url).getBytes(StandardCharsets.UTF_8)).toMap
-
-  def maxInFlight: Int = peak.get()
-
-  def download(url: String): Either[BinaryDownloadError, Array[Byte]] =
-    downloadWithProvenance(url).map(_.bytes)
-
-  override def downloadWithProvenance(
-      url: String,
-      progressObserver: BinaryDownloadProgressObserver
-  ): Either[BinaryDownloadError, BinaryDownloadResult] = payloads.get(url) match
-    case None        => Left(BinaryDownloadError(url, s"unexpected URL $url"))
-    case Some(bytes) =>
-      val current = active.incrementAndGet()
-      updatePeak(current)
-      expectedStarts.countDown()
-      val _ = expectedStarts.await(5, TimeUnit.SECONDS)
-      try
-        progressObserver.onProgress(BinaryDownloadProgress.Started(url, Some(bytes.length.toLong)))
-        progressObserver.onProgress(
-          BinaryDownloadProgress.Advanced(url, bytes.length.toLong, Some(bytes.length.toLong))
-        )
-        progressObserver.onProgress(
-          BinaryDownloadProgress.Finished(url, bytes.length.toLong, Some(bytes.length.toLong))
-        )
-        Right(BinaryDownloadResult(bytes, UrlProvenance.direct(url)))
-      finally
-        val _ = active.decrementAndGet()
-
-  private def updatePeak(current: Int): Unit =
-    val _ = peak.updateAndGet(previous => math.max(previous, current))
-
-  private def fileName(url: String): String = url.split('/').toVector.lastOption.getOrElse(url)
-
-private final class RoutingBinaryMetadataClient(results: Map[String, BinaryMetadata])
-    extends BinaryMetadataClient:
-
-  def metadata(url: String): Either[BinaryMetadataError, BinaryMetadata] = results
-    .get(url)
-    .toRight(BinaryMetadataError(url, s"unexpected URL $url"))
-
-private final class RecordingInstallerEventObserver extends InstallerEventObserver:
-
-  private var recordedEvents: Vector[InstallerEvent] = Vector.empty
-
-  def events: Vector[InstallerEvent] = recordedEvents
-
-  def onEvent(event: InstallerEvent): Unit = recordedEvents = recordedEvents :+ event
-
-private final class RecordingApplyStateStore(delegate: ApplyStateStore) extends ApplyStateStore:
-
-  private var states: Vector[ApplyState] = Vector.empty
-
-  def savedStates: Vector[ApplyState] = states
-
-  def cwd: Path = delegate.cwd
-
-  def load(path: Path): Either[ApplyStateError, Option[ApplyState]] = delegate.load(path)
-
-  def save(path: Path, state: ApplyState): Either[ApplyStateError, Unit] =
-    states = states :+ state
-    delegate.save(path, state)
-
-private final class StaticHttpClient[T](response: HttpResponse[T]) extends HttpClient:
-
-  override def cookieHandler(): Optional[CookieHandler] = Optional.empty()
-
-  override def connectTimeout(): Optional[Duration] = Optional.empty()
-
-  override def followRedirects(): HttpClient.Redirect = HttpClient.Redirect.NORMAL
-
-  override def proxy(): Optional[ProxySelector] = Optional.empty()
-
-  override def sslContext(): SSLContext = SSLContext.getDefault
-
-  override def sslParameters(): SSLParameters = SSLParameters()
-
-  override def authenticator(): Optional[Authenticator] = Optional.empty()
-
-  override def version(): HttpClient.Version = HttpClient.Version.HTTP_1_1
-
-  override def executor(): Optional[Executor] = Optional.empty()
-
-  override def send[A](
-      request: HttpRequest,
-      responseBodyHandler: HttpResponse.BodyHandler[A]
-  ): HttpResponse[A] = response.asInstanceOf[HttpResponse[A]]
-
-  override def sendAsync[A](
-      request: HttpRequest,
-      responseBodyHandler: HttpResponse.BodyHandler[A]
-  ): CompletableFuture[HttpResponse[A]] =
-    CompletableFuture.completedFuture(send(request, responseBodyHandler))
-
-  override def sendAsync[A](
-      request: HttpRequest,
-      responseBodyHandler: HttpResponse.BodyHandler[A],
-      pushPromiseHandler: HttpResponse.PushPromiseHandler[A]
-  ): CompletableFuture[HttpResponse[A]] =
-    CompletableFuture.completedFuture(send(request, responseBodyHandler))
-
-  override def newWebSocketBuilder(): WebSocket.Builder =
-    throw UnsupportedOperationException("websocket not used in tests")
-
-private final case class FakeHttpResponse[T](
-    responseUri: String,
-    responseStatusCode: Int,
-    responseBody: T,
-    previous: Option[HttpResponse[T]] = None,
-    responseHeaders: Map[String, Vector[String]] = Map.empty
-) extends HttpResponse[T]:
-
-  def statusCode(): Int = responseStatusCode
-
-  def request(): HttpRequest = HttpRequest.newBuilder(URI.create(responseUri)).build()
-
-  def previousResponse(): Optional[HttpResponse[T]] = previous match
-    case Some(response) => Optional.of(response)
-    case None           => Optional.empty()
-
-  def headers(): HttpHeaders = HttpHeaders.of(
-    responseHeaders.view.mapValues(_.asJava).toMap.asJava,
-    (_, _) => true
-  )
-
-  def body(): T = responseBody
-
-  def sslSession(): Optional[SSLSession] = Optional.empty()
-
-  def uri(): URI = URI.create(responseUri)
-
-  def version(): HttpClient.Version = HttpClient.Version.HTTP_1_1
-
-private final class FakeArchiveCommandExecutor(path: String, content: String)
-    extends CommandExecutor:
-
-  private var recordedCommands: Vector[CommandSpec] = Vector.empty
-
-  def commands: Vector[CommandSpec] = recordedCommands
-
-  def run(spec: CommandSpec): Either[CommandExecutionError, Unit] =
-    recordedCommands = recordedCommands :+ spec
-    val extractDir = spec.argv.dropWhile(_ != "-C").drop(1).headOption.map(Path.of(_))
-    extractDir match
-      case Some(directory) =>
-        val target = directory.resolve(path)
-        Files.createDirectories(target.getParent)
-        Files.writeString(target, content)
-        Right(())
-      case None => Left(CommandExecutionError(spec, "missing -C extraction directory", None))
-
-private final class RecordingCommandExecutor(result: Either[String, Unit] = Right(()))
-    extends CommandExecutor:
-
-  private var recordedCommands: Vector[CommandSpec] = Vector.empty
-
-  def commands: Vector[CommandSpec] = recordedCommands
-
-  def run(spec: CommandSpec): Either[CommandExecutionError, Unit] =
-    recordedCommands = recordedCommands :+ spec
-    result.left.map(message => CommandExecutionError(spec, message, None))
-
-private final class SequencedCommandExecutor(results: Vector[Either[String, Unit]])
-    extends CommandExecutor:
-
-  private var recordedCommands: Vector[CommandSpec] = Vector.empty
-
-  def commands: Vector[CommandSpec] = recordedCommands
-
-  def run(spec: CommandSpec): Either[CommandExecutionError, Unit] =
-    recordedCommands = recordedCommands :+ spec
-    val index  = recordedCommands.size - 1
-    val result = results.lift(index).getOrElse(Right(()))
-    result.left.map(message => CommandExecutionError(spec, message, None))
-
-private final class PasswordLeakingCommandExecutor(password: String) extends CommandExecutor:
-
-  private var recordedCommands: Vector[CommandSpec] = Vector.empty
-
-  def commands: Vector[CommandSpec] = recordedCommands
-
-  def run(spec: CommandSpec): Either[CommandExecutionError, Unit] =
-    recordedCommands = recordedCommands :+ spec
-    if spec.argv == Vector("sudo", "-n", "true") then
-      Left(CommandExecutionError(spec, "sudo password required", Some(1)))
-    else
-      Left(CommandExecutionError(
-        spec,
-        s"authentication failed with $password",
-        Some(1),
-        CommandOutput(s"stdout $password", s"stderr $password")
-      ))
-
-private final class RecordingSudoCredentialProvider(
-    result: Either[SudoCredentialError, SudoPassword]
-) extends SudoCredentialProvider:
-
-  private var recordedRequests: Vector[SudoCredentialRequest] = Vector.empty
-
-  def requests: Vector[SudoCredentialRequest] = recordedRequests
-
-  def requestSudoPassword(
-      request: SudoCredentialRequest
-  ): Either[SudoCredentialError, SudoPassword] =
-    recordedRequests = recordedRequests :+ request
-    result
-
-private final class ConcurrentTrackingSudoCredentialProvider extends SudoCredentialProvider:
-
-  private val active   = AtomicInteger(0)
-  private val peak     = AtomicInteger(0)
-  private val requests = ConcurrentLinkedQueue[String]()
-
-  def maxInFlight: Int = peak.get()
-
-  def toolNames: Vector[String] = requests.iterator().asScala.toVector
-
-  def requestSudoPassword(
-      request: SudoCredentialRequest
-  ): Either[SudoCredentialError, SudoPassword] =
-    val _       = requests.add(request.toolName)
-    val current = active.incrementAndGet()
-    val _       = peak.updateAndGet(previous => math.max(previous, current))
-    try
-      Thread.sleep(50)
-      Right(SudoPassword.fromString("secret"))
-    finally
-      val _ = active.decrementAndGet()
-
-private final class PasswordPromptCommandExecutor extends CommandExecutor:
-
-  def run(spec: CommandSpec): Either[CommandExecutionError, Unit] =
-    if spec.argv == Vector("sudo", "-n", "true") then
-      Left(CommandExecutionError(spec, "sudo password required", Some(1)))
-    else Right(())
-
-private final class RecordingInstallFileSystem(
-    stageFailure: Option[String] = None,
-    modeFailure: Option[String] = None,
-    stagedFiles: Vector[String] = Vector("bin/alpha")
-) extends InstallFileSystem:
-
-  private var modes: Vector[ExecutableModeRequest] = Vector.empty
-  private var replacements: Int                    = 0
-
-  def recordedModes: Vector[ExecutableModeRequest] = modes
-
-  def replaceCalls: Int = replacements
-
-  def stageDirectBinary(
-      installDir: Path,
-      createDirectories: Vector[String],
-      executablePath: String,
-      bytes: Array[Byte]
-  ): Either[InstallFileSystemError.StagingFailed, StagedInstall] = stageFailure match
-    case Some(message) => Left(InstallFileSystemError.StagingFailed(message))
-    case None          => stageSuccess(installDir)
-
-  def stageArchive(
-      installDir: Path,
-      createDirectories: Vector[String],
-      archive: ResolvedArchive,
-      bytes: Array[Byte],
-      commandExecutor: CommandExecutor
-  ): Either[InstallFileSystemError.StagingFailed, StagedInstall] = stageFailure match
-    case Some(message) => Left(InstallFileSystemError.StagingFailed(message))
-    case None          => stageSuccess(installDir)
-
-  def applyExecutableModes(
-      stagedInstall: StagedInstall,
-      executables: Vector[ExecutableModeRequest]
-  ): Either[InstallFileSystemError.ModeApplicationFailed, Unit] =
-    modes = executables
-    modeFailure match
-      case Some(message) =>
-        val first = executables.head
-        Left(
-          InstallFileSystemError.ModeApplicationFailed(
-            first.path,
-            first.mode.octal,
-            message
-          )
-        )
-      case None => Right(())
-
-  def replaceInstall(
-      stagedInstall: StagedInstall
-  ): Either[InstallFileSystemError.ReplacementFailed, Unit] =
-    replacements = replacements + 1
-    modes.foreach: mode =>
-      val target = stagedInstall.installDir.resolve(mode.path)
-      Files.createDirectories(target.getParent)
-      Files.writeString(target, "installed")
-    Right(())
-
-  def discardStaged(stagedInstall: StagedInstall): Unit = ()
-
-  private def stageSuccess(
-      installDir: Path
-  ): Either[InstallFileSystemError.StagingFailed, StagedInstall] =
-    try
-      val stagingDir = Files.createTempDirectory("binstaller-recording-stage")
-      stagedFiles.foreach: file =>
-        val target = stagingDir.resolve(file)
-        Files.createDirectories(target.getParent)
-        Files.writeString(target, "staged")
-      Right(StagedInstall(stagingDir, installDir))
-    catch
-      case error: Exception => Left(InstallFileSystemError.StagingFailed(error.getMessage))

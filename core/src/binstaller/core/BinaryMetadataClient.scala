@@ -1,11 +1,13 @@
 package binstaller.core
 
+import java.io.InputStream
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
+import scala.util.Using
 
 /** Expected failure from a binary metadata lookup. */
 final case class BinaryMetadataError(
@@ -15,7 +17,11 @@ final case class BinaryMetadataError(
 )
 
 /** Metadata observed for a downloadable artifact without materializing the body. */
-final case class BinaryMetadata(sizeBytes: Option[Long], provenance: UrlProvenance)
+final case class BinaryMetadata(
+    sizeBytes: Option[Long],
+    provenance: UrlProvenance,
+    sha256: Option[Sha256Digest] = None
+)
 
 /** Boundary for resolving download URL provenance and content length for lock files. */
 trait BinaryMetadataClient:
@@ -29,6 +35,8 @@ object BinaryMetadataClient:
 
 private[core] final class JdkBinaryMetadataClient(client: HttpClient) extends BinaryMetadataClient:
 
+  private val maxBytes = BinaryDownloadLimits.default.maxBytes
+
   def metadata(url: String): Either[BinaryMetadataError, BinaryMetadata] =
     RuntimeUrl.httpsUri(url) match
       case Left(message) => Left(BinaryMetadataError(url, message))
@@ -36,20 +44,26 @@ private[core] final class JdkBinaryMetadataClient(client: HttpClient) extends Bi
         val request = HttpRequest
           .newBuilder(uri)
           .timeout(RuntimeHttpClient.requestTimeout)
-          .method("HEAD", HttpRequest.BodyPublishers.noBody())
+          .GET()
           .build()
-        Try(client.send(request, HttpResponse.BodyHandlers.discarding())) match
+        Try(client.send(request, HttpResponse.BodyHandlers.ofInputStream())) match
           case Success(response) if response.statusCode() >= 200 && response.statusCode() < 300 =>
             val provenance = UrlProvenance.fromResponse(url, response)
             RuntimeUrl.httpsUri(provenance.finalUrl) match
-              case Right(_)      => Right(BinaryMetadata(contentLength(response), provenance))
+              case Right(_)      => inspectBody(url, response.body(), provenance)
               case Left(message) => Left(BinaryMetadataError(url, message, Some(provenance)))
           case Success(response) =>
             val provenance = UrlProvenance.fromResponse(url, response)
             Left(BinaryMetadataError(url, s"HTTP ${response.statusCode()}", Some(provenance)))
           case Failure(error) => Left(BinaryMetadataError(url, error.getMessage))
 
-  private def contentLength(response: HttpResponse[?]): Option[Long] =
-    response.headers().firstValueAsLong("Content-Length") match
-      case value if value.isPresent && value.getAsLong >= 0L => Some(value.getAsLong)
-      case _                                                 => None
+  private def inspectBody(
+      url: String,
+      input: InputStream,
+      provenance: UrlProvenance
+  ): Either[BinaryMetadataError, BinaryMetadata] = Try:
+    Using.resource(input)(Sha256.digestStream(_, maxBytes))
+  match
+    case Failure(error) => Left(BinaryMetadataError(url, error.getMessage, Some(provenance)))
+    case Success(Left(message)) => Left(BinaryMetadataError(url, message, Some(provenance)))
+    case Success(Right((digest, size))) => Right(BinaryMetadata(Some(size), provenance, Some(digest)))

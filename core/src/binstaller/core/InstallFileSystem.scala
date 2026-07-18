@@ -74,6 +74,18 @@ enum InstallFileSystemError:
 /** Filesystem boundary for staging artifacts before replacing a final install directory. */
 trait InstallFileSystem:
 
+  /** Stage a file-backed direct binary without materializing it in heap. */
+  def stageDirectBinaryFromFile(
+      installDir: Path,
+      createDirectories: Vector[String],
+      executablePath: String,
+      artifact: Path
+  ): Either[InstallFileSystemError.StagingFailed, StagedInstall] = Try(
+    Files.readAllBytes(artifact)
+  ) match
+    case Failure(error) => Left(InstallFileSystemError.StagingFailed(error.getMessage))
+    case Success(bytes) => stageDirectBinary(installDir, createDirectories, executablePath, bytes)
+
   /** Stage a direct binary into a temporary install tree. */
   def stageDirectBinary(
       installDir: Path,
@@ -90,6 +102,21 @@ trait InstallFileSystem:
       bytes: Array[Byte],
       commandExecutor: CommandExecutor
   ): Either[InstallFileSystemError.StagingFailed, StagedInstall]
+
+  /** Stage a file-backed archive without materializing it in heap. */
+  def stageArchiveFromFile(
+      installDir: Path,
+      createDirectories: Vector[String],
+      archive: ResolvedArchive,
+      artifact: Path,
+      commandExecutor: CommandExecutor
+  ): Either[InstallFileSystemError.StagingFailed, StagedInstall] = Try(
+    Files.readAllBytes(artifact)
+  ) match
+    case Failure(error) => Left(InstallFileSystemError.StagingFailed(error.getMessage))
+    case Success(bytes) => stageArchive(
+        installDir, createDirectories, archive, bytes, commandExecutor
+      )
 
   /** Apply requested executable modes inside the staged install tree. */
   def applyExecutableModes(
@@ -111,6 +138,49 @@ object InstallFileSystem:
   def nio: InstallFileSystem = NioInstallFileSystem
 
 private[core] object NioInstallFileSystem extends InstallFileSystem:
+
+  override def stageDirectBinaryFromFile(
+      installDir: Path,
+      createDirectories: Vector[String],
+      executablePath: String,
+      artifact: Path
+  ): Either[InstallFileSystemError.StagingFailed, StagedInstall] =
+    val normalizedInstallDir = installDir.toAbsolutePath.normalize()
+    createStagingDirectory(normalizedInstallDir).flatMap: stagedInstall =>
+      val result: Either[InstallFileSystemError.StagingFailed, Unit] =
+        stageCreateDirectories(stagedInstall, createDirectories).flatMap: _ =>
+          resolveInside(stagedInstall.stagingDir, executablePath)
+            .flatMap(path => copyBinary(artifact, path))
+            .left
+            .map(InstallFileSystemError.StagingFailed.apply)
+      result match
+        case Right(())   => Right(stagedInstall)
+        case Left(error) =>
+          discardStaged(stagedInstall)
+          Left(error)
+
+  override def stageArchiveFromFile(
+      installDir: Path,
+      createDirectories: Vector[String],
+      archive: ResolvedArchive,
+      artifact: Path,
+      commandExecutor: CommandExecutor
+  ): Either[InstallFileSystemError.StagingFailed, StagedInstall] =
+    val normalizedInstallDir = installDir.toAbsolutePath.normalize()
+    createStagingDirectory(normalizedInstallDir).flatMap: stagedInstall =>
+      val result: Either[InstallFileSystemError.StagingFailed, Unit] =
+        stageCreateDirectories(stagedInstall, createDirectories).flatMap: _ =>
+          ArchiveExtractor.extractFile(
+            archive,
+            artifact,
+            stagedInstall.stagingDir,
+            commandExecutor
+          ).left.map(InstallFileSystemError.StagingFailed.apply)
+      result match
+        case Right(())   => Right(stagedInstall)
+        case Left(error) =>
+          discardStaged(stagedInstall)
+          Left(error)
 
   def stageDirectBinary(
       installDir: Path,
@@ -260,6 +330,13 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
       StandardOpenOption.TRUNCATE_EXISTING,
       StandardOpenOption.WRITE
     )
+  match
+    case Success(_)     => Right(())
+    case Failure(error) => Left(error.getMessage)
+
+  private def copyBinary(source: Path, target: Path): Either[String, Unit] = Try:
+    Option(target.getParent).foreach(Files.createDirectories(_))
+    val _ = Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
   match
     case Success(_)     => Right(())
     case Failure(error) => Left(error.getMessage)

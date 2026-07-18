@@ -12,7 +12,8 @@ import binstaller.config.ValidationError
 /** Variable-resolution inputs and display redaction policy for manifest resolution. */
 final case class ResolutionOptions(
     runtimeVariables: Map[String, String],
-    redactions: SensitiveValueRedactions
+    redactions: SensitiveValueRedactions,
+    hostPlatform: HostPlatform = HostPlatform.current
 )
 
 /** Resolution option constructors. */
@@ -21,11 +22,38 @@ object ResolutionOptions:
   /** Build options from explicit runtime variables and derive sensitive-value redactions. */
   def apply(runtimeVariables: Map[String, String]): ResolutionOptions = ResolutionOptions(
     runtimeVariables,
-    SensitiveValueRedactions.fromRuntimeVariables(runtimeVariables)
+    SensitiveValueRedactions.fromRuntimeVariables(runtimeVariables),
+    HostPlatform.current
   )
 
   /** Build options from the current process environment. */
   def fromEnvironment(): ResolutionOptions = ResolutionOptions(sys.env.toMap)
+
+/** Normalized host values used to evaluate manifest `when` selectors. */
+final case class HostPlatform(osFamily: String, architecture: String)
+
+/** Host-platform detection and normalization. */
+object HostPlatform:
+
+  /** Detect the current JVM host using stable manifest-facing names. */
+  def current: HostPlatform = HostPlatform(
+    normalizeOs(System.getProperty("os.name", "unknown")),
+    normalizeArchitecture(System.getProperty("os.arch", "unknown"))
+  )
+
+  /** Normalize common operating-system aliases. */
+  def normalizeOs(value: String): String = value.trim.toLowerCase match
+    case name if name.contains("linux")                         => "linux"
+    case name if name.contains("mac") || name.contains("darwin") => "darwin"
+    case name if name.contains("windows")                      => "windows"
+    case name                                                    => name.replaceAll("\\s+", "-")
+
+  /** Normalize common CPU architecture aliases. */
+  def normalizeArchitecture(value: String): String = value.trim.toLowerCase match
+    case "amd64" | "x86_64" | "x64"  => "amd64"
+    case "aarch64" | "arm64"           => "arm64"
+    case "x86" | "i386" | "i486" | "i586" | "i686" => "386"
+    case architecture                    => architecture
 
 /** Resolved install plan after interpolation, version lookup, and validation. */
 final case class ResolvedPlan(
@@ -39,7 +67,6 @@ final case class ResolvedPolicy(
     appsDir: String,
     stateFile: Option[String],
     allowSudoSymlinks: AllowSudoSymlinks,
-    requireConfirmation: RequireConfirmation,
     continueOnError: ContinueOnError,
     mode: PolicyMode = PolicyMode.Developer,
     allowDynamicLatestUrls: PolicyAllowance = PolicyAllowance.Allowed,
@@ -51,15 +78,6 @@ final case class ResolvedPolicy(
 /** Effective allow/reject decision after applying a manifest policy profile and overrides. */
 enum PolicyAllowance:
   case Allowed, Rejected
-
-/** Legacy manifest confirmation setting retained for profile compatibility. */
-enum RequireConfirmation:
-  case Enabled, Disabled
-
-/** Helpers for converting manifest booleans into the compatibility setting. */
-object RequireConfirmation:
-  /** Convert a manifest boolean into [[RequireConfirmation]]. */
-  def fromBoolean(value: Boolean): RequireConfirmation = if value then Enabled else Disabled
 
 /** Whether apply should continue after a failed tool. */
 enum ContinueOnError:

@@ -441,7 +441,6 @@ object CliModuleTest extends TestSuite:
                                                        |spec:
                                                        |  policy:
                                                        |    appsDir: "$appsDir"
-                                                       |    requireConfirmation: true
                                                        |  vars: {}
                                                        |  versions:
                                                        |    alpha: "1.0.0"
@@ -467,7 +466,6 @@ object CliModuleTest extends TestSuite:
        |spec:
        |  policy:
        |    appsDir: "$appsDir"
-       |    requireConfirmation: true
        |  vars: {}
        |  versions:
        |    alpha: "1.0.0"

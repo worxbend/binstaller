@@ -53,10 +53,17 @@ private[core] final class ResolutionBuilder(
     val policy       = resolvePolicy(options.runtimeVariables ++ manifestVars.value)
     val baseVars     = options.runtimeVariables ++ manifestVars.value +
       ("appsDir" -> policy.value.appsDir)
-    val versions               = resolveVersions(baseVars)
-    val tools                  = resolveTools(baseVars, versions.value)
+    val activeEntries          = profile.spec.plan.zipWithIndex.filter((entry, _) => matchesHost(entry))
+    val activeVersionRefs      = activeEntries.map(_._1.spec.versionRef).toSet
+    val versions               = resolveVersions(baseVars, activeVersionRefs)
+    val tools                  = resolveTools(activeEntries, baseVars, versions.value)
     val installDirectoryErrors = validateInstallDirectories(policy.value, tools.value)
-    val strictPolicyErrors     = StrictPolicyValidator.validate(profile, policy.value, tools.value)
+    val strictPolicyErrors     = StrictPolicyValidator.validate(
+      profile,
+      policy.value,
+      tools.value,
+      activeVersionRefs
+    )
 
     ResolvedValue(
       ResolvedPlan(policy.value, tools.value, options.redactions),
@@ -88,7 +95,6 @@ private[core] final class ResolutionBuilder(
         appsDir.value,
         stateFile.value,
         profile.spec.policy.allowSudoSymlinks,
-        RequireConfirmation.fromBoolean(profile.spec.policy.requireConfirmation),
         ContinueOnError.fromBoolean(profile.spec.policy.continueOnError),
         profile.spec.policy.mode,
         ManifestPolicy.allowance(
@@ -112,9 +118,10 @@ private[core] final class ResolutionBuilder(
     )
 
   private def resolveVersions(
-      vars: Map[String, String]
+      vars: Map[String, String],
+      activeVersionRefs: Set[String]
   ): ResolvedValue[Map[String, ResolvedVersion]] =
-    val resolved = profile.spec.versions.toVector.map:
+    val resolved = profile.spec.versions.toVector.filter((name, _) => activeVersionRefs(name)).map:
       case (name, source) => name -> resolveVersionSource(name, source, vars)
     ResolvedValue(
       resolved.map((name, value) => name -> value.value).toMap,
@@ -175,15 +182,23 @@ private[core] final class ResolutionBuilder(
     else Vector(ValidationError(path, s"version '$name' did not resolve to a concrete value"))
 
   private def resolveTools(
+      entries: Vector[(PlanEntry, Int)],
       baseVars: Map[String, String],
       versions: Map[String, ResolvedVersion]
   ): ResolvedValue[Vector[ResolvedTool]] =
-    val resolved = profile.spec.plan.zipWithIndex.map:
+    val resolved = entries.map:
       case (entry, index) => resolveTool(entry, index, baseVars, versions)
     ResolvedValue(
       resolved.map(_.value),
       resolved.flatMap(_.errors)
     )
+
+  private def matchesHost(entry: PlanEntry): Boolean = entry.when.forall: clause =>
+    val osMatches = clause.os.flatMap(_.family).forall: expected =>
+      HostPlatform.normalizeOs(expected) == options.hostPlatform.osFamily
+    val architectureMatches = clause.architecture.forall: expected =>
+      HostPlatform.normalizeArchitecture(expected) == options.hostPlatform.architecture
+    osMatches && architectureMatches
 
   private def resolveTool(
       entry: PlanEntry,

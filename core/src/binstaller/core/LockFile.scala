@@ -89,8 +89,9 @@ object LockFileChecksum:
   def summary(tools: Vector[LockFileTool]): String =
     val configured = tools.count(_.checksum.exists(_.source == "configured"))
     val discovered = tools.count(_.checksum.exists(_.source == "discovered"))
+    val inspected  = tools.count(_.checksum.exists(_.source == "inspected"))
     val missing    = tools.count(_.checksum.isEmpty)
-    s"configured $configured, discovered $discovered, missing $missing"
+    s"configured $configured, discovered $discovered, inspected $inspected, missing $missing"
 
 /** Lock-file JSON codecs and constructors. */
 object LockFile:

@@ -32,8 +32,6 @@ private[core] object ManifestFingerprint:
     append(builder, "spec.policy.mode", policy.mode.value)
     append(builder, "spec.policy.continueOnError", policy.continueOnError.toString)
     append(builder, "spec.policy.appsDir", policy.appsDir)
-    append(builder, "spec.policy.cleanInstall", policy.cleanInstall.toString)
-    append(builder, "spec.policy.requireConfirmation", policy.requireConfirmation.toString)
     append(builder, "spec.policy.allowSudoSymlinks", policy.allowSudoSymlinks.toString)
     appendOverride(builder, "spec.policy.allowDynamicLatestUrls", policy.allowDynamicLatestUrls)
     appendOverride(builder, "spec.policy.allowMissingChecksums", policy.allowMissingChecksums)

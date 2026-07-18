@@ -48,15 +48,16 @@ private[core] final class ResolvingBinaryInstallerService(
             val result = renderLockedApplyError(error)
             emitSummary(result, stateFilePath = None, eventContext)
             result
-          case Right(_) =>
-            val statePath = configuredStatePath(options, prepared.plan)
+          case Right(lockedProvenance) =>
+            val lockedPrepared = lockedProvenance.fold(prepared)(applyLockedChecksums(prepared, _))
+            val statePath = configuredStatePath(options, lockedPrepared.plan)
             eventContext.emit(InstallerEvent.PlanReady(
-              prepared.plan.tools.map(_.name),
+              lockedPrepared.plan.tools.map(_.name),
               statePath,
               _
             ))
             val result =
-              StatefulApplyRunner.run(options, prepared, installer, stateStore, eventContext)
+              StatefulApplyRunner.run(options, lockedPrepared, installer, stateStore, eventContext)
             emitSummary(result, statePath, eventContext)
             result
 
@@ -67,20 +68,25 @@ private[core] final class ResolvingBinaryInstallerService(
     resolveSelectedPreparedPlan(options) match
       case Left(error)     => renderError(error)
       case Right(prepared) =>
-        val lockFile = LockFileBuilder.build(prepared, metadataClient)
-        val path     = Path.of(lockOptions.outputPath)
-        lockFileStore.save(path, lockFile) match
-          case Right(()) => InstallerResult(
-              Vector(
-                s"wrote lock file: ${path.toAbsolutePath.normalize()}",
-                s"profile: ${prepared.profileName}",
-                s"manifest fingerprint: ${prepared.manifestFingerprint}",
-                s"tools: ${lockFile.tools.size}",
-                s"checksums: ${LockFileChecksum.summary(lockFile.tools)}"
-              ),
-              0
+        LockFileBuilder.build(prepared, metadataClient) match
+          case Left(error) => InstallerResult(
+              Vector(s"lock inspection failed for tool '${error.toolName}': ${error.message}"),
+              1
             )
-          case Left(error) => InstallerResult(Vector(LockFileError.render(error)), 1)
+          case Right(lockFile) =>
+            val path = Path.of(lockOptions.outputPath)
+            lockFileStore.save(path, lockFile) match
+              case Right(()) => InstallerResult(
+                  Vector(
+                    s"wrote lock file: ${path.toAbsolutePath.normalize()}",
+                    s"profile: ${prepared.profileName}",
+                    s"manifest fingerprint: ${prepared.manifestFingerprint}",
+                    s"tools: ${lockFile.tools.size}",
+                    s"checksums: ${LockFileChecksum.summary(lockFile.tools)}"
+                  ),
+                  0
+                )
+              case Left(error) => InstallerResult(Vector(LockFileError.render(error)), 1)
 
   private def renderSelectedPlanWithEvents(
       options: InstallerOptions,
@@ -186,3 +192,18 @@ private[core] final class ResolvingBinaryInstallerService(
 
   private def renderLockedApplyError(error: LockedApplyError): InstallerResult =
     InstallerResult(LockedApplyError.renderLines(error), 1)
+
+  private def applyLockedChecksums(
+      prepared: PreparedPlan,
+      locked: LockedApplyProvenance
+  ): PreparedPlan = prepared.copy(plan = prepared.plan.copy(tools = prepared.plan.tools.map: tool =>
+    locked.tools.get(tool.name).flatMap(_.checksum) match
+      case Some(checksum) => tool.copy(download = tool.download.copy(checksum = Some(
+          ResolvedChecksum(
+            binstaller.config.ChecksumAlgorithm.Sha256,
+            checksum.value,
+            ResolvedChecksumSource.Configured
+          )
+        )))
+      case None => tool
+  ))

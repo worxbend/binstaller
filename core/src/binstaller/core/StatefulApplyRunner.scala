@@ -1,6 +1,8 @@
 package binstaller.core
 
+import java.nio.file.Files
 import java.nio.file.Path
+import scala.util.Try
 
 private[core] object StatefulApplyRunner:
 
@@ -15,7 +17,8 @@ private[core] object StatefulApplyRunner:
         prepared.plan,
         options.verboseOutput,
         _ => Right(()),
-        eventContext
+        eventContext,
+        options.applyParallelism
       )
     case Some(path) =>
       eventContext.emit(InstallerEvent.LogLine(
@@ -62,7 +65,9 @@ private[core] object StatefulApplyRunner:
       state: ApplyState,
       prepared: PreparedPlan
   ): Either[ApplyStateError, ApplyState] =
-    if state.profileName == prepared.profileName &&
+    if state.schemaVersion != ApplyState.schemaVersion then
+      Left(ApplyStateError.UnsupportedSchema(path, ApplyState.schemaVersion, state.schemaVersion))
+    else if state.profileName == prepared.profileName &&
       state.manifestFingerprint == prepared.manifestFingerprint
     then Right(state)
     else
@@ -85,7 +90,9 @@ private[core] object StatefulApplyRunner:
       stateStore: ApplyStateStore,
       eventContext: InstallerEventContext
   ): InstallerResult =
-    val completed    = completedToolNames(state)
+    val completed    = prepared.plan.tools.filter(tool => completedAndPresent(state, tool))
+      .map(_.name)
+      .toSet
     val pendingTools = prepared.plan.tools.filterNot(tool => completed(tool.name))
     val skippedLines = prepared.plan.tools
       .filter(tool => completed(tool.name))
@@ -113,14 +120,40 @@ private[core] object StatefulApplyRunner:
       pendingPlan,
       options.verboseOutput,
       terminalObserver,
-      eventContext
+      eventContext,
+      options.applyParallelism
     )
 
     result.copy(lines = skippedLines ++ result.lines)
 
-  private def completedToolNames(state: ApplyState): Set[String] = state.tools.collect:
-    case tool if tool.status == ApplyStateToolStatus.Completed => tool.name
-  .toSet
+  private def completedAndPresent(state: ApplyState, tool: ResolvedTool): Boolean = state.tools
+    .find(_.name == tool.name)
+    .exists: saved =>
+      saved.status == ApplyStateToolStatus.Completed &&
+      saved.installDir.contains(tool.installDir) &&
+      tool.executables.forall(executable => installedFileExists(tool, executable.path)) &&
+      tool.symlinks.forall(symlink => installedSymlinkMatches(tool, symlink))
+
+  private def installedFileExists(tool: ResolvedTool, relative: String): Boolean =
+    val root     = Path.of(tool.installDir).toAbsolutePath.normalize()
+    val resolved = root.resolve(relative).normalize()
+    resolved.startsWith(root) && Files.isRegularFile(resolved)
+
+  private def installedSymlinkMatches(tool: ResolvedTool, symlink: ResolvedSymlink): Boolean =
+    val installRoot = Path.of(tool.installDir).toAbsolutePath.normalize()
+    val rawPath     = Path.of(symlink.path)
+    val path        = if rawPath.isAbsolute then rawPath.normalize() else installRoot.resolve(rawPath).normalize()
+    val rawTarget   = Path.of(symlink.target)
+    val expected =
+      if rawTarget.isAbsolute then rawTarget.normalize() else installRoot.resolve(rawTarget).normalize()
+    if !Files.isSymbolicLink(path) then false
+    else Try:
+      val actualRaw = Files.readSymbolicLink(path)
+      val actual =
+        if actualRaw.isAbsolute then actualRaw.normalize()
+        else Option(path.getParent).getOrElse(installRoot).resolve(actualRaw).normalize()
+      actual == expected
+    .getOrElse(false)
 
   private def updateState(state: ApplyState, result: TerminalToolResult): ApplyState =
     val updatedTool = result match

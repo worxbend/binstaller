@@ -63,8 +63,6 @@ final case class InstallPolicy(
     mode: PolicyMode,
     continueOnError: Boolean,
     appsDir: String,
-    cleanInstall: Boolean,
-    requireConfirmation: Boolean,
     allowSudoSymlinks: AllowSudoSymlinks,
     allowDynamicLatestUrls: Option[PolicyOverride],
     allowMissingChecksums: Option[PolicyOverride],
