@@ -31,7 +31,7 @@ and command output consumes resolved plans or renderer-agnostic events.
   `apply`, `versions`, and `lock`.
 - `app`: owns process entry and exit-code propagation only.
 - `build/release`: `build.mill` defines modules and native-image settings;
-  `.github/workflows/native-release.yml` builds, smokes, packages, checksums,
+  `.github/workflows/release.yml` builds, smokes, packages, checksums,
   and publishes Linux amd64 artifacts.
 
 ## Data Flow

@@ -35,7 +35,6 @@ private[core] object ManifestFingerprint:
     append(builder, "spec.policy.allowSudoSymlinks", policy.allowSudoSymlinks.toString)
     appendOverride(builder, "spec.policy.allowDynamicLatestUrls", policy.allowDynamicLatestUrls)
     appendOverride(builder, "spec.policy.allowMissingChecksums", policy.allowMissingChecksums)
-    appendOverride(builder, "spec.policy.allowTarXzFallback", policy.allowTarXzFallback)
     appendOverride(
       builder,
       "spec.policy.allowArchiveCandidateFallback",

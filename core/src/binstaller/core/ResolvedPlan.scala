@@ -26,8 +26,25 @@ object ResolutionOptions:
     HostPlatform.current
   )
 
-  /** Build options from the current process environment. */
-  def fromEnvironment(): ResolutionOptions = ResolutionOptions(sys.env.toMap)
+  /**
+   * Build options from a deliberately small, non-secret environment allowlist. Arbitrary process
+   * environment values are not exposed to manifest URL interpolation.
+   */
+  def fromEnvironment(): ResolutionOptions = ResolutionOptions(
+    sys.env.view.filterKeys(RuntimeTemplateEnvironment.allowed).toMap
+  )
+
+private[core] object RuntimeTemplateEnvironment:
+
+  val allowed: Set[String] = Set(
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME"
+  )
 
 /** Normalized host values used to evaluate manifest `when` selectors. */
 final case class HostPlatform(osFamily: String, architecture: String)
@@ -43,17 +60,17 @@ object HostPlatform:
 
   /** Normalize common operating-system aliases. */
   def normalizeOs(value: String): String = value.trim.toLowerCase match
-    case name if name.contains("linux")                         => "linux"
+    case name if name.contains("linux")                          => "linux"
     case name if name.contains("mac") || name.contains("darwin") => "darwin"
-    case name if name.contains("windows")                      => "windows"
+    case name if name.contains("windows")                        => "windows"
     case name                                                    => name.replaceAll("\\s+", "-")
 
   /** Normalize common CPU architecture aliases. */
   def normalizeArchitecture(value: String): String = value.trim.toLowerCase match
-    case "amd64" | "x86_64" | "x64"  => "amd64"
-    case "aarch64" | "arm64"           => "arm64"
+    case "amd64" | "x86_64" | "x64"                => "amd64"
+    case "aarch64" | "arm64"                       => "arm64"
     case "x86" | "i386" | "i486" | "i586" | "i686" => "386"
-    case architecture                    => architecture
+    case architecture                              => architecture
 
 /** Resolved install plan after interpolation, version lookup, and validation. */
 final case class ResolvedPlan(
@@ -71,7 +88,6 @@ final case class ResolvedPolicy(
     mode: PolicyMode = PolicyMode.Developer,
     allowDynamicLatestUrls: PolicyAllowance = PolicyAllowance.Allowed,
     allowMissingChecksums: PolicyAllowance = PolicyAllowance.Allowed,
-    allowTarXzFallback: PolicyAllowance = PolicyAllowance.Allowed,
     allowArchiveCandidateFallback: PolicyAllowance = PolicyAllowance.Allowed
 )
 
@@ -131,6 +147,13 @@ final case class ResolvedChecksum(
 /** How a checksum entered the resolved plan. */
 enum ResolvedChecksumSource:
   case Configured
+
+  /**
+   * Checksum fetched from a discovery source published alongside the artifact in the same release.
+   * This is trust-on-first-use: it catches corruption or truncation in transit but is not an
+   * independent integrity guarantee, since anyone who can publish the artifact can publish a
+   * matching digest. Prefer a [[Configured]] checksum pinned by the manifest author.
+   */
   case Discovered(url: String, file: String, provenance: UrlProvenance)
 
 /** Rendering helpers for resolved checksum provenance. */
@@ -149,7 +172,8 @@ object ResolvedChecksum:
   def sourceDescription(checksum: ResolvedChecksum): String = checksum.source match
     case ResolvedChecksumSource.Configured                        => "configured in manifest"
     case ResolvedChecksumSource.Discovered(url, file, provenance) =>
-      s"discovered from $url for $file" + UrlProvenance.redirectSuffix(Some(provenance))
+      s"discovered from $url for $file" + UrlProvenance.redirectSuffix(Some(provenance)) +
+        "; trust-on-first-use: fetched from the same release, not independent integrity"
 
 /** Resolved archive mappings paired with the original archive declaration. */
 final case class ResolvedArchive(

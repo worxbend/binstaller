@@ -171,6 +171,37 @@ if [ ! -s "${MILL}" ] || [ "$MILL_TEST_DRY_RUN_LAUNCHER_SCRIPT" = "1" ] ; then
   echo "Downloading mill ${MILL_VERSION} from ${MILL_DOWNLOAD_URL} ..." 1>&2
   curl -f -L -o "${MILL_TEMP_DOWNLOAD_FILE}" "${MILL_DOWNLOAD_URL}"
 
+  # The repository pins both the Mill version and the digest of every launcher variant used by
+  # supported build hosts. Updating Mill therefore requires an intentional digest update here.
+  case "${MILL_VERSION}${ARTIFACT_SUFFIX}" in
+    1.1.7) EXPECTED_MILL_SHA256="49c1c575ad44efba1b9103ca1d6042624ef341aad9d8f4cb58fbfc56cf930e0d" ;;
+    1.1.7-native-linux-amd64) EXPECTED_MILL_SHA256="d8648b12f453947f503f3906339dac622261e8ea974339ff574b0f43e480dfdb" ;;
+    1.1.7-native-linux-aarch64) EXPECTED_MILL_SHA256="96ad26474945865ec4498f8133a915463c88ddba59392c23f9b4a8dfb74091a2" ;;
+    1.1.7-native-mac-amd64) EXPECTED_MILL_SHA256="b003acea0aa81fa4d65391ade3c1113bb99b2c7c43571c39b7bc1a5657341875" ;;
+    1.1.7-native-mac-aarch64) EXPECTED_MILL_SHA256="b50a55d06a1ef4eab5eab9b5e266af4b910b97bcf806cbbb24155b6c581ab8f1" ;;
+    *)
+      echo "No pinned SHA-256 digest for Mill ${MILL_VERSION}${ARTIFACT_SUFFIX}" 1>&2
+      rm -f "${MILL_TEMP_DOWNLOAD_FILE}"
+      exit 1
+      ;;
+  esac
+  if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL_MILL_SHA256=$(sha256sum "${MILL_TEMP_DOWNLOAD_FILE}" | cut -d' ' -f1)
+  elif command -v shasum >/dev/null 2>&1; then
+    ACTUAL_MILL_SHA256=$(shasum -a 256 "${MILL_TEMP_DOWNLOAD_FILE}" | cut -d' ' -f1)
+  else
+    echo "A SHA-256 utility is required to verify the Mill launcher" 1>&2
+    rm -f "${MILL_TEMP_DOWNLOAD_FILE}"
+    exit 1
+  fi
+  if [ "${ACTUAL_MILL_SHA256}" != "${EXPECTED_MILL_SHA256}" ]; then
+    echo "Mill launcher SHA-256 verification failed" 1>&2
+    rm -f "${MILL_TEMP_DOWNLOAD_FILE}"
+    exit 1
+  fi
+  unset ACTUAL_MILL_SHA256
+  unset EXPECTED_MILL_SHA256
+
   chmod +x "${MILL_TEMP_DOWNLOAD_FILE}"
 
   mkdir -p "${MILL_FINAL_DOWNLOAD_FOLDER}"

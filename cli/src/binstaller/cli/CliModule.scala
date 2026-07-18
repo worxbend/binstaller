@@ -267,9 +267,13 @@ private[cli] final class ApplyCommand(
     out: PrintWriter,
     outputStyle: CliOutputStyle
 ) extends SelectableCommand(root, out):
-  private var lockedApply: LockedApplyMode       = LockedApplyMode.Disabled
-  private var lockPath: String                   = LockOptions.defaultOutputPath
-  private var applyParallelism: ApplyParallelism = ApplyParallelism.default
+  private var lockedApply: LockedApplyMode = LockedApplyMode.Disabled
+  private var lockPath: String             = LockOptions.defaultOutputPath
+  // Stored raw and validated in call(): validating in the setter would require throwing, and the
+  // @Spec-based ParameterException route needs field reflection that the native-image build does
+  // not register (it would NPE in the shipped binary), reintroducing the raw stack trace this
+  // guards against.
+  private var parallelismValue: Int = ApplyParallelism.default.value
 
   @CliOption(
     names = Array("--locked"),
@@ -289,25 +293,27 @@ private[cli] final class ApplyCommand(
     paramLabel = "N",
     description = Array("Number of tools to download and stage concurrently. Default: 4.")
   )
-  def setParallelism(value: Int): Unit = ApplyParallelism.fromInt(value) match
-    case Right(parallelism) => applyParallelism = parallelism
-    case Left(message)      => throw IllegalArgumentException(message)
+  def setParallelism(value: Int): Unit = parallelismValue = value
 
-  override def call(): Integer = executeWithOptions(
-    _.copy(
-      selection = selection,
-      lockPath = lockPath,
-      lockedApply = lockedApply,
-      applyParallelism = applyParallelism
-    ),
-    options =>
-      val eventRenderer = CliApplyEventRenderer(out, outputStyle)
-      val result        = service.applyWithEvents(options, eventRenderer)
-      eventRenderer.finish()
-      result.copy(lines =
-        CliApplyOutput.colorLines(result.lines, outputStyle) ++ eventRenderer.summaryLines
+  override def call(): Integer = ApplyParallelism.fromInt(parallelismValue) match
+    case Left(message) =>
+      out.println(message)
+      Integer.valueOf(CommandLine.ExitCode.USAGE)
+    case Right(parallelism) => executeWithOptions(
+        _.copy(
+          selection = selection,
+          lockPath = lockPath,
+          lockedApply = lockedApply,
+          applyParallelism = parallelism
+        ),
+        options =>
+          val eventRenderer = CliApplyEventRenderer(out, outputStyle)
+          val result        = service.applyWithEvents(options, eventRenderer)
+          eventRenderer.finish()
+          result.copy(lines =
+            CliApplyOutput.colorLines(result.lines, outputStyle) ++ eventRenderer.summaryLines
+          )
       )
-  )
 
 @Command(
   name = "versions",

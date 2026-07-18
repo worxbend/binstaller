@@ -8,6 +8,7 @@ final case class Sha256Digest private (value: String)
 
 /** SHA-256 digest validation and construction. */
 object Sha256Digest:
+
   def fromString(value: String): Either[String, Sha256Digest] =
     val normalized = value.toLowerCase
     if normalized.matches("^[0-9a-f]{64}$") then Right(Sha256Digest(normalized))
@@ -28,10 +29,10 @@ private[core] object Sha256:
     var count         = input.read(buffer)
     while count != -1 do
       total += count
-      if total > maxBytes then return Left(s"download size $total exceeds max allowed $maxBytes bytes")
+      if total > maxBytes then
+        return Left(s"download size $total exceeds max allowed $maxBytes bytes")
       messageDigest.update(buffer, 0, count)
       count = input.read(buffer)
     Right(Sha256Digest.trusted(hex(messageDigest.digest())) -> total)
 
-  private def hex(bytes: Array[Byte]): String =
-    bytes.map(byte => f"${byte & 0xff}%02x").mkString
+  private def hex(bytes: Array[Byte]): String = bytes.map(byte => f"${byte & 0xff}%02x").mkString

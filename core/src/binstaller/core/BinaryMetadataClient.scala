@@ -2,8 +2,6 @@ package binstaller.core
 
 import java.io.InputStream
 import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
@@ -30,32 +28,36 @@ trait BinaryMetadataClient:
 
 /** Binary metadata client constructors. */
 object BinaryMetadataClient:
-  /** JDK HTTP implementation using HEAD with HTTPS, redirects, and timeout. */
+  /** JDK HTTP implementation. Note: sha256 requires the artifact bytes, so this performs a full
+   *  streamed GET (hashing in a single pass), not a HEAD. Under `--locked` the artifact is fetched
+   *  here for lock validation and again by the installer; this keeps lock validation all-or-nothing
+   *  (every tool verified before any install) without holding every artifact on disk at once. */
   def jdk: BinaryMetadataClient = JdkBinaryMetadataClient(RuntimeHttpClient.create())
 
-private[core] final class JdkBinaryMetadataClient(client: HttpClient) extends BinaryMetadataClient:
+private[core] final class JdkBinaryMetadataClient(
+    client: HttpClient,
+    hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved
+) extends BinaryMetadataClient:
 
   private val maxBytes = BinaryDownloadLimits.default.maxBytes
 
   def metadata(url: String): Either[BinaryMetadataError, BinaryMetadata] =
     RuntimeUrl.httpsUri(url) match
       case Left(message) => Left(BinaryMetadataError(url, message))
-      case Right(uri)    =>
-        val request = HttpRequest
-          .newBuilder(uri)
-          .timeout(RuntimeHttpClient.requestTimeout)
-          .GET()
-          .build()
-        Try(client.send(request, HttpResponse.BodyHandlers.ofInputStream())) match
-          case Success(response) if response.statusCode() >= 200 && response.statusCode() < 300 =>
-            val provenance = UrlProvenance.fromResponse(url, response)
-            RuntimeUrl.httpsUri(provenance.finalUrl) match
-              case Right(_)      => inspectBody(url, response.body(), provenance)
-              case Left(message) => Left(BinaryMetadataError(url, message, Some(provenance)))
-          case Success(response) =>
-            val provenance = UrlProvenance.fromResponse(url, response)
-            Left(BinaryMetadataError(url, s"HTTP ${response.statusCode()}", Some(provenance)))
-          case Failure(error) => Left(BinaryMetadataError(url, error.getMessage))
+      case Right(_)      => Try(RuntimeHttpClient.getInputStream(client, url, hostGuard)) match
+          case Success(Right(result))
+              if result.response.statusCode() >= 200 &&
+                result.response.statusCode() < 300 =>
+            inspectBody(url, result.response.body(), result.provenance)
+          case Success(Right(result)) =>
+            result.response.body().close()
+            Left(BinaryMetadataError(
+              url,
+              s"HTTP ${result.response.statusCode()}",
+              Some(result.provenance)
+            ))
+          case Success(Left(message)) => Left(BinaryMetadataError(url, message))
+          case Failure(error)         => Left(BinaryMetadataError(url, error.getMessage))
 
   private def inspectBody(
       url: String,
@@ -65,5 +67,6 @@ private[core] final class JdkBinaryMetadataClient(client: HttpClient) extends Bi
     Using.resource(input)(Sha256.digestStream(_, maxBytes))
   match
     case Failure(error) => Left(BinaryMetadataError(url, error.getMessage, Some(provenance)))
-    case Success(Left(message)) => Left(BinaryMetadataError(url, message, Some(provenance)))
-    case Success(Right((digest, size))) => Right(BinaryMetadata(Some(size), provenance, Some(digest)))
+    case Success(Left(message))         => Left(BinaryMetadataError(url, message, Some(provenance)))
+    case Success(Right((digest, size))) =>
+      Right(BinaryMetadata(Some(size), provenance, Some(digest)))

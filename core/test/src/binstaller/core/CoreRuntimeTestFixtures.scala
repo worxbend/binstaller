@@ -24,6 +24,7 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLParameters
 import javax.net.ssl.SSLSession
 import scala.jdk.CollectionConverters.*
+
 private[core] final class FakeHttpTextClient(text: String) extends HttpTextClient:
 
   def getText(url: String): Either[HttpTextError, String] =
@@ -93,7 +94,8 @@ private[core] final class RedirectingBinaryDownloadClient(provenance: UrlProvena
     progressObserver.onProgress(BinaryDownloadProgress.Finished(provenance.finalUrl, 5L, Some(5L)))
     Right(BinaryDownloadResult(bytes, provenance))
 
-private[core] final class RecordingBinaryDownloadProgressObserver extends BinaryDownloadProgressObserver:
+private[core] final class RecordingBinaryDownloadProgressObserver
+    extends BinaryDownloadProgressObserver:
   private var recordedUrls: Vector[String] = Vector.empty
 
   def urls: Vector[String] = recordedUrls
@@ -165,8 +167,8 @@ private[core] final class ConcurrentTrackingDownloadClient(urls: Vector[String])
 
 private[core] final class ParallelismProbeDownloadClient extends BinaryDownloadClient:
 
-  private val active = AtomicInteger(0)
-  private val peak   = AtomicInteger(0)
+  private val active      = AtomicInteger(0)
+  private val peak        = AtomicInteger(0)
   private val bothStarted = CountDownLatch(2)
 
   def maxInFlight: Int = peak.get()
@@ -195,7 +197,8 @@ private[core] final class RecordingInstallerEventObserver extends InstallerEvent
 
   def onEvent(event: InstallerEvent): Unit = recordedEvents = recordedEvents :+ event
 
-private[core] final class RecordingApplyStateStore(delegate: ApplyStateStore) extends ApplyStateStore:
+private[core] final class RecordingApplyStateStore(delegate: ApplyStateStore)
+    extends ApplyStateStore:
 
   private var states: Vector[ApplyState] = Vector.empty
 
@@ -289,7 +292,7 @@ private[core] final class FakeArchiveCommandExecutor(path: String, content: Stri
   def run(spec: CommandSpec): Either[CommandExecutionError, Unit] =
     recordedCommands = recordedCommands :+ spec
     val directoryFlag = if spec.argv.contains("--directory") then "--directory" else "-C"
-    val extractDir = spec.argv.dropWhile(_ != directoryFlag).drop(1).headOption.map(Path.of(_))
+    val extractDir    = spec.argv.dropWhile(_ != directoryFlag).drop(1).headOption.map(Path.of(_))
     extractDir match
       case Some(directory) =>
         val target = directory.resolve(path)

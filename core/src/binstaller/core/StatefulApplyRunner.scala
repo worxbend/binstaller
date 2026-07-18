@@ -90,7 +90,7 @@ private[core] object StatefulApplyRunner:
       stateStore: ApplyStateStore,
       eventContext: InstallerEventContext
   ): InstallerResult =
-    val completed    = prepared.plan.tools.filter(tool => completedAndPresent(state, tool))
+    val completed = prepared.plan.tools.filter(tool => completedAndPresent(state, tool))
       .map(_.name)
       .toSet
     val pendingTools = prepared.plan.tools.filterNot(tool => completed(tool.name))
@@ -124,15 +124,15 @@ private[core] object StatefulApplyRunner:
       options.applyParallelism
     )
 
-    result.copy(lines = skippedLines ++ result.lines)
+    result.copy(lines = skippedLines ++ result.lines, skippedTools = skippedLines.size)
 
   private def completedAndPresent(state: ApplyState, tool: ResolvedTool): Boolean = state.tools
     .find(_.name == tool.name)
     .exists: saved =>
       saved.status == ApplyStateToolStatus.Completed &&
-      saved.installDir.contains(tool.installDir) &&
-      tool.executables.forall(executable => installedFileExists(tool, executable.path)) &&
-      tool.symlinks.forall(symlink => installedSymlinkMatches(tool, symlink))
+        saved.installDir.contains(tool.installDir) &&
+        tool.executables.forall(executable => installedFileExists(tool, executable.path)) &&
+        tool.symlinks.forall(symlink => installedSymlinkMatches(tool, symlink))
 
   private def installedFileExists(tool: ResolvedTool, relative: String): Boolean =
     val root     = Path.of(tool.installDir).toAbsolutePath.normalize()
@@ -142,23 +142,25 @@ private[core] object StatefulApplyRunner:
   private def installedSymlinkMatches(tool: ResolvedTool, symlink: ResolvedSymlink): Boolean =
     val installRoot = Path.of(tool.installDir).toAbsolutePath.normalize()
     val rawPath     = Path.of(symlink.path)
-    val path        = if rawPath.isAbsolute then rawPath.normalize() else installRoot.resolve(rawPath).normalize()
-    val rawTarget   = Path.of(symlink.target)
-    val expected =
-      if rawTarget.isAbsolute then rawTarget.normalize() else installRoot.resolve(rawTarget).normalize()
+    val path        =
+      if rawPath.isAbsolute then rawPath.normalize() else installRoot.resolve(rawPath).normalize()
+    val rawTarget = Path.of(symlink.target)
+    val expected  =
+      if rawTarget.isAbsolute then rawTarget.normalize()
+      else installRoot.resolve(rawTarget).normalize()
     if !Files.isSymbolicLink(path) then false
-    else Try:
-      val actualRaw = Files.readSymbolicLink(path)
-      val actual =
-        if actualRaw.isAbsolute then actualRaw.normalize()
-        else Option(path.getParent).getOrElse(installRoot).resolve(actualRaw).normalize()
-      actual == expected
-    .getOrElse(false)
+    else
+      Try:
+        val actualRaw = Files.readSymbolicLink(path)
+        val actual    =
+          if actualRaw.isAbsolute then actualRaw.normalize()
+          else Option(path.getParent).getOrElse(installRoot).resolve(actualRaw).normalize()
+        actual == expected
+      .getOrElse(false)
 
   private def updateState(state: ApplyState, result: TerminalToolResult): ApplyState =
     val updatedTool = result match
-      case TerminalToolResult.Completed(toolName, installDir, download) =>
-        ApplyStateTool(
+      case TerminalToolResult.Completed(toolName, installDir, download) => ApplyStateTool(
           toolName,
           ApplyStateToolStatus.Completed,
           Some(installDir),

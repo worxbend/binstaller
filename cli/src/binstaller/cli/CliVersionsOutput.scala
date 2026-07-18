@@ -21,10 +21,9 @@ private[cli] object CliVersionsOutput:
       row: VersionOutputRow,
       layout: VersionOutputLayout,
       outputStyle: CliOutputStyle
-  ): String =
-    s"${boldColor(row.paddedPackage(layout), fansi.Color.Cyan, outputStyle)}  " +
-      s"${boldColor(row.paddedVersion(layout), fansi.Color.Cyan, outputStyle)}  " +
-      boldColor(row.newerVersion, fansi.Color.Cyan, outputStyle)
+  ): String = s"${boldColor(row.paddedPackage(layout), fansi.Color.Cyan, outputStyle)}  " +
+    s"${boldColor(row.paddedVersion(layout), fansi.Color.Cyan, outputStyle)}  " +
+    boldColor(row.newerVersion, fansi.Color.Cyan, outputStyle)
 
   private def colorToolRow(
       row: VersionOutputRow,
@@ -39,14 +38,14 @@ private[cli] object CliVersionsOutput:
 
   private def colorNewerVersion(value: String, outputStyle: CliOutputStyle): String =
     if value == "-" then outputStyle.color(value)(fansi.Color.Blue)
+    else if value == "?" then outputStyle.color(value)(fansi.Color.Yellow)
     else outputStyle.color(value)(fansi.Color.Green)
 
   private def boldColor(
       value: String,
       color: fansi.Attrs,
       outputStyle: CliOutputStyle
-  ): String =
-    if outputStyle.supportsAnsi then fansi.Bold.On(color(value)).toString else value
+  ): String = if outputStyle.supportsAnsi then fansi.Bold.On(color(value)).toString else value
 
 private[cli] final case class VersionOutputRow(
     packageName: String,

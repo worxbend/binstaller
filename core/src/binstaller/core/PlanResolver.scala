@@ -53,10 +53,10 @@ private[core] final class ResolutionBuilder(
     val policy       = resolvePolicy(options.runtimeVariables ++ manifestVars.value)
     val baseVars     = options.runtimeVariables ++ manifestVars.value +
       ("appsDir" -> policy.value.appsDir)
-    val activeEntries          = profile.spec.plan.zipWithIndex.filter((entry, _) => matchesHost(entry))
-    val activeVersionRefs      = activeEntries.map(_._1.spec.versionRef).toSet
-    val versions               = resolveVersions(baseVars, activeVersionRefs)
-    val tools                  = resolveTools(activeEntries, baseVars, versions.value)
+    val activeEntries     = profile.spec.plan.zipWithIndex.filter((entry, _) => matchesHost(entry))
+    val activeVersionRefs = activeEntries.map(_._1.spec.versionRef).toSet
+    val versions          = resolveVersions(baseVars, activeVersionRefs)
+    val tools             = resolveTools(activeEntries, baseVars, versions.value)
     val installDirectoryErrors = validateInstallDirectories(policy.value, tools.value)
     val strictPolicyErrors     = StrictPolicyValidator.validate(
       profile,
@@ -104,10 +104,6 @@ private[core] final class ResolutionBuilder(
         ManifestPolicy.allowance(
           profile.spec.policy.mode,
           profile.spec.policy.allowMissingChecksums
-        ),
-        ManifestPolicy.allowance(
-          profile.spec.policy.mode,
-          profile.spec.policy.allowTarXzFallback
         ),
         ManifestPolicy.allowance(
           profile.spec.policy.mode,
@@ -240,8 +236,23 @@ private[core] final class ResolutionBuilder(
         filename.errors ++
         versionTemplateErrors(spec.download.filename, s"$specPath.download.filename", version) ++
         createDirectories.errors ++ download.errors ++ executables.errors ++
-        symlinks.errors
+        symlinks.errors ++ directBinaryExecutableErrors(spec, specPath)
     )
+
+  // A direct-binary tool (no archive) stages the single downloaded file at exactly one executable
+  // path, so any other count can never install: catch it at plan time with clear guidance instead
+  // of the misleading "missing executable" failure the install pass would otherwise emit.
+  private def directBinaryExecutableErrors(
+      spec: binstaller.config.BinaryToolSpec,
+      specPath: String
+  ): Vector[ValidationError] =
+    if spec.download.archive.isDefined || spec.executables.size == 1 then Vector.empty
+    else
+      Vector(ValidationError(
+        s"$specPath.executables",
+        s"a direct binary tool without an archive must declare exactly one executable " +
+          s"(got ${spec.executables.size}); use symlinks to expose it under additional names"
+      ))
 
   private def concreteVersionVars(version: ResolvedVersion): Map[String, String] = version match
     case ResolvedVersion.Concrete(value, _) if value.nonEmpty => Map("version" -> value)
@@ -344,7 +355,7 @@ private[core] final class ResolutionBuilder(
       sourcePath: String
   ): ResolvedValue[Option[ResolvedChecksum]] = discovery.kind match
     case ChecksumDiscoveryKind.Sha256Sum => Sha256SumChecksumFile.find(response.text, file) match
-        case Some(value) => ResolvedValue.valid(Some(ResolvedChecksum(
+        case Sha256SumChecksumFile.Lookup.Found(value) => ResolvedValue.valid(Some(ResolvedChecksum(
             checksum.algorithm,
             value,
             ResolvedChecksumSource.Discovered(
@@ -353,10 +364,16 @@ private[core] final class ResolutionBuilder(
               response.provenance
             )
           )))
-        case None => ResolvedValue.invalid(
+        case Sha256SumChecksumFile.Lookup.NotFound => ResolvedValue.invalid(
             None,
             sourcePath,
             s"checksum discovery missing sha256sum entry for '$file'"
+          )
+        case Sha256SumChecksumFile.Lookup.Ambiguous(paths) => ResolvedValue.invalid(
+            None,
+            sourcePath,
+            s"checksum discovery found multiple sha256sum entries matching '$file' " +
+              s"(${paths.mkString(", ")}); set checksum.discover.file to the exact path"
           )
 
   private def resolveArchive(

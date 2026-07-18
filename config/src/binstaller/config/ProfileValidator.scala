@@ -3,9 +3,14 @@ package binstaller.config
 private[config] object ProfileValidator:
 
   def validate(profile: BinaryDistributionProfile): Vector[ValidationError] =
-    toolNameErrors(profile) ++ duplicateToolNameErrors(profile) ++
+    metadataNameErrors(profile) ++ toolNameErrors(profile) ++ duplicateToolNameErrors(profile) ++
       unknownVersionRefErrors(profile) ++
       sudoSymlinkErrors(profile)
+
+  private def metadataNameErrors(profile: BinaryDistributionProfile): Vector[ValidationError] =
+    unsafeToolNameMessage(profile.metadata.name)
+      .map(message => ValidationError("metadata.name", message))
+      .toVector
 
   private def toolNameErrors(profile: BinaryDistributionProfile): Vector[ValidationError] =
     profile.spec.plan.zipWithIndex.flatMap:

@@ -10,6 +10,16 @@ private[core] final case class VersionSummaryRow(
     newerVersion: String
 )
 
+private[core] final case class InstallerRunStatistics(installed: Int, failed: Int, skipped: Int)
+
+private[core] object InstallerRunStatistics:
+
+  def fromResult(result: InstallerResult): InstallerRunStatistics = InstallerRunStatistics(
+    installed = result.terminalResults.count(_.isInstanceOf[TerminalToolResult.Completed]),
+    failed = result.terminalResults.count(_.isInstanceOf[TerminalToolResult.Failed]),
+    skipped = result.skippedTools
+  )
+
 private[core] final class ResolvingBinaryInstallerService(
     httpTextClient: HttpTextClient,
     resolutionOptions: ResolutionOptions,
@@ -50,7 +60,7 @@ private[core] final class ResolvingBinaryInstallerService(
             result
           case Right(lockedProvenance) =>
             val lockedPrepared = lockedProvenance.fold(prepared)(applyLockedChecksums(prepared, _))
-            val statePath = configuredStatePath(options, lockedPrepared.plan)
+            val statePath      = configuredStatePath(options, lockedPrepared.plan)
             eventContext.emit(InstallerEvent.PlanReady(
               lockedPrepared.plan.tools.map(_.name),
               statePath,
@@ -67,8 +77,7 @@ private[core] final class ResolvingBinaryInstallerService(
   def lock(options: InstallerOptions, lockOptions: LockOptions): InstallerResult =
     resolveSelectedPreparedPlan(options) match
       case Left(error)     => renderError(error)
-      case Right(prepared) =>
-        LockFileBuilder.build(prepared, metadataClient) match
+      case Right(prepared) => LockFileBuilder.build(prepared, metadataClient) match
           case Left(error) => InstallerResult(
               Vector(s"lock inspection failed for tool '${error.toolName}': ${error.message}"),
               1
@@ -144,23 +153,27 @@ private[core] final class ResolvingBinaryInstallerService(
     val status =
       if result.exitCode == 0 then InstallerRunStatus.Succeeded
       else InstallerRunStatus.Failed
+    val statistics = InstallerRunStatistics.fromResult(result)
     eventContext.emit(InstallerEvent.Summary(
       status,
-      installed = result.lines.count(_.startsWith("installed ")),
-      failed = result.lines.count(_.startsWith("failed ")),
-      skipped = result.lines.count(_.startsWith("skipped ")),
+      installed = statistics.installed,
+      failed = statistics.failed,
+      skipped = statistics.skipped,
       exitCode = result.exitCode,
       stateFilePath = stateFilePath,
       _
     ))
 
   private def renderVersions(prepared: PreparedPlan): InstallerResult =
-    val newerVersions = GitHubReleaseVersions.newerVersionsByTool(prepared.plan, httpTextClient)
-    val rows          = prepared.plan.tools.map: tool =>
+    val statuses = GitHubReleaseVersions.versionStatusByTool(prepared.plan, httpTextClient)
+    val rows     = prepared.plan.tools.map: tool =>
       VersionSummaryRow(
         packageName = tool.name,
         version = ResolvedVersion.render(tool.version),
-        newerVersion = newerVersions.get(tool.name).getOrElse("-")
+        newerVersion = statuses.get(tool.name) match
+          case Some(GitHubReleaseVersions.LatestReleaseStatus.Newer(tag)) => tag
+          case Some(GitHubReleaseVersions.LatestReleaseStatus.Unknown)    => "?"
+          case _                                                          => "-"
       )
     val lines = renderVersionSummaryTable(rows)
     InstallerResult(
@@ -198,12 +211,15 @@ private[core] final class ResolvingBinaryInstallerService(
       locked: LockedApplyProvenance
   ): PreparedPlan = prepared.copy(plan = prepared.plan.copy(tools = prepared.plan.tools.map: tool =>
     locked.tools.get(tool.name).flatMap(_.checksum) match
-      case Some(checksum) => tool.copy(download = tool.download.copy(checksum = Some(
-          ResolvedChecksum(
-            binstaller.config.ChecksumAlgorithm.Sha256,
-            checksum.value,
-            ResolvedChecksumSource.Configured
+      case Some(checksum) => tool.copy(download =
+          tool.download.copy(checksum =
+            Some(
+              ResolvedChecksum(
+                binstaller.config.ChecksumAlgorithm.Sha256,
+                checksum.value,
+                ResolvedChecksumSource.Configured
+              )
+            )
           )
-        )))
-      case None => tool
-  ))
+        )
+      case None => tool))

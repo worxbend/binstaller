@@ -4,25 +4,14 @@
     "allDeclaredConstructors" : true,
     "allPublicConstructors" : true,
     "allDeclaredMethods" : true,
-    "allPublicMethods" : true,
-    "methods" : [
-      { "name" : "setLockPath", "parameterTypes" : ["java.lang.String"] },
-      { "name" : "setLockedApply", "parameterTypes" : ["boolean"] },
-      { "name" : "setParallelism", "parameterTypes" : ["int"] }
-    ]
+    "allPublicMethods" : true
   },
   {
     "name" : "binstaller.cli.BinstallerCommand",
     "allDeclaredConstructors" : true,
     "allPublicConstructors" : true,
     "allDeclaredMethods" : true,
-    "allPublicMethods" : true,
-    "methods" : [
-      { "name" : "setConfigPath", "parameterTypes" : ["java.lang.String"] },
-      { "name" : "setResetState", "parameterTypes" : ["boolean"] },
-      { "name" : "setStatePath", "parameterTypes" : ["java.lang.String"] },
-      { "name" : "setVerboseOutput", "parameterTypes" : ["boolean"] }
-    ]
+    "allPublicMethods" : true
   },
   {
     "name" : "binstaller.cli.ConfiguredCommand",
@@ -36,32 +25,21 @@
     "allDeclaredConstructors" : true,
     "allPublicConstructors" : true,
     "allDeclaredMethods" : true,
-    "allPublicMethods" : true,
-    "methods" : [
-      { "name" : "setOutputPath", "parameterTypes" : ["java.lang.String"] }
-    ]
+    "allPublicMethods" : true
   },
   {
     "name" : "binstaller.cli.PlanCommand",
     "allDeclaredConstructors" : true,
     "allPublicConstructors" : true,
     "allDeclaredMethods" : true,
-    "allPublicMethods" : true,
-    "methods" : [
-      { "name" : "setLockPath", "parameterTypes" : ["java.lang.String"] },
-      { "name" : "setLockedApply", "parameterTypes" : ["boolean"] }
-    ]
+    "allPublicMethods" : true
   },
   {
     "name" : "binstaller.cli.SelectableCommand",
     "allDeclaredConstructors" : true,
     "allPublicConstructors" : true,
     "allDeclaredMethods" : true,
-    "allPublicMethods" : true,
-    "methods" : [
-      { "name" : "addOnlyTool", "parameterTypes" : ["java.lang.String"] },
-      { "name" : "addSkippedTool", "parameterTypes" : ["java.lang.String"] }
-    ]
+    "allPublicMethods" : true
   },
   {
     "name" : "binstaller.cli.VersionsCommand",

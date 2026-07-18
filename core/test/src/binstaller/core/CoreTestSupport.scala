@@ -18,11 +18,14 @@ import java.util.zip.GZIPOutputStream
 import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import org.tukaani.xz.LZMA2Options
+import org.tukaani.xz.XZOutputStream
 import scala.jdk.CollectionConverters.*
 import scala.util.Using
 import upickle.default.write
 
 private[core] trait CoreTestSupport:
+
   protected def resolve(
       yaml: String,
       httpTextClient: HttpTextClient = FakeHttpTextClient("")
@@ -150,7 +153,12 @@ private[core] trait CoreTestSupport:
           downloadProvenance = betaDownloadProvenance,
           sizeBytes = Some(22L),
           checksum = Some(LockFileChecksum(
-            "sha256", "b" * 64, "inspected", None, None, None
+            "sha256",
+            "b" * 64,
+            "inspected",
+            None,
+            None,
+            None
           )),
           dynamicSource = false
         ),
@@ -160,9 +168,16 @@ private[core] trait CoreTestSupport:
           versionProvenance = None,
           downloadProvenance = UrlProvenance.direct("https://example.invalid/latest/gamma"),
           sizeBytes = dynamicSize,
-          checksum = dynamicSize.map(_ => LockFileChecksum(
-            "sha256", "c" * 64, "inspected", None, None, None
-          )),
+          checksum = dynamicSize.map(_ =>
+            LockFileChecksum(
+              "sha256",
+              "c" * 64,
+              "inspected",
+              None,
+              None,
+              None
+            )
+          ),
           dynamicSource = true
         )
       )
@@ -175,8 +190,10 @@ private[core] trait CoreTestSupport:
         UrlProvenance.direct("https://example.invalid/alpha-1.0.0"),
         Some(Sha256Digest.trusted("a" * 64))
       ),
-      "https://example.invalid/beta-2.0.0"   -> BinaryMetadata(
-        Some(22L), betaDownloadProvenance, Some(Sha256Digest.trusted("b" * 64))
+      "https://example.invalid/beta-2.0.0" -> BinaryMetadata(
+        Some(22L),
+        betaDownloadProvenance,
+        Some(Sha256Digest.trusted("b" * 64))
       ),
       "https://example.invalid/latest/gamma" -> BinaryMetadata(
         dynamicSize,
@@ -224,12 +241,14 @@ private[core] trait CoreTestSupport:
       .asScala
       .exists(path => path.getFileName.toString.startsWith(s".$name.tmp-"))
 
-  protected def hasStagedInstall(tempRoot: Path, installName: String): Boolean =
-    Using.resource(Files.walk(tempRoot)): stream =>
-      stream
-        .iterator()
-        .asScala
-        .exists(path => path.getFileName.toString.startsWith(s".$installName.stage-"))
+  protected def hasStagedInstall(
+      tempRoot: Path,
+      installName: String
+  ): Boolean = Using.resource(Files.walk(tempRoot)): stream =>
+    stream
+      .iterator()
+      .asScala
+      .exists(path => path.getFileName.toString.startsWith(s".$installName.stage-"))
 
   protected def sha256(bytes: Array[Byte]): String =
     val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
@@ -354,7 +373,8 @@ private[core] trait CoreTestSupport:
           zip.closeEntry()
     output.toByteArray
 
-  protected def zipArchiveWithDuplicateLocalEntries(entries: Vector[(String, String)]): Array[Byte] =
+  protected def zipArchiveWithDuplicateLocalEntries(entries: Vector[(String, String)])
+      : Array[Byte] =
     val output = ByteArrayOutputStream()
     entries.foreach:
       case (name, content) =>
@@ -399,6 +419,20 @@ private[core] trait CoreTestSupport:
     gzip.close()
     output.toByteArray
 
+  protected def tarXzArchive(entries: Vector[(String, String)]): Array[Byte] =
+    val output = ByteArrayOutputStream()
+    val xz     = XZOutputStream(output, LZMA2Options())
+    entries.foreach:
+      case (name, content) =>
+        val bytes = content.getBytes(StandardCharsets.UTF_8)
+        xz.write(tarHeader(name, bytes.length, '0'))
+        xz.write(bytes)
+        val padding = (512 - (bytes.length % 512)) % 512
+        xz.write(Array.fill[Byte](padding)(0))
+    xz.write(Array.fill[Byte](1024)(0))
+    xz.close()
+    output.toByteArray
+
   protected def tarGzArchiveWithDirectories(
       directories: Vector[String],
       files: Vector[(String, String)]
@@ -433,7 +467,7 @@ private[core] trait CoreTestSupport:
     gzip.close()
     output.toByteArray
 
-  protected def tarHeader(name: String, size: Int, entryType: Char): Array[Byte] =
+  protected def tarHeader(name: String, size: Long, entryType: Char): Array[Byte] =
     val header = Array.fill[Byte](512)(0)
     writeTarField(header, 0, 100, name)
     writeTarField(header, 124, 12, f"$size%011o")
@@ -652,53 +686,52 @@ private[core] trait CoreTestSupport:
       |            target: "${installDir}/bin/alpha"
       |""".stripMargin
 
-  protected val hostSelectedYaml: String =
-    """
-      |apiVersion: binstaller.io/v1alpha1
-      |kind: BinaryDistributionProfile
-      |metadata:
-      |  name: selected
-      |spec:
-      |  policy:
-      |    appsDir: "${HOME}/.apps"
-      |  versions:
-      |    linux:
-      |      resolver:
-      |        type: http-text
-      |        url: https://example.invalid/linux-version
-      |    darwin:
-      |      resolver:
-      |        type: http-text
-      |        url: https://example.invalid/darwin-version
-      |  plan:
-      |    - name: linux-tool
-      |      kind: binary-tool
-      |      when:
-      |        os:
-      |          family: linux
-      |        architecture: x86_64
-      |      spec:
-      |        versionRef: linux
-      |        installDir: "${HOME}/.apps/linux-tool"
-      |        download:
-      |          url: https://example.invalid/linux-tool
-      |          filename: linux-tool
-      |        executables:
-      |          - path: bin/linux-tool
-      |    - name: darwin-tool
-      |      kind: binary-tool
-      |      when:
-      |        os:
-      |          family: darwin
-      |      spec:
-      |        versionRef: darwin
-      |        installDir: "${HOME}/.apps/darwin-tool"
-      |        download:
-      |          url: https://example.invalid/darwin-tool
-      |          filename: darwin-tool
-      |        executables:
-      |          - path: bin/darwin-tool
-      |""".stripMargin
+  protected val hostSelectedYaml: String = """
+                                             |apiVersion: binstaller.io/v1alpha1
+                                             |kind: BinaryDistributionProfile
+                                             |metadata:
+                                             |  name: selected
+                                             |spec:
+                                             |  policy:
+                                             |    appsDir: "${HOME}/.apps"
+                                             |  versions:
+                                             |    linux:
+                                             |      resolver:
+                                             |        type: http-text
+                                             |        url: https://example.invalid/linux-version
+                                             |    darwin:
+                                             |      resolver:
+                                             |        type: http-text
+                                             |        url: https://example.invalid/darwin-version
+                                             |  plan:
+                                             |    - name: linux-tool
+                                             |      kind: binary-tool
+                                             |      when:
+                                             |        os:
+                                             |          family: linux
+                                             |        architecture: x86_64
+                                             |      spec:
+                                             |        versionRef: linux
+                                             |        installDir: "${HOME}/.apps/linux-tool"
+                                             |        download:
+                                             |          url: https://example.invalid/linux-tool
+                                             |          filename: linux-tool
+                                             |        executables:
+                                             |          - path: bin/linux-tool
+                                             |    - name: darwin-tool
+                                             |      kind: binary-tool
+                                             |      when:
+                                             |        os:
+                                             |          family: darwin
+                                             |      spec:
+                                             |        versionRef: darwin
+                                             |        installDir: "${HOME}/.apps/darwin-tool"
+                                             |        download:
+                                             |          url: https://example.invalid/darwin-tool
+                                             |          filename: darwin-tool
+                                             |        executables:
+                                             |          - path: bin/darwin-tool
+                                             |""".stripMargin
 
   protected def lockYaml(tempRoot: Path): String =
     val appsDir = tempRoot.resolve("apps")
@@ -955,104 +988,104 @@ private[core] trait CoreTestSupport:
       |""".stripMargin
 
   protected val shellSyntaxYaml: String = """
-                                          |apiVersion: binstaller.io/v1alpha1
-                                          |kind: BinaryDistributionProfile
-                                          |metadata:
-                                          |  name: shell-text
-                                          |spec:
-                                          |  policy:
-                                          |    appsDir: "${HOME}/.apps"
-                                          |  vars:
-                                          |    shellText: "$(echo should-not-run)"
-                                          |  versions:
-                                          |    alpha: "1.0.0"
-                                          |  plan:
-                                          |    - name: alpha
-                                          |      kind: binary-tool
-                                          |      spec:
-                                          |        versionRef: alpha
-                                          |        installDir: "${appsDir}/${shellText}"
-                                          |        createDirectories:
-                                          |          - bin
-                                          |        download:
-                                          |          url: "https://example.invalid/alpha"
-                                          |          filename: alpha
-                                          |        executables:
-                                          |          - path: bin/alpha
-                                          |""".stripMargin
+                                            |apiVersion: binstaller.io/v1alpha1
+                                            |kind: BinaryDistributionProfile
+                                            |metadata:
+                                            |  name: shell-text
+                                            |spec:
+                                            |  policy:
+                                            |    appsDir: "${HOME}/.apps"
+                                            |  vars:
+                                            |    shellText: "$(echo should-not-run)"
+                                            |  versions:
+                                            |    alpha: "1.0.0"
+                                            |  plan:
+                                            |    - name: alpha
+                                            |      kind: binary-tool
+                                            |      spec:
+                                            |        versionRef: alpha
+                                            |        installDir: "${appsDir}/${shellText}"
+                                            |        createDirectories:
+                                            |          - bin
+                                            |        download:
+                                            |          url: "https://example.invalid/alpha"
+                                            |          filename: alpha
+                                            |        executables:
+                                            |          - path: bin/alpha
+                                            |""".stripMargin
 
   protected val insecureUrlYaml: String = """
-                                          |apiVersion: binstaller.io/v1alpha1
-                                          |kind: BinaryDistributionProfile
-                                          |metadata:
-                                          |  name: insecure
-                                          |spec:
-                                          |  policy:
-                                          |    appsDir: "${HOME}/.apps"
-                                          |  vars: {}
-                                          |  versions:
-                                          |    alpha:
-                                          |      resolver:
-                                          |        type: http-text
-                                          |        url: http://example.invalid/stable.txt
-                                          |  plan:
-                                          |    - name: alpha
-                                          |      kind: binary-tool
-                                          |      spec:
-                                          |        versionRef: alpha
-                                          |        installDir: "${appsDir}/alpha"
-                                          |        download:
-                                          |          url: http://example.invalid/alpha
-                                          |          filename: alpha
-                                          |        executables:
-                                          |          - path: bin/alpha
-                                          |""".stripMargin
+                                            |apiVersion: binstaller.io/v1alpha1
+                                            |kind: BinaryDistributionProfile
+                                            |metadata:
+                                            |  name: insecure
+                                            |spec:
+                                            |  policy:
+                                            |    appsDir: "${HOME}/.apps"
+                                            |  vars: {}
+                                            |  versions:
+                                            |    alpha:
+                                            |      resolver:
+                                            |        type: http-text
+                                            |        url: http://example.invalid/stable.txt
+                                            |  plan:
+                                            |    - name: alpha
+                                            |      kind: binary-tool
+                                            |      spec:
+                                            |        versionRef: alpha
+                                            |        installDir: "${appsDir}/alpha"
+                                            |        download:
+                                            |          url: http://example.invalid/alpha
+                                            |          filename: alpha
+                                            |        executables:
+                                            |          - path: bin/alpha
+                                            |""".stripMargin
 
   protected val unsafeInstallDirYaml: String = """
-                                               |apiVersion: binstaller.io/v1alpha1
-                                               |kind: BinaryDistributionProfile
-                                               |metadata:
-                                               |  name: unsafe-install-dir
-                                               |spec:
-                                               |  policy:
-                                               |    appsDir: "${HOME}/.apps"
-                                               |  vars: {}
-                                               |  versions:
-                                               |    alpha: "1.0.0"
-                                               |    beta: "1.0.0"
-                                               |    gamma: "1.0.0"
-                                               |  plan:
-                                               |    - name: alpha
-                                               |      kind: binary-tool
-                                               |      spec:
-                                               |        versionRef: alpha
-                                               |        installDir: /tmp/alpha
-                                               |        download:
-                                               |          url: https://example.invalid/alpha
-                                               |          filename: alpha
-                                               |        executables:
-                                               |          - path: bin/alpha
-                                               |    - name: beta
-                                               |      kind: binary-tool
-                                               |      spec:
-                                               |        versionRef: beta
-                                               |        installDir: "${appsDir}/beta"
-                                               |        download:
-                                               |          url: https://example.invalid/beta
-                                               |          filename: beta
-                                               |        executables:
-                                               |          - path: bin/beta
-                                               |    - name: gamma
-                                               |      kind: binary-tool
-                                               |      spec:
-                                               |        versionRef: gamma
-                                               |        installDir: "${appsDir}/beta/nested"
-                                               |        download:
-                                               |          url: https://example.invalid/gamma
-                                               |          filename: gamma
-                                               |        executables:
-                                               |          - path: bin/gamma
-                                               |""".stripMargin
+                                                 |apiVersion: binstaller.io/v1alpha1
+                                                 |kind: BinaryDistributionProfile
+                                                 |metadata:
+                                                 |  name: unsafe-install-dir
+                                                 |spec:
+                                                 |  policy:
+                                                 |    appsDir: "${HOME}/.apps"
+                                                 |  vars: {}
+                                                 |  versions:
+                                                 |    alpha: "1.0.0"
+                                                 |    beta: "1.0.0"
+                                                 |    gamma: "1.0.0"
+                                                 |  plan:
+                                                 |    - name: alpha
+                                                 |      kind: binary-tool
+                                                 |      spec:
+                                                 |        versionRef: alpha
+                                                 |        installDir: /tmp/alpha
+                                                 |        download:
+                                                 |          url: https://example.invalid/alpha
+                                                 |          filename: alpha
+                                                 |        executables:
+                                                 |          - path: bin/alpha
+                                                 |    - name: beta
+                                                 |      kind: binary-tool
+                                                 |      spec:
+                                                 |        versionRef: beta
+                                                 |        installDir: "${appsDir}/beta"
+                                                 |        download:
+                                                 |          url: https://example.invalid/beta
+                                                 |          filename: beta
+                                                 |        executables:
+                                                 |          - path: bin/beta
+                                                 |    - name: gamma
+                                                 |      kind: binary-tool
+                                                 |      spec:
+                                                 |        versionRef: gamma
+                                                 |        installDir: "${appsDir}/beta/nested"
+                                                 |        download:
+                                                 |          url: https://example.invalid/gamma
+                                                 |          filename: gamma
+                                                 |        executables:
+                                                 |          - path: bin/gamma
+                                                 |""".stripMargin
 
   protected val unsafeInterpolatedPathsYaml: String =
     """

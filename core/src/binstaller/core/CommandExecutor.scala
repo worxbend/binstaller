@@ -3,6 +3,7 @@ package binstaller.core
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.CharBuffer
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.time.Duration
@@ -16,21 +17,48 @@ import scala.util.Try
 import scala.util.Using
 
 /** Secret command input that can be written to stdin but never rendered directly. */
-final class SecretText private (private val value: String):
+final class SecretText private (private val value: Array[Char]):
 
   private[core] def writeLineTo(output: OutputStream): Unit =
-    output.write((value + "\n").getBytes(StandardCharsets.UTF_8))
+    val encoded = StandardCharsets.UTF_8.newEncoder().encode(CharBuffer.wrap(value))
+    val bytes   = Array.ofDim[Byte](encoded.remaining() + 1)
+    encoded.get(bytes, 0, bytes.length - 1)
+    bytes(bytes.length - 1) = '\n'.toByte
+    try output.write(bytes)
+    finally
+      java.util.Arrays.fill(bytes, 0.toByte)
+      // The encoder's backing array holds a copy of the secret bytes; clear it too.
+      if encoded.hasArray then java.util.Arrays.fill(encoded.array(), 0.toByte)
 
   private[core] def redact(text: String): String =
     if value.isEmpty then text
-    else text.replace(value, "<redacted>")
+    else
+      val result = StringBuilder()
+      var index  = 0
+      while index < text.length do
+        if matchesAt(text, index) then
+          result.append("<redacted>")
+          index += value.length
+        else
+          result.append(text.charAt(index))
+          index += 1
+      result.result()
+
+  private def matchesAt(text: String, offset: Int): Boolean =
+    offset + value.length <= text.length && value.indices.forall: index =>
+      text.charAt(offset + index) == value(index)
+
+  private[core] def destroy(): Unit = java.util.Arrays.fill(value, '\u0000')
 
   override def toString: String = "<redacted>"
 
 /** Secret command-input constructors. */
 object SecretText:
   /** Wrap a runtime secret while keeping it out of command diagnostics. */
-  def fromString(value: String): SecretText = new SecretText(value)
+  def fromString(value: String): SecretText = fromChars(value.toCharArray)
+
+  /** Copy a mutable character buffer without materializing an immutable password string. */
+  def fromChars(value: Array[Char]): SecretText = new SecretText(value.clone())
 
 /** Modeled stdin for structured process invocation. */
 enum CommandInput:
@@ -98,9 +126,8 @@ private[core] object CommandFailureDetails:
       renderOutputTail("stderr", spec.input.redact(output.stderr))
     (s"$context: $command: $safeMessage" +: details).mkString("\n")
 
-  private def renderArgv(argv: Vector[String]): String = argv.map(shellQuote).mkString(" ")
-
-  private def shellQuote(value: String): String = s"'${value.replace("'", "'\"'\"'")}'"
+  private def renderArgv(argv: Vector[String]): String =
+    argv.map(ShellRendering.quote).mkString(" ")
 
   private def renderEnv(env: Map[String, String]): Vector[String] =
     if env.isEmpty then Vector("  env: <empty>")

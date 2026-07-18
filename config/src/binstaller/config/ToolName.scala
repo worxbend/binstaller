@@ -4,6 +4,7 @@ package binstaller.config
 final case class ToolName private (value: String)
 
 object ToolName:
+
   def fromString(value: String): Either[String, ToolName] =
     if value.trim.isEmpty then Left("tool name must not be empty")
     else if value.exists(Character.isISOControl) then

@@ -1,6 +1,6 @@
 # binstaller
 
-[![Native Release](https://github.com/worxbend/initkit/actions/workflows/native-release.yml/badge.svg)](https://github.com/worxbend/initkit/actions/workflows/native-release.yml)
+[![Release](https://github.com/worxbend/binstaller/actions/workflows/release.yml/badge.svg)](https://github.com/worxbend/binstaller/actions/workflows/release.yml)
 ![Scala 3](https://img.shields.io/badge/Scala-3.8.2-dc322f?logo=scala&logoColor=white)
 ![Mill](https://img.shields.io/badge/Mill-1.1.7-5b5bd6)
 ![GraalVM](https://img.shields.io/badge/GraalVM-native%20ready-f2a900?logo=graalvm&logoColor=111111)
@@ -24,16 +24,20 @@ Native Linux amd64 and arm64 builds are published from `v*` tags by GitHub
 Actions.
 
 Install with the curl-pipe script, which downloads the release tarball,
-verifies its SHA-256 checksum, installs `binstaller` to `~/.local/bin` (set
-`BINSTALLER_INSTALL_DIR` to override), and wires that directory into `PATH`
-via `~/.bashrc` and `~/.zshrc`:
+verifies its SHA-256 checksum, additionally verifies the keyless Sigstore
+signature when `cosign` is installed, and installs `binstaller` to
+`~/.local/bin` (set `BINSTALLER_INSTALL_DIR` to override):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSfL \
   https://github.com/worxbend/binstaller/releases/latest/download/install.sh | sh
 ```
 
-Pin a specific version with `BINSTALLER_VERSION=v0.3.0`.
+The script does not modify your shell configuration by default; it prints the
+`export PATH=...` line to run for the current shell. Set
+`BINSTALLER_UPDATE_PATH=1` to have it append the install directory to
+`~/.bashrc` and `~/.zshrc`. Pin a specific version with
+`BINSTALLER_VERSION=v0.3.0`.
 
 Release artifacts (each `.tar.gz` and the example config ship with a
 `.sha256` checksum file):

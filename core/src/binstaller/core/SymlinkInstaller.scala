@@ -90,16 +90,21 @@ private[core] object SymlinkInstaller:
           tool.name,
           path.toString,
           target.toString,
-          s"create sudo symlink ${target} -> ${path}"
+          // Defense-in-depth: path/target are already control-char-free (ResolvedPathValidator
+          // rejects them post-interpolation), but scrub at the terminal boundary too so this prompt
+          // can never be spoofed via escape sequences should an upstream check ever regress.
+          RenderSafety.terminalLine(s"create sudo symlink $target -> $path")
         )
         sudoCredentials.requestSudoPassword(request) match
-          case Right(password) => runSudoCommand(
-              tool,
-              path,
-              target,
-              passwordSudoSpec(cwd, path, target, password),
-              commandExecutor
-            )
+          case Right(password) =>
+            try runSudoCommand(
+                tool,
+                path,
+                target,
+                passwordSudoSpec(cwd, path, target, password),
+                commandExecutor
+              )
+            finally password.destroy()
           case Left(SudoCredentialError.Canceled) =>
             Left(ToolInstallError.SudoCredentialCanceled(tool.name, path.toString, target.toString))
           case Left(SudoCredentialError.Unavailable(message)) =>
@@ -174,11 +179,5 @@ private[core] object SymlinkInstaller:
       tool: ResolvedTool,
       relative: String
   ): Either[ToolInstallError, Path] =
-    val input      = Path.of(relative)
-    val installDir = Path.of(tool.installDir).toAbsolutePath.normalize()
-    if input.isAbsolute then
-      Left(ToolInstallError.StagingFailed(tool.name, s"path must be relative: $relative"))
-    else
-      val resolved = installDir.resolve(input).normalize()
-      if resolved.startsWith(installDir) then Right(resolved)
-      else Left(ToolInstallError.StagingFailed(tool.name, s"path escapes installDir: $relative"))
+    SafePaths.resolveInside(Path.of(tool.installDir), relative).left.map: message =>
+      ToolInstallError.StagingFailed(tool.name, message)

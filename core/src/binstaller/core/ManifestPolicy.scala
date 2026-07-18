@@ -1,6 +1,5 @@
 package binstaller.core
 
-import binstaller.config.ArchiveType
 import binstaller.config.BinaryDistributionProfile
 import binstaller.config.DynamicVersionKind
 import binstaller.config.PolicyMode
@@ -29,8 +28,7 @@ private[core] object StrictPolicyValidator:
       activeVersionRefs: Set[String]
   ): Vector[ValidationError] = dynamicLatestUrlErrors(profile, policy, activeVersionRefs) ++
     latestDownloadUrlErrors(policy, tools) ++
-    missingChecksumErrors(policy, tools) ++
-    tarXzFallbackErrors(policy, tools)
+    missingChecksumErrors(policy, tools)
 
   private def dynamicLatestUrlErrors(
       profile: BinaryDistributionProfile,
@@ -40,7 +38,8 @@ private[core] object StrictPolicyValidator:
     case PolicyAllowance.Allowed  => Vector.empty
     case PolicyAllowance.Rejected => profile.spec.versions.toVector.collect:
         case (name, VersionSource.Dynamic(DynamicVersionKind.LatestUrl, _))
-            if activeVersionRefs(name) => strictError(
+            if activeVersionRefs(name) =>
+          strictError(
             s"spec.versions.$name.dynamic.type",
             "dynamic-latest-url",
             "dynamic latest-url version sources are rejected by policy.mode=strict",
@@ -75,21 +74,6 @@ private[core] object StrictPolicyValidator:
             "missing-checksum",
             s"tool '${tool.name}' has no sha256 checksum",
             "add spec.plan[].spec.download.checksum or set spec.policy.allowMissingChecksums: true"
-          )
-
-  private def tarXzFallbackErrors(
-      policy: ResolvedPolicy,
-      tools: Vector[ResolvedTool]
-  ): Vector[ValidationError] = policy.allowTarXzFallback match
-    case PolicyAllowance.Allowed  => Vector.empty
-    case PolicyAllowance.Rejected => tools.zipWithIndex.collect:
-        case (tool, index)
-            if tool.download.archive.exists(_.original.archiveType == ArchiveType.TarXz) =>
-          strictError(
-            s"spec.plan[$index].spec.download.archive.type",
-            "tar-xz-fallback",
-            s"tool '${tool.name}' uses the system tar.xz fallback extractor",
-            "use zip or tar.gz, add native tar.xz support, or set spec.policy.allowTarXzFallback: true"
           )
 
   private def strictError(

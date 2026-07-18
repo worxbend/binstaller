@@ -8,6 +8,7 @@
 # Environment variables:
 #   BINSTALLER_VERSION      Release tag to install, e.g. v0.3.0 (default: latest)
 #   BINSTALLER_INSTALL_DIR  Directory to install the binary into (default: $HOME/.local/bin)
+#   BINSTALLER_UPDATE_PATH  Set to 1 to append the install directory to existing shell rc files
 
 set -eu
 
@@ -50,12 +51,9 @@ target="linux-${arch}"
 
 if [ "${VERSION}" = "latest" ]; then
   info "resolving latest release version"
-  VERSION="$(
-    curl --proto '=https' --tlsv1.2 -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-      | grep '"tag_name"' \
-      | head -n 1 \
-      | sed 's/.*"tag_name": *"//; s/".*//'
-  )"
+  latest_url="$(curl --proto '=https' --tlsv1.2 -fsSL -o /dev/null -w '%{url_effective}' \
+    "https://github.com/${REPO}/releases/latest")"
+  VERSION="${latest_url##*/}"
   [ -n "${VERSION}" ] || die "failed to resolve the latest release version"
 fi
 
@@ -69,6 +67,12 @@ info "downloading ${base_url}/${archive}"
 curl --proto '=https' --tlsv1.2 -fsSL "${base_url}/${archive}" -o "${tmp_dir}/${archive}"
 curl --proto '=https' --tlsv1.2 -fsSL "${base_url}/${archive}.sha256" -o "${tmp_dir}/${archive}.sha256"
 
+if command -v cosign >/dev/null 2>&1; then
+  info "downloading Sigstore bundle"
+  curl --proto '=https' --tlsv1.2 -fsSL "${base_url}/${archive}.sigstore.json" \
+    -o "${tmp_dir}/${archive}.sigstore.json"
+fi
+
 cd "${tmp_dir}"
 
 info "verifying checksum"
@@ -78,6 +82,18 @@ elif command -v shasum >/dev/null 2>&1; then
   shasum -a 256 -c "${archive}.sha256" || die "checksum verification failed"
 else
   die "neither sha256sum nor shasum is available to verify the download"
+fi
+
+if command -v cosign >/dev/null 2>&1; then
+  info "verifying keyless release signature"
+  cosign verify-blob "${archive}" \
+    --bundle "${archive}.sigstore.json" \
+    --certificate-identity-regexp \
+      '^https://github.com/worxbend/binstaller/.github/workflows/release.yml@refs/(tags/.+|heads/main)$' \
+    --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+    >/dev/null || die "Sigstore verification failed"
+else
+  info "cosign not found; skipping optional Sigstore verification"
 fi
 
 tar -xzf "${archive}"
@@ -93,6 +109,7 @@ info "installed binstaller ${VERSION} to ${INSTALL_DIR}/binstaller"
 
 path_line="export PATH=\"${INSTALL_DIR}:\$PATH\""
 
+# add_to_rc adds the install directory to a shell startup file when it is not already present.
 add_to_rc() {
   rc_file="$1"
   if [ -f "${rc_file}" ] && grep -qF "${INSTALL_DIR}" "${rc_file}"; then
@@ -102,10 +119,13 @@ add_to_rc() {
   info "updated PATH in ${rc_file}"
 }
 
-add_to_rc "${HOME}/.bashrc"
-add_to_rc "${HOME}/.zshrc"
+if [ "${BINSTALLER_UPDATE_PATH:-0}" = "1" ]; then
+  add_to_rc "${HOME}/.bashrc"
+  add_to_rc "${HOME}/.zshrc"
+else
+  info "PATH was not modified. Set BINSTALLER_UPDATE_PATH=1 to update existing shell rc files."
+fi
 
 info ""
-info "binstaller ${VERSION} is installed. Restart your shell, or run:"
-info "  source ${HOME}/.bashrc   # bash"
-info "  source ${HOME}/.zshrc    # zsh"
+info "binstaller ${VERSION} is installed. For this shell, run:"
+info "  export PATH=\"${INSTALL_DIR}:\$PATH\""
