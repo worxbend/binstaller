@@ -1,6 +1,6 @@
 # Hardening Review
 
-Date: 2026-06-29
+Date: 2026-06-29 (updated 2026-07-18)
 
 Scope: post-implementation review of config parsing, version resolution, downloads,
 archive extraction, symlink creation, state writes, plan fidelity, CLI
@@ -13,8 +13,10 @@ reporting, tests, and release workflow.
 - Implemented: Runtime version resolver and download URLs now must be HTTPS and
   include a host. Non-HTTPS manifests fail during resolution before downloads or
   writes.
-- Implemented: Runtime HTTP clients now use a 30 second connect/request timeout
-  and still follow normal HTTPS redirects.
+- Implemented: Runtime HTTP clients now use a 30 second connect/request timeout.
+  Redirects are followed manually (the JDK client is set to never auto-redirect)
+  with a hop limit, and each hop is re-validated as HTTPS and against the
+  network-target guard before it is followed.
 - Implemented: External process execution now has a bounded timeout. The default
   process timeout is 15 minutes, and tests cover timeout behavior.
 - Implemented: Resolved tool install directories must be children of
@@ -26,12 +28,17 @@ reporting, tests, and release workflow.
   focused on direct downloads and archive extraction.
 - Implemented: Process failure rendering now quotes argv elements so diagnostics
   preserve argument boundaries and do not imply shell evaluation.
-- Deferred with rationale: `tar.xz` extraction still depends on the system `tar`
-  fallback. It extracts into a private staging directory and only copies mapped
-  members after path validation, but it does not perform native pre-extraction
-  member-type inspection. Full native `tar.xz` inspection should be implemented
-  before treating untrusted `.tar.xz` archives as equivalent to the native zip
-  and tar.gz paths.
+- Implemented (2026-07-18): `tar.xz` extraction is now native and in-process. An
+  XZ reader (`org.tukaani:xz`) feeds the same tar member handling as `tar.gz`,
+  so member names, types, and mapped targets are validated before any bytes are
+  written. The system `tar` fallback and its `allowTarXzFallback` policy gate
+  were removed; all archive types now share one confinement path.
+- Implemented (2026-07-18): Manifest URL interpolation is restricted to a fixed
+  allowlist of non-secret environment variables, and every resolver/download URL
+  (including each redirect hop) is checked against a network-target guard that
+  rejects loopback, link-local, private, multicast, and cloud-metadata hosts.
+- Implemented (2026-07-18): Archive extraction enforces an aggregate expanded-byte
+  budget in addition to the compressed download cap, bounding decompression bombs.
 
 ### Should Fix
 
@@ -44,8 +51,6 @@ reporting, tests, and release workflow.
   where the JDK client exposes it.
 - Add retry policy for transient HTTP failures, keeping retries off for scripts
   unless idempotence is modeled.
-- Add native `tar.xz` handling or a stronger extraction sandbox; the current tar
-  fallback is the largest remaining archive boundary.
 - Add broader malformed archive tests for symlink, hardlink, device, duplicate,
   and permission metadata cases across all supported archive types.
 - Add richer structured reporting for apply, including per-tool phases and
@@ -56,7 +61,11 @@ reporting, tests, and release workflow.
 ### Later
 
 - Add policy profiles such as `strict`, `developer`, and `legacy-compatible`.
-- Add signature/SLSA verification and SBOM export.
+- Implemented (2026-07-18): Release artifacts are signed with keyless Sigstore
+  (`cosign sign-blob`) in the release workflow, and `scripts/install.sh` verifies
+  the bundle against the workflow's OIDC identity when `cosign` is available. The
+  unmodified OpenSSF SLSA starter workflow that attested to dummy files was
+  removed. SBOM export is still outstanding.
 - Revisit sandboxed installer execution only if a future manifest contract makes
   scripts necessary again.
 - Add a manifest schema document or generated reference once the v1alpha1 shape
@@ -66,21 +75,20 @@ reporting, tests, and release workflow.
 
 - Can manifest values become executable shell syntax? Interpolation treats shell
   syntax as text. External process boundaries are `ProcessBuilder` argv calls.
-  Manifest installer scripts are rejected; the remaining intentional external
-  process boundaries are sudo symlinks and the temporary `tar` fallback for
-  `tar.xz`.
-- Are command args preserved as argv? Yes for sudo symlinks and `tar.xz`;
-  plan now quotes args for display and failure output quotes argv elements.
-- Can archives write outside staging? Native zip and tar.gz paths validate
-  member names and mapped targets before writing. The `tar.xz` fallback extracts
-  to private staging and copies only validated mapped files, but native
-  pre-extraction inspection remains deferred.
+  Manifest installer scripts are rejected; the only remaining intentional
+  external process boundary is sudo symlink creation.
+- Are command args preserved as argv? Yes for sudo symlinks; plan now quotes
+  args for display and failure output quotes argv elements.
+- Can archives write outside staging? All three archive types (zip, tar.gz,
+  tar.xz) validate member names and mapped targets before writing. `tar.xz` is
+  decoded in-process and shares the native tar member handling, so it has the
+  same pre-write confinement as the other formats.
 - Can archives create unsafe symlinks, hardlinks, special files, duplicate
-  paths, permissions, or ownership escapes? Native tar.gz rejects link and
-  unsupported tar entry types, and extraction ignores archive ownership and mode
-  metadata. Duplicate mapped targets are rejected. Native zip currently treats
-  non-directory entries as files and should gain explicit symlink metadata tests.
-  `tar.xz` needs stronger native inspection.
+  paths, permissions, or ownership escapes? The native tar path (used by both
+  tar.gz and tar.xz) rejects link and unsupported tar entry types, and extraction
+  ignores archive ownership and mode metadata. Duplicate mapped targets are
+  rejected. Native zip currently treats non-directory entries as files and should
+  gain explicit symlink metadata tests.
 - Can manifest paths escape appsDir or clobber user files? Resolved install dirs
   now must be under `appsDir` and cannot nest inside another tool. Executable,
   create-directory, local symlink, and archive target writes are constrained
@@ -98,8 +106,10 @@ reporting, tests, and release workflow.
   no checksum and remain acceptable only as developer convenience until lock-file
   or provenance work lands.
 - Are redirects, content length, content type, max size, and timeout predictable?
-  Redirects follow normal HTTPS redirects and requests now time out. Content
-  length, content type, and max download size are not yet enforced.
+  Redirects are followed manually with a hop limit, and each hop must stay HTTPS
+  and pass the network-target guard. Requests time out, and downloads are bounded
+  by a compressed-size cap with an additional aggregate expanded-byte budget
+  during extraction. Content-type is not enforced.
 - Can installer scripts unexpectedly use sudo or inherit unsafe env? No through
   the manifest model: installer script blocks are rejected during config
   decoding.
@@ -122,7 +132,6 @@ reporting, tests, and release workflow.
   include paths by design.
 - Are plan and apply close enough? Plan and apply share resolution and
   selection. Apply has extra preflight and executor phases.
-  Native `tar.xz` inspection is the main remaining divergence.
 - Do tests cover real failure modes? Tests cover invalid manifests, URL scheme,
   archive traversal, shell metacharacters as text, unsafe symlink policy, checksum
   mismatch, timeout, stale state, continue-on-error, and plan

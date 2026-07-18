@@ -72,16 +72,23 @@ private[core] enum VersionOrder:
   case Greater, Equal, Less, Unknown
 
 private[core] object VersionOrdering:
-  private val VersionToken = """(\d+(?:\.\d+)*)""".r
 
-  def compare(left: String, right: String): VersionOrder =
-    (versionNumbers(left), versionNumbers(right)) match
-      case (Some(leftNumbers), Some(rightNumbers)) => compareNumbers(leftNumbers, rightNumbers)
-      case _                                       => VersionOrder.Unknown
+  private val SemanticVersion =
+    """^[vV]?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$""".r
 
-  private def versionNumbers(value: String): Option[Vector[Int]] =
-    VersionToken.findFirstMatchIn(value).flatMap: matched =>
-      Try(matched.group(1).split("\\.").toVector.map(_.toInt)).toOption
+  def compare(left: String, right: String): VersionOrder = (parse(left), parse(right)) match
+    case (Some((leftNumbers, leftPre)), Some((rightNumbers, rightPre))) =>
+      compareNumbers(leftNumbers, rightNumbers) match
+        case VersionOrder.Equal => comparePrerelease(leftPre, rightPre)
+        case order              => order
+    case _ => VersionOrder.Unknown
+
+  private def parse(value: String): Option[(Vector[Int], Option[Vector[String]])] = value match
+    case SemanticVersion(numbers, prerelease) => Try:
+        numbers.split("\\.").toVector.map(_.toInt) ->
+          Option(prerelease).map(_.split("\\.").toVector)
+      .toOption
+    case _ => None
 
   private def compareNumbers(left: Vector[Int], right: Vector[Int]): VersionOrder =
     val size   = left.size.max(right.size)
@@ -90,3 +97,28 @@ private[core] object VersionOrdering:
       case (leftValue, rightValue) if leftValue > rightValue => VersionOrder.Greater
       case (leftValue, rightValue) if leftValue < rightValue => VersionOrder.Less
     .getOrElse(VersionOrder.Equal)
+
+  private def comparePrerelease(
+      left: Option[Vector[String]],
+      right: Option[Vector[String]]
+  ): VersionOrder = (left, right) match
+    case (None, None)                    => VersionOrder.Equal
+    case (None, Some(_))                 => VersionOrder.Greater
+    case (Some(_), None)                 => VersionOrder.Less
+    case (Some(leftIds), Some(rightIds)) => leftIds.zipAll(rightIds, "", "").collectFirst:
+        case ("", _)                                => VersionOrder.Less
+        case (_, "")                                => VersionOrder.Greater
+        case (leftId, rightId) if leftId != rightId => compareIdentifier(leftId, rightId)
+      .getOrElse(VersionOrder.Equal)
+
+  private def compareIdentifier(left: String, right: String): VersionOrder =
+    (left.toIntOption, right.toIntOption) match
+      case (Some(leftNumber), Some(rightNumber)) => compareInt(leftNumber, rightNumber)
+      case (Some(_), None)                       => VersionOrder.Less
+      case (None, Some(_))                       => VersionOrder.Greater
+      case (None, None)                          => compareInt(left.compareTo(right), 0)
+
+  private def compareInt(left: Int, right: Int): VersionOrder =
+    if left > right then VersionOrder.Greater
+    else if left < right then VersionOrder.Less
+    else VersionOrder.Equal

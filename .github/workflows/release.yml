@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 concurrency:
   group: release-${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
@@ -38,7 +39,7 @@ jobs:
 
     steps:
       - name: 📥 Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: 🏷️ Resolve release version
         id: version
@@ -59,7 +60,7 @@ jobs:
           echo "value=${version}" >> "${GITHUB_OUTPUT}"
 
       - name: ⚡ Cache Mill and dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cache/coursier
@@ -70,7 +71,7 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-mill-
 
       - name: ☕ Set up GraalVM
-        uses: graalvm/setup-graalvm@v1
+        uses: graalvm/setup-graalvm@0def53c0fd8534bc13416c9469f5be45265824fd # v1
         with:
           distribution: graalvm
           java-version: "21"
@@ -132,7 +133,7 @@ jobs:
           echo "::endgroup::"
 
       - name: ⬆️ Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: binstaller-${{ steps.version.outputs.value }}-${{ matrix.target }}
           path: |
@@ -149,7 +150,7 @@ jobs:
 
     steps:
       - name: 📥 Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: 🏷️ Resolve release version
         id: version
@@ -170,7 +171,7 @@ jobs:
           echo "value=${version}" >> "${GITHUB_OUTPUT}"
 
       - name: 📥 Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: release-artifacts
           pattern: binstaller-${{ steps.version.outputs.value }}-*
@@ -241,13 +242,26 @@ jobs:
           (cd release-artifacts && shasum -a 256 -c ./*.sha256)
           echo "::endgroup::"
 
+      - name: 🔏 Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: 🔏 Sign release artifacts with GitHub OIDC
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' artifact; do
+            cosign sign-blob --yes \
+              --bundle "${artifact}.sigstore.json" \
+              "${artifact}"
+          done < <(find release-artifacts -maxdepth 1 -type f ! -name '*.sigstore.json' -print0)
+
       - name: 🚀 Publish GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           version="${{ steps.version.outputs.value }}"
-          notes=$'🚀 Automated binstaller release for '"${version}"$'.\n\nInstall on Linux:\n\n```\ncurl --proto \'=https\' --tlsv1.2 -sSfL https://github.com/worxbend/binstaller/releases/latest/download/install.sh | sh\n```\n\nArtifacts:\n- 🐧 Linux amd64 GraalVM native CLI\n- 🐧 Linux arm64 GraalVM native CLI\n- 🍎 macOS amd64 GraalVM native CLI\n- 🍎 macOS arm64 GraalVM native CLI\n- 🧰 Example configuration\n- 📜 install.sh\n\nEach binary and config asset includes a 🔐 SHA-256 checksum.'
+          notes=$'🚀 Automated binstaller release for '"${version}"$'.\n\nInstall on Linux:\n\n```\ncurl --proto \'=https\' --tlsv1.2 -sSfL https://github.com/worxbend/binstaller/releases/latest/download/install.sh | sh\n```\n\nArtifacts:\n- 🐧 Linux amd64 GraalVM native CLI\n- 🐧 Linux arm64 GraalVM native CLI\n- 🍎 macOS amd64 GraalVM native CLI\n- 🍎 macOS arm64 GraalVM native CLI\n- 🧰 Example configuration\n- 📜 install.sh\n\nEach release asset includes a SHA-256 checksum where applicable and a keyless Sigstore bundle tied to this GitHub Actions workflow identity.'
 
           if gh release view "${version}" >/dev/null 2>&1; then
             echo "♻️ Updating existing release ${version}"
@@ -280,7 +294,7 @@ jobs:
 
     steps:
       - name: 📥 Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: 🏷️ Resolve release version
         id: version
@@ -302,7 +316,7 @@ jobs:
           echo "number=${version#v}" >> "${GITHUB_OUTPUT}"
 
       - name: 📥 Download native CLI artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: binstaller-${{ steps.version.outputs.value }}-${{ matrix.target }}
           path: release-artifacts
@@ -346,7 +360,7 @@ jobs:
           echo "path=${snap_file}" >> "${GITHUB_OUTPUT}"
 
       - name: ⬆️ Upload snap artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: binstaller-${{ steps.version.outputs.value }}-snap-${{ matrix.arch }}
           path: ${{ steps.snap-file.outputs.path }}

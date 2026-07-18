@@ -78,12 +78,11 @@ private[core] object ResolvedPathValidator:
       path: String,
       label: String,
       allowCurrentDirectory: Boolean
-  ): Vector[ValidationError] =
-    RelativeInstallPath.fromString(value, allowCurrentDirectory) match
-      case Right(_) => Vector.empty
-      case Left(message) if message.startsWith("is invalid:") =>
-        Vector(ValidationError(path, s"invalid $label:${message.stripPrefix("is invalid:")}"))
-      case Left(message) => Vector(ValidationError(path, s"$label $message"))
+  ): Vector[ValidationError] = RelativeInstallPath.fromString(value, allowCurrentDirectory) match
+    case Right(_)                                           => Vector.empty
+    case Left(message) if message.startsWith("is invalid:") =>
+      Vector(ValidationError(path, s"invalid $label:${message.stripPrefix("is invalid:")}"))
+    case Left(message) => Vector(ValidationError(path, s"$label $message"))
 
   private def hasTraversalSegment(value: String): Boolean =
     Try(Path.of(value).iterator().asScala.exists(_.toString == "..")).getOrElse(false)

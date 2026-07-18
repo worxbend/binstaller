@@ -11,7 +11,7 @@ private[cli] enum CliOutputStyle:
 private[cli] object CliOutputStyle:
 
   def forProcessOutput: CliOutputStyle =
-    val noColor = sys.env.contains("NO_COLOR")
+    val noColor      = sys.env.contains("NO_COLOR")
     val dumbTerminal = sys.env.get("TERM").contains("dumb")
     if Option(System.console()).nonEmpty && !noColor && !dumbTerminal then CliOutputStyle.Ansi
     else CliOutputStyle.Plain

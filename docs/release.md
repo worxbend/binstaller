@@ -1,36 +1,51 @@
 # Release Guide
 
-Date: 2026-06-30
+Date: 2026-07-18
 
-Releases are Linux amd64 native binaries produced by
-`.github/workflows/native-release.yml`.
+Releases are GraalVM native binaries produced by
+`.github/workflows/release.yml`, built for Linux amd64/arm64 and macOS
+amd64/arm64.
 
 ## Artifacts
 
-The release workflow publishes:
+For each target the release workflow publishes a versioned tarball plus a
+per-file SHA-256 checksum and a keyless Sigstore bundle:
 
-- `binstaller-linux-amd64`
-- `binstaller-linux-amd64.tar.gz`
-- `SHA256SUMS`
+- `binstaller-<version>-<target>.tar.gz`
+- `binstaller-<version>-<target>.tar.gz.sha256`
+- `binstaller-<version>-<target>.tar.gz.sigstore.json`
+- `config.example.<version>.yaml` (with matching `.sha256` and `.sigstore.json`)
+- `install.sh`
 
+Targets are `linux-amd64`, `linux-arm64`, `macos-amd64`, and `macos-arm64`.
 The workflow is triggered by `v*` tags or manual `workflow_dispatch` with a
 tag input.
 
 ## Workflow Summary
 
-The GitHub Actions job:
+The GitHub Actions build matrix, per target:
 
 1. Checks out the repository.
 2. Sets up GraalVM 21 with `native-image`.
-3. Installs native build dependencies.
-4. Runs `java -version` and `native-image --version`.
-5. Runs `./mill __.test`.
-6. Builds `./mill app.nativeImage`.
-7. Copies the native executable to `dist/binstaller-linux-amd64`.
-8. Smokes native `--help`, `plan`, and `versions`.
-9. Creates `binstaller-linux-amd64.tar.gz`.
-10. Writes `SHA256SUMS`.
-11. Publishes the GitHub Release assets.
+3. Runs `java -version` and `native-image --version`.
+4. Runs `./mill __.test`.
+5. Builds `./mill app.nativeImage`.
+6. Copies the native executable into a `binstaller-<version>-<target>` tarball.
+7. Smokes native `--help`, `plan`, and `versions`.
+8. Writes a per-file `.sha256` checksum.
+9. Uploads the tarball as a build artifact.
+
+The publish job then:
+
+1. Downloads all target artifacts.
+2. Re-verifies the checksums.
+3. Signs every artifact with keyless Sigstore (`cosign sign-blob`, using the
+   workflow's GitHub OIDC identity via `id-token: write`), producing a
+   `.sigstore.json` bundle per artifact.
+4. Publishes the GitHub Release assets.
+
+All GitHub Actions are pinned to commit SHAs, and Mill is pinned via
+`.mill-version`.
 
 ## Pre-Release Checks
 
@@ -72,17 +87,23 @@ If local native image is blocked, record `command -v native-image` and
 After a release is published:
 
 ```bash
-mkdir -p dist
-curl -L -o dist/binstaller-linux-amd64 \
-  https://github.com/worxbend/initkit/releases/latest/download/binstaller-linux-amd64
-curl -L -o dist/SHA256SUMS \
-  https://github.com/worxbend/initkit/releases/latest/download/SHA256SUMS
-sha256sum --check --ignore-missing dist/SHA256SUMS
-chmod +x dist/binstaller-linux-amd64
-./dist/binstaller-linux-amd64 --help
-./dist/binstaller-linux-amd64 plan --config config.example.yaml
-./dist/binstaller-linux-amd64 versions --config config.example.yaml
-./dist/binstaller-linux-amd64 lock --config config.example.yaml --output /tmp/binstaller.lock.json
+# Simplest path: the install script verifies the checksum and, when cosign is
+# present, the keyless Sigstore signature before installing.
+curl --proto '=https' --tlsv1.2 -sSfL \
+  https://github.com/worxbend/binstaller/releases/latest/download/install.sh | sh
+
+# Or verify a single target tarball manually:
+target="linux-amd64"
+base="https://github.com/worxbend/binstaller/releases/latest/download"
+mkdir -p dist && cd dist
+version="$(basename "$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+  https://github.com/worxbend/binstaller/releases/latest)")"
+archive="binstaller-${version}-${target}.tar.gz"
+curl -fsSL -o "${archive}" "${base}/${archive}"
+curl -fsSL -o "${archive}.sha256" "${base}/${archive}.sha256"
+sha256sum --check "${archive}.sha256"
+tar -xzf "${archive}"
+"binstaller-${version}-${target}/binstaller" --help
 ```
 
 Do not run apply against a real profile during release smoke unless the profile

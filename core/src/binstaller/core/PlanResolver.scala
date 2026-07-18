@@ -53,10 +53,10 @@ private[core] final class ResolutionBuilder(
     val policy       = resolvePolicy(options.runtimeVariables ++ manifestVars.value)
     val baseVars     = options.runtimeVariables ++ manifestVars.value +
       ("appsDir" -> policy.value.appsDir)
-    val activeEntries          = profile.spec.plan.zipWithIndex.filter((entry, _) => matchesHost(entry))
-    val activeVersionRefs      = activeEntries.map(_._1.spec.versionRef).toSet
-    val versions               = resolveVersions(baseVars, activeVersionRefs)
-    val tools                  = resolveTools(activeEntries, baseVars, versions.value)
+    val activeEntries     = profile.spec.plan.zipWithIndex.filter((entry, _) => matchesHost(entry))
+    val activeVersionRefs = activeEntries.map(_._1.spec.versionRef).toSet
+    val versions          = resolveVersions(baseVars, activeVersionRefs)
+    val tools             = resolveTools(activeEntries, baseVars, versions.value)
     val installDirectoryErrors = validateInstallDirectories(policy.value, tools.value)
     val strictPolicyErrors     = StrictPolicyValidator.validate(
       profile,
@@ -104,10 +104,6 @@ private[core] final class ResolutionBuilder(
         ManifestPolicy.allowance(
           profile.spec.policy.mode,
           profile.spec.policy.allowMissingChecksums
-        ),
-        ManifestPolicy.allowance(
-          profile.spec.policy.mode,
-          profile.spec.policy.allowTarXzFallback
         ),
         ManifestPolicy.allowance(
           profile.spec.policy.mode,

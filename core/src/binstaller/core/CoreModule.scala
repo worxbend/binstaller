@@ -51,7 +51,12 @@ object ApplyParallelism:
     else Left("parallelism must be at least 1")
 
 /** Rendered command result and process exit code. */
-final case class InstallerResult(lines: Vector[String], exitCode: Int)
+final case class InstallerResult(
+    lines: Vector[String],
+    exitCode: Int,
+    terminalResults: Vector[TerminalToolResult] = Vector.empty,
+    skippedTools: Int = 0
+)
 
 /** Tool selection requested by `--only` and `--skip`. */
 final case class ToolSelection(only: Vector[String], skip: Vector[String])

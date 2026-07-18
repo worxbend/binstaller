@@ -11,7 +11,6 @@ import scala.jdk.CollectionConverters.*
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
-import scala.util.Using
 
 /** POSIX executable mode parsed from a validated four-digit octal string. */
 final case class ExecutableInstallMode(octal: String, numeric: Int):
@@ -115,7 +114,11 @@ trait InstallFileSystem:
   ) match
     case Failure(error) => Left(InstallFileSystemError.StagingFailed(error.getMessage))
     case Success(bytes) => stageArchive(
-        installDir, createDirectories, archive, bytes, commandExecutor
+        installDir,
+        createDirectories,
+        archive,
+        bytes,
+        commandExecutor
       )
 
   /** Apply requested executable modes inside the staged install tree. */
@@ -243,7 +246,7 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
         Left(error)
 
   def discardStaged(stagedInstall: StagedInstall): Unit =
-    deleteRecursively(stagedInstall.stagingDir)
+    SafePaths.deleteRecursively(stagedInstall.stagingDir)
 
   private def createStagingDirectory(
       installDir: Path
@@ -342,12 +345,7 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
     case Failure(error) => Left(error.getMessage)
 
   private def resolveInside(root: Path, relative: String): Either[String, Path] =
-    val input = Path.of(relative)
-    if input.isAbsolute then Left(s"path must be relative: $relative")
-    else
-      val resolved = root.resolve(input).normalize()
-      if resolved.startsWith(root) then Right(resolved)
-      else Left(s"path escapes staging directory: $relative")
+    SafePaths.resolveInside(root, relative)
 
   private def replaceInstallDirectory(
       stagedInstall: StagedInstall
@@ -379,7 +377,7 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
 
     result match
       case Success(_) =>
-        deleteRecursively(backupDir)
+        SafePaths.deleteRecursively(backupDir)
         Right(())
       case Failure(error) =>
         // If the final move fails after moving the old install aside, attempt to restore it so a
@@ -398,18 +396,8 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
     if !hadExisting || !Files.exists(backupDir) then None
     else
       Try:
-        if Files.exists(installDir) then deleteRecursively(installDir)
+        if Files.exists(installDir) then SafePaths.deleteRecursively(installDir)
         val _ = Files.move(backupDir, installDir, StandardCopyOption.REPLACE_EXISTING)
       match
         case Success(_)     => None
         case Failure(error) => Some(error.getMessage)
-
-  private def deleteRecursively(path: Path): Unit = if Files.exists(path) then
-    Using.resource(Files.walk(path)): stream =>
-      stream
-        .iterator()
-        .asScala
-        .toVector
-        .sortBy(_.getNameCount)
-        .reverse
-        .foreach(child => Try(Files.deleteIfExists(child)))

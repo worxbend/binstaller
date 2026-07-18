@@ -23,7 +23,9 @@ private[cli] final class TerminalSudoCredentialProvider(err: PrintWriter)
     case Some(console) =>
       err.println(s"sudo password required for ${request.operation}")
       err.flush()
-      passwordFromChars(Option(console.readPassword("sudo password: ")))
+      TerminalSudoCredentialProvider.passwordFromChars(
+        Option(console.readPassword("sudo password: "))
+      )
 
   private def requestFromDevTty(operation: String): Either[SudoCredentialError, SudoPassword] =
     val tty = Path.of("/dev/tty")
@@ -54,6 +56,11 @@ private[cli] final class TerminalSudoCredentialProvider(err: PrintWriter)
         "sudo credentials required, but terminal password input is unavailable"
       ))
     else
+      val restoreHook = Thread(
+        () => { val _ = setDevTtyEcho(enabled = true) },
+        "restore-tty-echo"
+      )
+      Runtime.getRuntime.addShutdownHook(restoreHook)
       try
         output.write(
           s"sudo password required for $operation\nsudo password: ".getBytes(StandardCharsets.UTF_8)
@@ -65,6 +72,9 @@ private[cli] final class TerminalSudoCredentialProvider(err: PrintWriter)
         passwordFromBytes(bytes)
       finally
         val _ = setDevTtyEcho(enabled = true)
+        try
+          val _ = Runtime.getRuntime.removeShutdownHook(restoreHook)
+        catch case _: IllegalStateException => ()
 
   private def readPasswordBytes(input: FileInputStream): Array[Byte] =
     val bytes = ByteArrayOutputStream()
@@ -78,18 +88,12 @@ private[cli] final class TerminalSudoCredentialProvider(err: PrintWriter)
     bytes.toByteArray
 
   private def passwordFromBytes(bytes: Array[Byte]): Either[SudoCredentialError, SudoPassword] =
-    try passwordFromChars(Some(String(bytes, StandardCharsets.UTF_8).toCharArray))
+    val decoder = StandardCharsets.UTF_8.newDecoder()
+    val chars   = decoder.decode(java.nio.ByteBuffer.wrap(bytes))
+    val buffer  = Array.ofDim[Char](chars.remaining())
+    chars.get(buffer)
+    try TerminalSudoCredentialProvider.passwordFromChars(Some(buffer))
     finally java.util.Arrays.fill(bytes, 0.toByte)
-
-  private def passwordFromChars(charsOption: Option[Array[Char]])
-      : Either[SudoCredentialError, SudoPassword] = charsOption match
-    case Some(chars) =>
-      try
-        val password = String(chars)
-        if password.isEmpty then Left(SudoCredentialError.Canceled)
-        else Right(SudoPassword.fromString(password))
-      finally java.util.Arrays.fill(chars, '\u0000')
-    case None => Left(SudoCredentialError.Canceled)
 
   private def setDevTtyEcho(enabled: Boolean): Boolean =
     val mode = if enabled then "echo" else "-echo"
@@ -101,3 +105,14 @@ private[cli] final class TerminalSudoCredentialProvider(err: PrintWriter)
       process.waitFor() == 0
     catch
       case _: Exception => false
+
+private[cli] object TerminalSudoCredentialProvider:
+
+  def passwordFromChars(charsOption: Option[Array[Char]])
+      : Either[SudoCredentialError, SudoPassword] = charsOption match
+    case Some(chars) =>
+      try
+        if chars.isEmpty then Left(SudoCredentialError.Canceled)
+        else Right(SudoPassword.fromChars(chars))
+      finally java.util.Arrays.fill(chars, '\u0000')
+    case None => Left(SudoCredentialError.Canceled)

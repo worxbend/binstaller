@@ -28,7 +28,6 @@ object ConfigModuleTest extends TestSuite:
         """mode: strict
           |    allowDynamicLatestUrls: true
           |    allowMissingChecksums: false
-          |    allowTarXzFallback: true
           |    allowArchiveCandidateFallback: false""".stripMargin
       ))
 
@@ -37,7 +36,6 @@ object ConfigModuleTest extends TestSuite:
           assert(profile.spec.policy.mode == PolicyMode.Developer)
           assert(profile.spec.policy.allowDynamicLatestUrls.isEmpty)
           assert(profile.spec.policy.allowMissingChecksums.isEmpty)
-          assert(profile.spec.policy.allowTarXzFallback.isEmpty)
           assert(profile.spec.policy.allowArchiveCandidateFallback.isEmpty)
         case Left(error) => abort(s"expected developer policy config, got $error")
       strict match
@@ -45,7 +43,6 @@ object ConfigModuleTest extends TestSuite:
           assert(profile.spec.policy.mode == PolicyMode.Strict)
           assert(profile.spec.policy.allowDynamicLatestUrls.contains(PolicyOverride.Enabled))
           assert(profile.spec.policy.allowMissingChecksums.contains(PolicyOverride.Disabled))
-          assert(profile.spec.policy.allowTarXzFallback.contains(PolicyOverride.Enabled))
           assert(
             profile.spec.policy.allowArchiveCandidateFallback.contains(PolicyOverride.Disabled)
           )
@@ -242,7 +239,10 @@ object ConfigModuleTest extends TestSuite:
       val yaml = policyModeYaml("")
         .replace("metadata:\n", "metadata:\n  unexpectedMetadata: value\n")
         .replace("    appsDir:", "    cleanInstall: true\n    appsDir:")
-        .replace("          filename: alpha", "          filename: alpha\n          unexpectedDownload: value")
+        .replace(
+          "          filename: alpha",
+          "          filename: alpha\n          unexpectedDownload: value"
+        )
       val errors = validationErrors(yaml)
 
       assert(errors.contains(ValidationError(
@@ -257,6 +257,43 @@ object ConfigModuleTest extends TestSuite:
         "spec.plan[0].spec.download.unexpectedDownload",
         "unknown field 'unexpectedDownload'"
       )))
+
+    test("YAML mappings reject non-string keys instead of silently dropping them"):
+      ConfigModule.loadString("1: value") match
+        case Left(ConfigLoadError.ParseFailed(message)) =>
+          assert(message.contains("mapping keys must be strings"))
+        case result => abort(s"expected a parse failure, got $result")
+
+    test("YAML input is bounded before constructing an unbounded object graph"):
+      val oversized = "x" * (2 * 1024 * 1024 + 1)
+      ConfigModule.loadString(oversized) match
+        case Left(ConfigLoadError.ParseFailed(message)) => assert(message.nonEmpty)
+        case result => abort(s"expected a parse failure, got $result")
+
+    test("deeply nested YAML fails as a parse error instead of overflowing the stack"):
+      val depth  = 50000
+      val nested = ("[" * depth) + ("]" * depth)
+      ConfigModule.loadString(nested) match
+        case Left(ConfigLoadError.ParseFailed(message)) => assert(message.nonEmpty)
+        case result => abort(s"expected a parse failure, got $result")
+
+    test("required strings reject empty values"):
+      val errors = validationErrors(emptyUrlYaml)
+
+      assert(errors.exists(errorAt("spec.plan[0].spec.download.url")))
+      assert(errors.exists(_.message.contains("must not be empty")))
+
+    test("numeric version scalars are rejected with a quote-the-version message"):
+      val errors = validationErrors(numericVersionYaml)
+
+      assert(errors.exists(errorAt("spec.versions.alpha")))
+      assert(errors.exists(_.message.contains("quoted string")))
+
+    test("metadata name is hardened like plan tool names"):
+      val errors = validationErrors(unsafeMetadataNameYaml)
+
+      assert(errors.exists(errorAt("metadata.name")))
+      assert(errors.exists(_.message.contains("path separators")))
 
   private def validationErrors(yaml: String): Vector[ValidationError] =
     ConfigModule.loadString(yaml) match
@@ -635,6 +672,78 @@ object ConfigModuleTest extends TestSuite:
       |        executables:
       |          - path: bin/alpha
       |""".stripMargin
+
+  private val emptyUrlYaml: String = """
+                                       |apiVersion: binstaller.io/v1alpha1
+                                       |kind: BinaryDistributionProfile
+                                       |metadata:
+                                       |  name: empty-url
+                                       |spec:
+                                       |  policy:
+                                       |    appsDir: "${HOME}/.apps"
+                                       |  vars: {}
+                                       |  versions:
+                                       |    alpha: "1.0.0"
+                                       |  plan:
+                                       |    - name: alpha
+                                       |      kind: binary-tool
+                                       |      spec:
+                                       |        versionRef: alpha
+                                       |        installDir: "${appsDir}/alpha"
+                                       |        download:
+                                       |          url: ""
+                                       |          filename: alpha
+                                       |        executables:
+                                       |          - path: bin/alpha
+                                       |""".stripMargin
+
+  private val numericVersionYaml: String = """
+                                             |apiVersion: binstaller.io/v1alpha1
+                                             |kind: BinaryDistributionProfile
+                                             |metadata:
+                                             |  name: numeric-version
+                                             |spec:
+                                             |  policy:
+                                             |    appsDir: "${HOME}/.apps"
+                                             |  vars: {}
+                                             |  versions:
+                                             |    alpha: 1.20
+                                             |  plan:
+                                             |    - name: alpha
+                                             |      kind: binary-tool
+                                             |      spec:
+                                             |        versionRef: alpha
+                                             |        installDir: "${appsDir}/alpha"
+                                             |        download:
+                                             |          url: https://example.invalid/alpha
+                                             |          filename: alpha
+                                             |        executables:
+                                             |          - path: bin/alpha
+                                             |""".stripMargin
+
+  private val unsafeMetadataNameYaml: String = """
+                                                 |apiVersion: binstaller.io/v1alpha1
+                                                 |kind: BinaryDistributionProfile
+                                                 |metadata:
+                                                 |  name: "../escape"
+                                                 |spec:
+                                                 |  policy:
+                                                 |    appsDir: "${HOME}/.apps"
+                                                 |  vars: {}
+                                                 |  versions:
+                                                 |    alpha: "1.0.0"
+                                                 |  plan:
+                                                 |    - name: alpha
+                                                 |      kind: binary-tool
+                                                 |      spec:
+                                                 |        versionRef: alpha
+                                                 |        installDir: "${appsDir}/alpha"
+                                                 |        download:
+                                                 |          url: https://example.invalid/alpha
+                                                 |          filename: alpha
+                                                 |        executables:
+                                                 |          - path: bin/alpha
+                                                 |""".stripMargin
 
   private def policyModeYaml(policyLines: String): String =
     s"""

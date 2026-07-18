@@ -1,6 +1,6 @@
 # Security Model
 
-Date: 2026-06-30
+Date: 2026-07-18
 
 `binstaller` installs binary tool distributions from a user-provided manifest.
 The manifest is trusted configuration, but downloads, archive metadata, terminal
@@ -11,7 +11,13 @@ boundaries.
 
 - YAML parsing and validation are the first trust boundary. Unsupported fields
   that would execute scripts are rejected before planning.
-- Version resolver and download URLs must be HTTPS and have a host.
+- Version resolver and download URLs must be HTTPS and have a host. Hosts that
+  name or resolve to loopback, link-local, private, site-local, multicast, or
+  known cloud-metadata endpoints are rejected, and each redirect hop is
+  re-validated against the same guard before the request is followed.
+- Only a fixed allowlist of non-secret environment variables (`HOME`, `USER`,
+  `LOGNAME`, `SHELL`, `XDG_*`) is exposed to manifest interpolation, so a
+  manifest cannot interpolate an arbitrary process secret into an outbound URL.
 - Downloaded bytes are untrusted until bounded, checksum-verified when a
   checksum is configured, extracted or staged, and executable paths are verified.
 - Archive member names and mapped targets are untrusted and must remain inside
@@ -39,9 +45,10 @@ The remaining external process boundaries are intentionally narrow:
 - `sudo -n true`, `sudo -n ln -sfn <target> <path>`, and when an injected
   credential provider supplies a password,
   `sudo -S -p "" ln -sfn <target> <path>` for privileged symlinks.
-- `tar -xJf <archive> -C <extractDir>` for the `tar.xz` fallback.
 
-Core command execution uses argv, not manifest-provided shell strings. Process
+Archive extraction no longer shells out to the system `tar`; all archive types
+are decoded in-process. Core command execution uses argv, not manifest-provided
+shell strings. Process
 execution has a default 15 minute timeout. Failure messages quote arguments so
 diagnostics preserve argument boundaries.
 
@@ -53,15 +60,16 @@ state.
 
 ## Archive Safety
 
-Native `zip` and `tar.gz` extraction rejects unsafe paths before writing mapped
-files. The native `tar.gz` path rejects symlink, hardlink, and unsupported tar
+Native `zip`, `tar.gz`, and `tar.xz` extraction rejects unsafe paths before
+writing mapped files. `tar.xz` is decoded with an in-process XZ reader and flows
+through the same tar member handling as `tar.gz`, so it no longer depends on the
+system `tar`. The native tar path rejects symlink, hardlink, and unsupported tar
 entry types. Duplicate archive member sources and duplicate output targets are
-rejected.
+rejected. All archive types are equivalent with respect to path confinement.
 
-`tar.xz` remains a structured system-`tar` fallback. It extracts into private
-staging and then copies only declared mapped members after path validation, but
-it does not yet provide native pre-extraction metadata inspection. Do not treat
-untrusted `tar.xz` archives as equivalent to native `zip` and `tar.gz` inputs.
+Extraction enforces an aggregate expanded-byte budget across all copied members,
+independent of the compressed download cap, to bound decompression bombs that
+would otherwise exhaust disk.
 
 Known deferred archive gaps are documented in [Hardening Review](hardening-review.md).
 
@@ -79,9 +87,8 @@ unless `policy.allowMissingChecksums: true` is explicitly set.
 ## Strict Policy Mode
 
 `policy.mode` defaults to `developer` for compatibility with local tool
-profiles. Developer mode allows dynamic latest URLs, missing checksums, and the
-system `tar.xz` fallback by default. Sudo symlinks still require
-`policy.allowSudoSymlinks: true`.
+profiles. Developer mode allows dynamic latest URLs and missing checksums by
+default. Sudo symlinks still require `policy.allowSudoSymlinks: true`.
 
 `policy.mode: strict` rejects production-sensitive risks unless the manifest
 explicitly opts in:
@@ -90,7 +97,6 @@ explicitly opts in:
   contain `/latest`.
 - Missing SHA-256 checksums.
 - Sudo symlinks, unless `policy.allowSudoSymlinks: true`.
-- `tar.xz` archives, unless `policy.allowTarXzFallback: true`.
 - Archive candidate fallback, if candidate discovery is added later, unless
   `policy.allowArchiveCandidateFallback: true`.
 
@@ -178,7 +184,11 @@ into CLI output.
 - Downloads are bounded by default limits, but body deadlines are checked at
   chunk boundaries.
 - Missing checksums are still accepted by developer-mode profiles.
-- ZIP external attributes and native `tar.xz` pre-inspection remain deferred.
+- End-to-end release integrity is anchored by keyless Sigstore signatures over
+  each release artifact, verified by `scripts/install.sh` when `cosign` is
+  present. The per-release SHA-256 files defend against corruption but share the
+  release origin, so they are not an independent trust anchor on their own.
+- ZIP external attributes remain deferred.
 - Credential-provider cancellation is scoped to the credential request/current
   privileged operation. It is not a general cancellation mechanism for an
   already-running download, extraction, or command.

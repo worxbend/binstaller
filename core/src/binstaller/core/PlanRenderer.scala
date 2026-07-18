@@ -39,7 +39,7 @@ private[core] object PlanRenderer:
       s"policy mode: ${plan.policy.mode.value}",
       stateLine,
       lockLine,
-      "filesystem: no changes will be made",
+      "filesystem: no changes will be made (version and checksum resolution may use the network)",
       sudoLine
     )
 
@@ -138,4 +138,4 @@ private[core] object PlanRenderer:
   private def joinPath(parent: String, child: String): String =
     if parent.endsWith("/") then s"$parent$child" else s"$parent/$child"
 
-  private def shellQuote(value: String): String = s"'${value.replace("'", "'\"'\"'")}'"
+  private def shellQuote(value: String): String = ShellRendering.quote(value)

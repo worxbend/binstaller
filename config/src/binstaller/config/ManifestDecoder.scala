@@ -5,8 +5,8 @@ import binstaller.config.YamlDecode.*
 private[config] object ManifestDecoder:
 
   def decode(value: Any): DecodeResult[BinaryDistributionProfile] =
-    val root       = asMap(value, "$")
-    val unknown    = unknownKeyErrors(root.value, "$", Set("apiVersion", "kind", "metadata", "spec"))
+    val root    = asMap(value, "$")
+    val unknown = unknownKeyErrors(root.value, "$", Set("apiVersion", "kind", "metadata", "spec"))
     val apiVersion = enumValue(
       requiredString(root.value, "apiVersion"),
       "apiVersion",
@@ -59,14 +59,19 @@ private[config] object ManifestDecoder:
     )
 
   private def decodePolicy(input: DecodeResult[YamlMap]): DecodeResult[InstallPolicy] =
-    val map  = input.value
+    val map     = input.value
     val unknown = unknownKeyErrors(
       map,
       "spec.policy",
       Set(
-        "mode", "continueOnError", "appsDir", "allowSudoSymlinks",
-        "allowDynamicLatestUrls", "allowMissingChecksums", "allowTarXzFallback",
-        "allowArchiveCandidateFallback", "stateFile"
+        "mode",
+        "continueOnError",
+        "appsDir",
+        "allowSudoSymlinks",
+        "allowDynamicLatestUrls",
+        "allowMissingChecksums",
+        "allowArchiveCandidateFallback",
+        "stateFile"
       )
     )
     val mode = optionalEnumValue(
@@ -78,7 +83,7 @@ private[config] object ManifestDecoder:
     )
     val continueOnError =
       optionalBoolean(map, "continueOnError", "spec.policy.continueOnError", default = false)
-    val appsDir      = requiredString(map, "spec.policy.appsDir")
+    val appsDir           = requiredString(map, "spec.policy.appsDir")
     val allowSudoSymlinks = optionalBoolean(
       map,
       "allowSudoSymlinks",
@@ -95,11 +100,6 @@ private[config] object ManifestDecoder:
       "allowMissingChecksums",
       "spec.policy.allowMissingChecksums"
     )
-    val allowTarXzFallback = optionalPolicyOverride(
-      map,
-      "allowTarXzFallback",
-      "spec.policy.allowTarXzFallback"
-    )
     val allowArchiveCandidateFallback = optionalPolicyOverride(
       map,
       "allowArchiveCandidateFallback",
@@ -115,13 +115,12 @@ private[config] object ManifestDecoder:
         allowSudoSymlinks = allowSudoSymlinks.value,
         allowDynamicLatestUrls = allowDynamicLatestUrls.value,
         allowMissingChecksums = allowMissingChecksums.value,
-        allowTarXzFallback = allowTarXzFallback.value,
         allowArchiveCandidateFallback = allowArchiveCandidateFallback.value,
         stateFile = stateFile.value
       ),
       input.errors ++ unknown ++ mode.errors ++ continueOnError.errors ++ appsDir.errors ++
         allowSudoSymlinks.errors ++ allowDynamicLatestUrls.errors ++ allowMissingChecksums.errors ++
-        allowTarXzFallback.errors ++ allowArchiveCandidateFallback.errors ++ stateFile.errors
+        allowArchiveCandidateFallback.errors ++ stateFile.errors
     )
 
   private def decodeVersions(input: DecodeResult[YamlMap])
@@ -137,6 +136,15 @@ private[config] object ManifestDecoder:
   private def decodeVersionSource(value: Any, path: String): DecodeResult[VersionSource] =
     value match
       case scalar: String => DecodeResult.valid(VersionSource.Pinned(scalar))
+      // YAML parses `1.2`/`3`/`true` as Double/Int/Boolean, silently dropping trailing zeros
+      // (1.20 -> 1.2). Reject with a targeted message instead of the catch-all shape error so
+      // authors are told to quote the version rather than being misled about the block shape.
+      case (_: Number) | (_: Boolean) => DecodeResult.invalid(
+          VersionSource.Pinned(""),
+          path,
+          "version must be a quoted string; wrap numeric or boolean-looking versions in quotes " +
+            "(e.g. \"1.20\")"
+        )
       case map: YamlMap @unchecked if map.contains("dynamic") =>
         val decoded = decodeDynamicVersion(requiredMap(map, s"$path.dynamic"), s"$path.dynamic")
         DecodeResult(decoded.value, unknownKeyErrors(map, path, Set("dynamic")) ++ decoded.errors)
@@ -153,9 +161,9 @@ private[config] object ManifestDecoder:
       input: DecodeResult[YamlMap],
       path: String
   ): DecodeResult[VersionSource] =
-    val map  = input.value
+    val map     = input.value
     val unknown = unknownKeyErrors(map, path, Set("type", "note"))
-    val kind = enumValue(
+    val kind    = enumValue(
       requiredString(map, "type", s"$path.type"),
       s"$path.type",
       DynamicVersionKind.values.toVector,
@@ -172,9 +180,9 @@ private[config] object ManifestDecoder:
       input: DecodeResult[YamlMap],
       path: String
   ): DecodeResult[VersionSource] =
-    val map  = input.value
+    val map     = input.value
     val unknown = unknownKeyErrors(map, path, Set("type", "url"))
-    val kind = enumValue(
+    val kind    = enumValue(
       requiredString(map, "type", s"$path.type"),
       s"$path.type",
       VersionResolverKind.values.toVector,
@@ -197,11 +205,11 @@ private[config] object ManifestDecoder:
     )
 
   private def decodePlanEntry(input: DecodeResult[YamlMap], index: Int): DecodeResult[PlanEntry] =
-    val map  = input.value
-    val path = s"spec.plan[$index]"
+    val map     = input.value
+    val path    = s"spec.plan[$index]"
     val unknown = unknownKeyErrors(map, path, Set("name", "kind", "description", "when", "spec"))
-    val name = requiredString(map, s"$path.name")
-    val kind = enumValue(
+    val name    = requiredString(map, s"$path.name")
+    val kind    = enumValue(
       requiredString(map, s"$path.kind"),
       s"$path.kind",
       PlanKind.values.toVector,
@@ -220,7 +228,8 @@ private[config] object ManifestDecoder:
         when = when.value,
         spec = spec.value
       ),
-      input.errors ++ unknown ++ name.errors ++ kind.errors ++ description.errors ++ when.errors ++ spec.errors
+      input.errors ++ unknown ++ name.errors ++ kind.errors ++ description.errors ++ when.errors ++
+        spec.errors
     )
 
   private def optionalWhen(map: YamlMap, path: String): DecodeResult[Option[WhenClause]] =
@@ -240,21 +249,29 @@ private[config] object ManifestDecoder:
     map.get("os") match
       case None        => DecodeResult.valid(None)
       case Some(value) =>
-        val osMap  = asMap(value, path)
+        val osMap   = asMap(value, path)
         val unknown = unknownKeyErrors(osMap.value, path, Set("family"))
-        val family = optionalString(osMap.value, "family", s"$path.family")
+        val family  = optionalString(osMap.value, "family", s"$path.family")
         DecodeResult(Some(OsClause(family.value)), osMap.errors ++ unknown ++ family.errors)
 
   private def decodeBinaryToolSpec(
       input: DecodeResult[YamlMap],
       entryPath: String
   ): DecodeResult[BinaryToolSpec] =
-    val map               = input.value
-    val path              = s"$entryPath.spec"
+    val map     = input.value
+    val path    = s"$entryPath.spec"
     val unknown = unknownKeyErrors(
       map,
       path,
-      Set("versionRef", "installDir", "createDirectories", "download", "installer", "executables", "symlinks")
+      Set(
+        "versionRef",
+        "installDir",
+        "createDirectories",
+        "download",
+        "installer",
+        "executables",
+        "symlinks"
+      )
     )
     val versionRef        = requiredString(map, s"$path.versionRef")
     val installDir        = requiredString(map, s"$path.installDir")
@@ -273,7 +290,8 @@ private[config] object ManifestDecoder:
         executables = executables.value,
         symlinks = symlinks.value
       ),
-      input.errors ++ unknown ++ versionRef.errors ++ installDir.errors ++ createDirectories.errors ++
+      input.errors ++ unknown ++ versionRef.errors ++ installDir.errors ++
+        createDirectories.errors ++
         download.errors ++ unsupportedScript.errors ++ executables.errors ++ symlinks.errors
     )
 
@@ -298,8 +316,9 @@ private[config] object ManifestDecoder:
       case None        => DecodeResult.valid(None)
       case Some(value) =>
         val checksumMap = asMap(value, path)
-        val unknown     = unknownKeyErrors(checksumMap.value, path, Set("algorithm", "value", "discover"))
-        val algorithm   = enumValue(
+        val unknown     =
+          unknownKeyErrors(checksumMap.value, path, Set("algorithm", "value", "discover"))
+        val algorithm = enumValue(
           requiredString(checksumMap.value, s"$path.algorithm"),
           s"$path.algorithm",
           ChecksumAlgorithm.values.toVector,
@@ -387,9 +406,9 @@ private[config] object ManifestDecoder:
       input: DecodeResult[YamlMap],
       archivePath: String
   ): DecodeResult[ArchiveExtract] =
-    val map   = input.value
+    val map     = input.value
     val unknown = unknownKeyErrors(map, s"$archivePath.extract", Set("files", "directories"))
-    val files = decodeExtractMappings(
+    val files   = decodeExtractMappings(
       optionalList(map, "files", s"$archivePath.extract.files"),
       s"$archivePath.extract.files"
     )
@@ -408,10 +427,10 @@ private[config] object ManifestDecoder:
   ): DecodeResult[Vector[ExtractMapping]] =
     val decoded = input.value.zipWithIndex.map:
       case (value, index) =>
-        val item = asMap(value, s"$path[$index]")
+        val item    = asMap(value, s"$path[$index]")
         val unknown = unknownKeyErrors(item.value, s"$path[$index]", Set("from", "to"))
-        val from = requiredString(item.value, s"$path[$index].from")
-        val to   = requiredString(item.value, s"$path[$index].to")
+        val from    = requiredString(item.value, s"$path[$index].from")
+        val to      = requiredString(item.value, s"$path[$index].to")
         DecodeResult(
           ExtractMapping(from.value, to.value),
           item.errors ++ unknown ++ from.errors ++ to.errors
@@ -436,10 +455,10 @@ private[config] object ManifestDecoder:
     val path    = s"$specPath.executables"
     val decoded = input.value.zipWithIndex.map:
       case (value, index) =>
-        val item = asMap(value, s"$path[$index]")
+        val item    = asMap(value, s"$path[$index]")
         val unknown = unknownKeyErrors(item.value, s"$path[$index]", Set("path", "mode"))
-        val file = requiredString(item.value, s"$path[$index].path")
-        val mode = optionalMode(item.value, s"$path[$index].mode")
+        val file    = requiredString(item.value, s"$path[$index].path")
+        val mode    = optionalMode(item.value, s"$path[$index].mode")
         DecodeResult(
           ExecutableSpec(file.value, mode.value),
           item.errors ++ unknown ++ file.errors ++ mode.errors
@@ -453,11 +472,11 @@ private[config] object ManifestDecoder:
     val path    = s"$specPath.symlinks"
     val decoded = input.value.zipWithIndex.map:
       case (value, index) =>
-        val item   = asMap(value, s"$path[$index]")
+        val item    = asMap(value, s"$path[$index]")
         val unknown = unknownKeyErrors(item.value, s"$path[$index]", Set("path", "target", "sudo"))
-        val file   = requiredString(item.value, s"$path[$index].path")
-        val target = requiredString(item.value, s"$path[$index].target")
-        val sudo   = optionalBoolean(item.value, "sudo", s"$path[$index].sudo", default = false)
+        val file    = requiredString(item.value, s"$path[$index].path")
+        val target  = requiredString(item.value, s"$path[$index].target")
+        val sudo    = optionalBoolean(item.value, "sudo", s"$path[$index].sudo", default = false)
           .map(SymlinkPrivilege.fromBoolean)
         DecodeResult(
           SymlinkSpec(file.value, target.value, sudo.value),

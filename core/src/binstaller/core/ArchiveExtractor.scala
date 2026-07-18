@@ -1,17 +1,15 @@
 package binstaller.core
 
 import binstaller.config.ArchiveType
+import org.tukaani.xz.XZInputStream
 
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.nio.file.Files
-import java.nio.file.LinkOption
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.util.zip.GZIPInputStream
 import java.util.zip.ZipInputStream
-import scala.jdk.CollectionConverters.*
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
@@ -20,31 +18,40 @@ import scala.util.Using
 private[core] enum ArchiveEntryKind:
   case File, Directory
 
-private[core] final case class ArchiveEntry(name: String, kind: ArchiveEntryKind)
+private[core] final case class ArchiveEntry(name: String, kind: ArchiveEntryKind, size: Long)
 
 private[core] final case class PlannedArchiveFile(source: String, target: Path)
 
 private[core] object ArchiveExtractor:
+  private[core] val maxExtractedBytes: Long = 1024L * 1024L * 1024L
+
+  private[core] def validateExtractedSize(bytes: Long): Either[String, Unit] =
+    if bytes >= 0 && bytes <= maxExtractedBytes then Right(())
+    else Left(s"archive exceeds extracted byte limit of $maxExtractedBytes bytes")
 
   def extract(
       archive: ResolvedArchive,
       bytes: Array[Byte],
       stagingDir: Path,
       commandExecutor: CommandExecutor
-  ): Either[String, Unit] = archive.original.archiveType match
-    case ArchiveType.Zip   => extractZip(archive, bytes, stagingDir)
-    case ArchiveType.TarGz => extractTarGz(archive, bytes, stagingDir)
-    case ArchiveType.TarXz => extractTarXz(archive, bytes, stagingDir, commandExecutor)
+  ): Either[String, Unit] =
+    val _ = commandExecutor // retained for source compatibility with injected filesystem fakes
+    archive.original.archiveType match
+      case ArchiveType.Zip   => extractZip(archive, bytes, stagingDir)
+      case ArchiveType.TarGz => extractTarGz(archive, bytes, stagingDir)
+      case ArchiveType.TarXz => extractTarXz(archive, bytes, stagingDir)
 
   def extractFile(
       archive: ResolvedArchive,
       artifact: Path,
       stagingDir: Path,
       commandExecutor: CommandExecutor
-  ): Either[String, Unit] = archive.original.archiveType match
-    case ArchiveType.Zip   => extractZipFile(archive, artifact, stagingDir)
-    case ArchiveType.TarGz => extractTarGzFile(archive, artifact, stagingDir)
-    case ArchiveType.TarXz => extractTarXzFile(archive, artifact, stagingDir, commandExecutor)
+  ): Either[String, Unit] =
+    val _ = commandExecutor // retained for source compatibility with injected filesystem fakes
+    archive.original.archiveType match
+      case ArchiveType.Zip   => extractZipFile(archive, artifact, stagingDir)
+      case ArchiveType.TarGz => extractTarGzFile(archive, artifact, stagingDir)
+      case ArchiveType.TarXz => extractTarXzFile(archive, artifact, stagingDir)
 
   private def extractZip(
       archive: ResolvedArchive,
@@ -53,12 +60,13 @@ private[core] object ArchiveExtractor:
   ): Either[String, Unit] = Try(indexZip(bytes)).toEither.left.map(_.getMessage).flatMap: entries =>
     planExtraction(entries, archive, stagingDir).flatMap: plannedFiles =>
       Try:
+        val budget = ExtractedByteBudget()
         Using.resource(ZipInputStream(ByteArrayInputStream(bytes))): zip =>
           var entry = zip.getNextEntry
           while entry != null do
             normalizedArchivePath(entry.getName).foreach: source =>
               plannedFiles.find(_.source == source).foreach: planned =>
-                copyCurrentEntry(zip, planned.target)
+                copyCurrentEntry(zip, planned.target, budget)
             zip.closeEntry()
             entry = zip.getNextEntry
       match
@@ -76,7 +84,7 @@ private[core] object ArchiveExtractor:
             identity
           )
           val kind = if entry.isDirectory then ArchiveEntryKind.Directory else ArchiveEntryKind.File
-          ArchiveEntry(source, kind)
+          ArchiveEntry(source, kind, entry.getSize)
         .toVector
 
   private def extractZipFile(
@@ -84,27 +92,31 @@ private[core] object ArchiveExtractor:
       artifact: Path,
       stagingDir: Path
   ): Either[String, Unit] = Try(indexZipFile(artifact)).toEither.left.map(_.getMessage).flatMap:
-    entries => planExtraction(entries, archive, stagingDir).flatMap: plannedFiles =>
-      Try:
-        Using.resource(ZipInputStream(Files.newInputStream(artifact))): zip =>
-          var entry = zip.getNextEntry
-          while entry != null do
-            normalizedArchivePath(entry.getName).foreach: source =>
-              plannedFiles.find(_.source == source).foreach(planned => copyCurrentEntry(zip, planned.target))
-            zip.closeEntry()
-            entry = zip.getNextEntry
-      match
-        case Success(_)     => Right(())
-        case Failure(error) => Left(error.getMessage)
+    entries =>
+      planExtraction(entries, archive, stagingDir).flatMap: plannedFiles =>
+        Try:
+          val budget = ExtractedByteBudget()
+          Using.resource(ZipInputStream(Files.newInputStream(artifact))): zip =>
+            var entry = zip.getNextEntry
+            while entry != null do
+              normalizedArchivePath(entry.getName).foreach: source =>
+                plannedFiles.find(_.source == source).foreach: planned =>
+                  copyCurrentEntry(zip, planned.target, budget)
+              zip.closeEntry()
+              entry = zip.getNextEntry
+        match
+          case Success(_)     => Right(())
+          case Failure(error) => Left(error.getMessage)
 
   private def indexZipFile(artifact: Path): Vector[ArchiveEntry] =
     Using.resource(ZipInputStream(Files.newInputStream(artifact))): zip =>
       Iterator.continually(zip.getNextEntry).takeWhile(_ != null).map: entry =>
         val source = normalizedArchivePath(entry.getName).fold(
-          message => throw IllegalArgumentException(message), identity
+          message => throw IllegalArgumentException(message),
+          identity
         )
         val kind = if entry.isDirectory then ArchiveEntryKind.Directory else ArchiveEntryKind.File
-        ArchiveEntry(source, kind)
+        ArchiveEntry(source, kind, entry.getSize)
       .toVector
 
   private def extractTarGz(
@@ -116,10 +128,11 @@ private[core] object ArchiveExtractor:
       planExtraction(entries, archive, stagingDir).flatMap: plannedFiles =>
         val plannedBySource = plannedFiles.map(file => file.source -> file.target).toMap
         Try:
+          val budget = ExtractedByteBudget()
           Using.resource(GZIPInputStream(ByteArrayInputStream(bytes))): input =>
             readTarEntries(input): (entry, content) =>
               plannedBySource.get(entry.name).foreach: target =>
-                copyBounded(content, target, entry.size)
+                copyBounded(content, target, entry.size, budget)
               if !plannedBySource.contains(entry.name) then
                 val _ = skipFully(content, entry.size)
         match
@@ -131,7 +144,7 @@ private[core] object ArchiveExtractor:
       val entries = Vector.newBuilder[ArchiveEntry]
       readTarEntries(input): (entry, content) =>
         val _ = skipFully(content, entry.size)
-        entries += ArchiveEntry(entry.name, entry.kind)
+        entries += ArchiveEntry(entry.name, entry.kind, entry.size)
       entries.result()
 
   private def extractTarGzFile(
@@ -139,97 +152,73 @@ private[core] object ArchiveExtractor:
       artifact: Path,
       stagingDir: Path
   ): Either[String, Unit] = Try(indexTarGzFile(artifact)).toEither.left.map(_.getMessage).flatMap:
-    entries => planExtraction(entries, archive, stagingDir).flatMap: plannedFiles =>
-      val plannedBySource = plannedFiles.map(file => file.source -> file.target).toMap
-      Try:
-        Using.resource(GZIPInputStream(Files.newInputStream(artifact))): input =>
-          readTarEntries(input): (entry, content) =>
-            plannedBySource.get(entry.name) match
-              case Some(target) => copyBounded(content, target, entry.size)
-              case None         => val _ = skipFully(content, entry.size)
-      match
-        case Success(_)     => Right(())
-        case Failure(error) => Left(error.getMessage)
+    entries =>
+      planExtraction(entries, archive, stagingDir).flatMap: plannedFiles =>
+        val plannedBySource = plannedFiles.map(file => file.source -> file.target).toMap
+        Try:
+          val budget = ExtractedByteBudget()
+          Using.resource(GZIPInputStream(Files.newInputStream(artifact))): input =>
+            readTarEntries(input): (entry, content) =>
+              plannedBySource.get(entry.name) match
+                case Some(target) => copyBounded(content, target, entry.size, budget)
+                case None         => val _ = skipFully(content, entry.size)
+        match
+          case Success(_)     => Right(())
+          case Failure(error) => Left(error.getMessage)
 
   private def indexTarGzFile(artifact: Path): Vector[ArchiveEntry] =
     Using.resource(GZIPInputStream(Files.newInputStream(artifact))): input =>
       val entries = Vector.newBuilder[ArchiveEntry]
       readTarEntries(input): (entry, content) =>
         val _ = skipFully(content, entry.size)
-        entries += ArchiveEntry(entry.name, entry.kind)
+        entries += ArchiveEntry(entry.name, entry.kind, entry.size)
       entries.result()
 
   private def extractTarXz(
       archive: ResolvedArchive,
       bytes: Array[Byte],
-      stagingDir: Path,
-      commandExecutor: CommandExecutor
-  ): Either[String, Unit] =
-    val archiveFile = Files.createTempFile(stagingDir, ".archive-", ".tar.xz")
-    Files.write(archiveFile, bytes)
-    val result = extractTarXzFile(archive, archiveFile, stagingDir, commandExecutor)
-    val _ = Files.deleteIfExists(archiveFile)
-    result
+      stagingDir: Path
+  ): Either[String, Unit] = extractTarStream(
+    archive,
+    () => XZInputStream(ByteArrayInputStream(bytes)),
+    stagingDir
+  )
 
   private def extractTarXzFile(
       archive: ResolvedArchive,
       archiveFile: Path,
-      stagingDir: Path,
-      commandExecutor: CommandExecutor
-  ): Either[String, Unit] =
-    val extractDir = Files.createTempDirectory(stagingDir, ".archive-extract-")
-    val spec = CommandSpec(
-      Vector(
-        "tar",
-        "--extract",
-        "--xz",
-        "--file", archiveFile.toString,
-        "--directory", extractDir.toString,
-        "--no-same-owner",
-        "--no-same-permissions",
-        "--delay-directory-restore"
-      ),
-      stagingDir,
-      CommandEnvironment.baseline
-    )
-    commandExecutor.run(spec) match
-      case Left(error) =>
-        deleteRecursively(extractDir)
-        Left(CommandFailureDetails.render(error))
-      case Right(()) =>
-        val result = Try(indexExtractedDirectory(extractDir)).toEither.left.map(_.getMessage)
-          .flatMap: entries =>
-            planExtraction(entries, archive, stagingDir).flatMap: plannedFiles =>
-              Try:
-                plannedFiles.foreach: planned =>
-                  val source = extractDir.resolve(planned.source).normalize()
-                  copyFile(source, planned.target)
-              match
-                case Success(_)     => Right(())
-                case Failure(error) => Left(error.getMessage)
-        deleteRecursively(extractDir)
-        result
+      stagingDir: Path
+  ): Either[String, Unit] = extractTarStream(
+    archive,
+    () => XZInputStream(Files.newInputStream(archiveFile)),
+    stagingDir
+  )
 
-  private def indexExtractedDirectory(root: Path): Vector[ArchiveEntry] =
-    Using.resource(Files.walk(root)): stream =>
-      stream
-        .iterator()
-        .asScala
-        .toVector
-        .filterNot(_ == root)
-        .map: path =>
-          val relative = root.relativize(path).toString.replace('\\', '/')
-          val source   = normalizedArchivePath(relative).fold(
-            message => throw IllegalArgumentException(message),
-            identity
-          )
-          val kind =
-            if Files.isSymbolicLink(path) then
-              throw IllegalArgumentException(s"unsafe archive link entry: $source")
-            else if Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS) then ArchiveEntryKind.Directory
-            else if Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) then ArchiveEntryKind.File
-            else throw IllegalArgumentException(s"unsupported archive entry type: $source")
-          ArchiveEntry(source, kind)
+  private def extractTarStream(
+      archive: ResolvedArchive,
+      open: () => InputStream,
+      stagingDir: Path
+  ): Either[String, Unit] = Try:
+    Using.resource(open()): input =>
+      val entries = Vector.newBuilder[ArchiveEntry]
+      readTarEntries(input): (entry, content) =>
+        val _ = skipFully(content, entry.size)
+        entries += ArchiveEntry(entry.name, entry.kind, entry.size)
+      entries.result()
+  match
+    case Failure(error)   => Left(error.getMessage)
+    case Success(entries) => planExtraction(entries, archive, stagingDir).flatMap: plannedFiles =>
+        val plannedBySource = plannedFiles.map(file => file.source -> file.target).toMap
+        Try:
+          val budget = ExtractedByteBudget()
+          Using.resource(open()): input =>
+            readTarEntries(input): (entry, content) =>
+              plannedBySource.get(entry.name) match
+                case Some(target) => copyBounded(content, target, entry.size, budget)
+                case None         => val _ = skipFully(content, entry.size)
+        match
+          case Success(_)     => Right(())
+          case Failure(error) => Left(error.getMessage)
 
   private def planExtraction(
       entries: Vector[ArchiveEntry],
@@ -374,17 +363,9 @@ private[core] object ArchiveExtractor:
           else Right(normalized.mkString("/"))
 
   private def resolveInside(root: Path, relative: String): Either[String, Path] =
-    val clean = relative match
-      case "" | "." => "."
-      case other    => other
+    val clean = if relative.isEmpty then "." else relative
     validateRelativeTarget(clean).flatMap: _ =>
-      val input = Path.of(clean)
-      if input.isAbsolute then Left(s"path must be relative: $relative")
-      else
-        val normalizedRoot = root.toAbsolutePath.normalize()
-        val resolved       = normalizedRoot.resolve(input).normalize()
-        if resolved.startsWith(normalizedRoot) then Right(resolved)
-        else Left(s"path escapes staging directory: $relative")
+      SafePaths.resolveInside(root, clean, allowCurrentDirectory = true)
 
   private def validateRelativeTarget(value: String): Either[String, Unit] =
     if value == "." then Right(())
@@ -402,11 +383,32 @@ private[core] object ArchiveExtractor:
     case value if value.endsWith("/") => s"$value$child"
     case value                        => s"$value/$child"
 
-  private def copyCurrentEntry(input: InputStream, target: Path): Unit =
+  private def copyCurrentEntry(
+      input: InputStream,
+      target: Path,
+      budget: ExtractedByteBudget
+  ): Unit =
     Option(target.getParent).foreach(parent => Files.createDirectories(parent))
-    val _ = Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING)
+    Using.resource(Files.newOutputStream(
+      target,
+      StandardOpenOption.CREATE,
+      StandardOpenOption.TRUNCATE_EXISTING,
+      StandardOpenOption.WRITE
+    )): output =>
+      val buffer = Array.ofDim[Byte](8192)
+      var count  = input.read(buffer)
+      while count != -1 do
+        budget.consume(count.toLong)
+        output.write(buffer, 0, count)
+        count = input.read(buffer)
 
-  private def copyBounded(input: InputStream, target: Path, bytes: Long): Unit =
+  private def copyBounded(
+      input: InputStream,
+      target: Path,
+      bytes: Long,
+      budget: ExtractedByteBudget
+  ): Unit =
+    budget.consume(bytes)
     Option(target.getParent).foreach(parent => Files.createDirectories(parent))
     Using.resource(Files.newOutputStream(
       target,
@@ -422,16 +424,17 @@ private[core] object ArchiveExtractor:
         output.write(buffer, 0, count)
         remaining = remaining - count
 
-  private def copyFile(source: Path, target: Path): Unit =
-    if Files.isSymbolicLink(source) || !Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS) then
-      throw IllegalArgumentException(s"unsafe archive source: $source")
-    Option(target.getParent).foreach(parent => Files.createDirectories(parent))
-    val _ = Files.copy(
-      source,
-      target,
-      LinkOption.NOFOLLOW_LINKS,
-      StandardCopyOption.REPLACE_EXISTING
-    )
+  private final class ExtractedByteBudget private ():
+    private var consumed = 0L
+
+    def consume(bytes: Long): Unit =
+      val next = if bytes < 0 || consumed > Long.MaxValue - bytes then -1L else consumed + bytes
+      validateExtractedSize(next).left.foreach: message =>
+        throw IllegalArgumentException(message)
+      consumed += bytes
+
+  private object ExtractedByteBudget:
+    def apply(): ExtractedByteBudget = new ExtractedByteBudget()
 
   private def skipFully(input: InputStream, bytes: Long): Long =
     var remaining = bytes
@@ -442,13 +445,3 @@ private[core] object ArchiveExtractor:
         else remaining = remaining - 1
       else remaining = remaining - skipped
     0L
-
-  private def deleteRecursively(path: Path): Unit = if Files.exists(path) then
-    Using.resource(Files.walk(path)): stream =>
-      stream
-        .iterator()
-        .asScala
-        .toVector
-        .sortBy(_.getNameCount)
-        .reverse
-        .foreach(child => Try(Files.deleteIfExists(child)))

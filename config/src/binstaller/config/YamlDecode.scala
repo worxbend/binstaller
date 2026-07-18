@@ -54,9 +54,10 @@ private[config] object YamlDecode:
 
   def requiredString(map: YamlMap, key: String, path: String): DecodeResult[String] =
     map.get(key) match
-      case Some(value: String) => DecodeResult.valid(value)
-      case Some(_)             => DecodeResult.invalid("", path, "required string must be a string")
-      case None                => DecodeResult.invalid("", path, "required string is missing")
+      case Some(value: String) if value.trim.nonEmpty => DecodeResult.valid(value)
+      case Some(_: String) => DecodeResult.invalid("", path, "required string must not be empty")
+      case Some(_)         => DecodeResult.invalid("", path, "required string must be a string")
+      case None            => DecodeResult.invalid("", path, "required string is missing")
 
   def optionalString(
       map: YamlMap,

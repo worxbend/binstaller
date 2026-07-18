@@ -11,6 +11,7 @@ final case class SudoCredentialRequest(
 /** Password supplied by an injected credential boundary. */
 final case class SudoPassword private (private[core] val secret: SecretText):
   private[core] def commandInput: CommandInput = CommandInput.SecretLine(secret)
+  private[core] def destroy(): Unit            = secret.destroy()
 
   override def toString: String = "<redacted>"
 
@@ -18,6 +19,9 @@ final case class SudoPassword private (private[core] val secret: SecretText):
 object SudoPassword:
   /** Wrap a runtime password while keeping it out of diagnostics and command argv. */
   def fromString(value: String): SudoPassword = SudoPassword(SecretText.fromString(value))
+
+  /** Copy a terminal-provided character buffer without creating an immutable String. */
+  def fromChars(value: Array[Char]): SudoPassword = SudoPassword(SecretText.fromChars(value))
 
 /** Expected credential-request outcomes. */
 enum SudoCredentialError:

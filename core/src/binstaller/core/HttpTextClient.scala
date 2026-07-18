@@ -4,8 +4,6 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.nio.charset.StandardCharsets
 import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
@@ -45,22 +43,18 @@ private[core] final class JdkHttpTextClient(client: HttpClient) extends HttpText
       url: String
   ): Either[HttpTextError, HttpTextResponse] = RuntimeUrl.httpsUri(url) match
     case Left(message) => Left(HttpTextError(url, message))
-    case Right(uri)    =>
-      val request = HttpRequest.newBuilder(uri).timeout(RuntimeHttpClient.requestTimeout).GET()
-        .build()
-      Try(client.send(request, HttpResponse.BodyHandlers.ofInputStream())) match
-        case Success(response) if response.statusCode() >= 200 && response.statusCode() < 300 =>
-          val provenance = UrlProvenance.fromResponse(url, response)
-          RuntimeUrl.httpsUri(provenance.finalUrl) match
-            case Right(_)      => readBounded(response.body(), maxResponseBytes)
-                .map(text => HttpTextResponse(text, provenance))
-                .left
-                .map(message => HttpTextError(url, message, Some(provenance)))
-            case Left(message) => Left(HttpTextError(url, message, Some(provenance)))
-        case Success(response) =>
-          val provenance = UrlProvenance.fromResponse(url, response)
-          Left(HttpTextError(url, s"HTTP ${response.statusCode()}", Some(provenance)))
-        case Failure(error) => Left(HttpTextError(url, error.getMessage))
+    case Right(_)      => Try(RuntimeHttpClient.getInputStream(client, url)) match
+        case Success(Right(result))
+            if result.response.statusCode() >= 200 &&
+              result.response.statusCode() < 300 =>
+          readBounded(result.response.body(), maxResponseBytes)
+            .map(text => HttpTextResponse(text, result.provenance))
+            .left.map(message => HttpTextError(url, message, Some(result.provenance)))
+        case Success(Right(result)) =>
+          result.response.body().close()
+          Left(HttpTextError(url, s"HTTP ${result.response.statusCode()}", Some(result.provenance)))
+        case Success(Left(message)) => Left(HttpTextError(url, message))
+        case Failure(error)         => Left(HttpTextError(url, error.getMessage))
 
   private def readBounded(input: InputStream, maxBytes: Long): Either[String, String] = Try:
     Using.resource(input): stream =>

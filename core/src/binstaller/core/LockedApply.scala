@@ -159,11 +159,12 @@ private[core] object LockedApplyValidator:
         )
       case (Some(expected), None) =>
         Some(s"tool '${tool.name}' is missing locked checksum ${render(expected)}")
-      case (None, Some(actual)) if actual.algorithm != "sha256" ||
-          !actual.value.matches("(?i)^[0-9a-f]{64}$") =>
+      case (None, Some(actual))
+          if actual.algorithm != "sha256" ||
+            !actual.value.matches("(?i)^[0-9a-f]{64}$") =>
         Some(s"tool '${tool.name}' has invalid locked checksum ${render(actual)}")
       case (None, Some(_)) => None
-      case _ => None
+      case _               => None
 
   private def downloadUrlProblem(tool: ResolvedTool, lockedTool: LockFileTool): Option[String] =
     Option.when(lockedTool.downloadProvenance.initialUrl != tool.download.url)(

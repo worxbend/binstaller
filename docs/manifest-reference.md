@@ -59,15 +59,14 @@ the default render and apply order.
   a command control.
 
 Developer mode preserves the historical behavior for local tooling profiles:
-dynamic latest URLs, missing checksums, and the system `tar.xz` fallback are
-allowed by default. Sudo symlinks still require `allowSudoSymlinks: true`.
+dynamic latest URLs and missing checksums are allowed by default. Sudo symlinks
+still require `allowSudoSymlinks: true`.
 
 Strict mode rejects production-sensitive risks by default:
 
 - `dynamic.latest-url` version sources and download URLs containing `/latest`.
 - Missing `download.checksum` values.
 - `sudo: true` symlinks unless `allowSudoSymlinks: true`.
-- `tar.xz` archives, because they currently use the system `tar` fallback.
 - Archive candidate fallback, if a later extractor adds candidate discovery.
 
 Strict profiles can opt into reviewed exceptions with explicit booleans:
@@ -78,7 +77,6 @@ policy:
   allowDynamicLatestUrls: true
   allowMissingChecksums: true
   allowSudoSymlinks: true
-  allowTarXzFallback: true
   allowArchiveCandidateFallback: true
 ```
 
@@ -90,9 +88,12 @@ state paths.
 Interpolation supports literal `${name}` references. Shell forms such as
 `$(cmd)` are not executed.
 
-Available variables include runtime variables such as `HOME`, manifest
-`spec.vars`, policy-derived `appsDir`, tool-local `version`, `installDir`, and
-`downloadPath`.
+Available variables include a fixed allowlist of non-secret runtime environment
+variables (`HOME`, `USER`, `LOGNAME`, `SHELL`, and the `XDG_*` base directories),
+manifest `spec.vars`, policy-derived `appsDir`, tool-local `version`,
+`installDir`, and `downloadPath`. Arbitrary process environment values are not
+exposed to interpolation, so a manifest cannot read secrets out of the
+environment into a resolved URL.
 
 Version sources:
 
@@ -147,9 +148,10 @@ plan:
 
 Supported archive types are `zip`, `tar.gz`, and `tar.xz`.
 
-`zip` and `tar.gz` use native extraction paths. `tar.xz` uses a structured
-system `tar` fallback into private staging, then copies only declared mapped
-members.
+All three types use native, in-process extraction. Each archive member name is
+normalized and confined to private staging before any bytes are written, and
+only declared mapped members are copied into the install directory. Extraction
+also enforces an aggregate expanded-byte budget to bound decompression bombs.
 
 File mapping example:
 

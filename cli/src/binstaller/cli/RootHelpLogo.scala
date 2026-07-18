@@ -27,7 +27,7 @@ private[cli] object RootHelpLogo:
       "|_.__/|_|_| |_|___/\\__\\__,_|_|_|\\___|_|   "
     )
     val colors = Vector(fansi.Color.Cyan, fansi.Color.Blue, fansi.Color.Magenta)
-    val title =
+    val title  =
       if outputStyle.supportsAnsi then fansi.Bold.On(fansi.Color.Green("binary installer")).toString
       else "binary installer"
     lines.zipWithIndex

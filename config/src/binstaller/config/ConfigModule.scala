@@ -66,7 +66,6 @@ final case class InstallPolicy(
     allowSudoSymlinks: AllowSudoSymlinks,
     allowDynamicLatestUrls: Option[PolicyOverride],
     allowMissingChecksums: Option[PolicyOverride],
-    allowTarXzFallback: Option[PolicyOverride],
     allowArchiveCandidateFallback: Option[PolicyOverride],
     stateFile: Option[String]
 )

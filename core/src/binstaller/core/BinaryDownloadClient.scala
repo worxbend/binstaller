@@ -4,7 +4,6 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.http.HttpClient
-import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
 import java.nio.file.Files
@@ -33,6 +32,7 @@ final case class BinaryDownloadArtifact(
     sha256: Sha256Digest,
     sizeBytes: Long
 ):
+
   def discard(): Unit =
     val _ = Try(Files.deleteIfExists(path))
 
@@ -95,7 +95,8 @@ trait BinaryDownloadClient:
       )
     match
       case Success(artifact) => Right(artifact)
-      case Failure(error)    => Left(BinaryDownloadError(url, error.getMessage, Some(result.provenance)))
+      case Failure(error)    =>
+        Left(BinaryDownloadError(url, error.getMessage, Some(result.provenance)))
 
 /** Binary download client constructors. */
 object BinaryDownloadClient:
@@ -136,7 +137,9 @@ private[core] final class JdkBinaryDownloadClient(
     progressObserver
   ).flatMap: artifact =>
     try Right(BinaryDownloadResult(Files.readAllBytes(artifact.path), artifact.provenance))
-    catch case error: Exception => Left(BinaryDownloadError(url, error.getMessage, Some(artifact.provenance)))
+    catch
+      case error: Exception =>
+        Left(BinaryDownloadError(url, error.getMessage, Some(artifact.provenance)))
     finally artifact.discard()
 
   override def downloadArtifactWithProvenance(
@@ -144,19 +147,20 @@ private[core] final class JdkBinaryDownloadClient(
       progressObserver: BinaryDownloadProgressObserver
   ): Either[BinaryDownloadError, BinaryDownloadArtifact] = RuntimeUrl.httpsUri(url) match
     case Left(message) => Left(BinaryDownloadError(url, message))
-    case Right(uri)    =>
-      val request = HttpRequest.newBuilder(uri).timeout(RuntimeHttpClient.requestTimeout).GET()
-        .build()
-      Try(client.send(request, HttpResponse.BodyHandlers.ofInputStream())) match
-        case Success(response) if response.statusCode() >= 200 && response.statusCode() < 300 =>
-          val provenance = UrlProvenance.fromResponse(url, response)
-          RuntimeUrl.httpsUri(provenance.finalUrl) match
-            case Left(message) => Left(BinaryDownloadError(url, message, Some(provenance)))
-            case Right(_)      => readBodyToFile(provenance, response, progressObserver)
-        case Success(response) =>
-          val provenance = UrlProvenance.fromResponse(url, response)
-          Left(BinaryDownloadError(url, s"HTTP ${response.statusCode()}", Some(provenance)))
-        case Failure(error) => Left(BinaryDownloadError(url, error.getMessage))
+    case Right(_)      => Try(RuntimeHttpClient.getInputStream(client, url)) match
+        case Success(Right(result))
+            if result.response.statusCode() >= 200 &&
+              result.response.statusCode() < 300 =>
+          readBodyToFile(result.provenance, result.response, progressObserver)
+        case Success(Right(result)) =>
+          result.response.body().close()
+          Left(BinaryDownloadError(
+            url,
+            s"HTTP ${result.response.statusCode()}",
+            Some(result.provenance)
+          ))
+        case Success(Left(message)) => Left(BinaryDownloadError(url, message))
+        case Failure(error)         => Left(BinaryDownloadError(url, error.getMessage))
 
   private def readBodyToFile(
       provenance: UrlProvenance,
@@ -169,16 +173,18 @@ private[core] final class JdkBinaryDownloadClient(
 
     val tempPath = Try(Files.createTempFile("binstaller-download-", ".artifact")) match
       case Failure(error) => return Left(BinaryDownloadError(
-          provenance.initialUrl, error.getMessage, Some(provenance)
+          provenance.initialUrl,
+          error.getMessage,
+          Some(provenance)
         ))
       case Success(path) => path
     (Try:
       Using.resource(response.body()): input =>
         val outputStream = Files.newOutputStream(
-            tempPath,
-            StandardOpenOption.TRUNCATE_EXISTING,
-            StandardOpenOption.WRITE
-          )
+          tempPath,
+          StandardOpenOption.TRUNCATE_EXISTING,
+          StandardOpenOption.WRITE
+        )
         Using.resource(outputStream): output =>
           BoundedBinaryBodyReader.write(
             provenance.finalUrl,

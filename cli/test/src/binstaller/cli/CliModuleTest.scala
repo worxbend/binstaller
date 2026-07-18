@@ -35,6 +35,19 @@ object CliModuleTest extends TestSuite:
     test("module path includes upstream modules"):
       assert(CliModule.modulePath == Vector("config", "core", "cli"))
 
+    test("terminal password conversion copies and clears the mutable input buffer"):
+      val chars  = "secret".toCharArray
+      val result = TerminalSudoCredentialProvider.passwordFromChars(Some(chars))
+
+      assert(result.isRight)
+      assert(chars.forall(_ == '\u0000'))
+
+    test("terminal password conversion treats an empty or missing password as canceled"):
+      assert(TerminalSudoCredentialProvider.passwordFromChars(Some(Array.emptyCharArray)) ==
+        Left(binstaller.core.SudoCredentialError.Canceled))
+      assert(TerminalSudoCredentialProvider.passwordFromChars(None) ==
+        Left(binstaller.core.SudoCredentialError.Canceled))
+
     test("help describes the binstaller binary installer"):
       val result = runCli(Vector("--help"))
 
