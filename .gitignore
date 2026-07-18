@@ -46,9 +46,3 @@ config.local.yaml
 *.tgz
 *.zip
 SHA256SUMS
-
-# Agent Loop runtime
-.agent-loop/
-
-# Local Codex/session scratch data
-.codex/

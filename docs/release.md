@@ -63,7 +63,6 @@ Before tagging, run:
 ./mill app.run lock --config config.example.yaml --output /tmp/binstaller.lock.json
 ./mill mill.scalalib.scalafmt/checkFormatAll
 git diff --check
-jq empty .agent-loop/tasks.json
 ```
 
 ## Native Smoke Checks

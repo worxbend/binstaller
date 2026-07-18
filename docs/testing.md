@@ -40,7 +40,7 @@ Use `./mill mill.scalalib.scalafmt/reformatAll` to repair formatting.
 For long Mill commands, stream and save output with `tee`:
 
 ```bash
-LOGFILE=".agent-loop/validations/check-$(date +%s).log"
+LOGFILE="/tmp/binstaller-check-$(date +%s).log"
 ./mill __.test 2>&1 | tee "$LOGFILE"
 ```
 
