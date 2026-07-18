@@ -2,7 +2,7 @@
 # Install the binstaller CLI from GitHub Releases.
 #
 # Usage:
-#   curl --proto '=https' --tlsv1.2 -sSf \
+#   curl --proto '=https' --tlsv1.2 -sSfL \
 #     https://github.com/worxbend/binstaller/releases/latest/download/install.sh | sh
 #
 # Environment variables:

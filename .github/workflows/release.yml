@@ -247,7 +247,7 @@ jobs:
         shell: bash
         run: |
           version="${{ steps.version.outputs.value }}"
-          notes=$'🚀 Automated binstaller release for '"${version}"$'.\n\nInstall on Linux:\n\n```\ncurl --proto \'=https\' --tlsv1.2 -sSf https://github.com/worxbend/binstaller/releases/latest/download/install.sh | sh\n```\n\nArtifacts:\n- 🐧 Linux amd64 GraalVM native CLI\n- 🐧 Linux arm64 GraalVM native CLI\n- 🍎 macOS amd64 GraalVM native CLI\n- 🍎 macOS arm64 GraalVM native CLI\n- 🧰 Example configuration\n- 📜 install.sh\n\nEach binary and config asset includes a 🔐 SHA-256 checksum.'
+          notes=$'🚀 Automated binstaller release for '"${version}"$'.\n\nInstall on Linux:\n\n```\ncurl --proto \'=https\' --tlsv1.2 -sSfL https://github.com/worxbend/binstaller/releases/latest/download/install.sh | sh\n```\n\nArtifacts:\n- 🐧 Linux amd64 GraalVM native CLI\n- 🐧 Linux arm64 GraalVM native CLI\n- 🍎 macOS amd64 GraalVM native CLI\n- 🍎 macOS arm64 GraalVM native CLI\n- 🧰 Example configuration\n- 📜 install.sh\n\nEach binary and config asset includes a 🔐 SHA-256 checksum.'
 
           if gh release view "${version}" >/dev/null 2>&1; then
             echo "♻️ Updating existing release ${version}"
