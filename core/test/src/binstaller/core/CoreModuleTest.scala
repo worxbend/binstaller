@@ -605,7 +605,10 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!result.lines.exists(_.contains("Exception")))
 
     test("versions output includes package version summary table"):
-      val service = BinaryInstallerService.resolving(FakeHttpTextClient("v1.34.0"))
+      val service = BinaryInstallerService.resolving(
+        FakeHttpTextClient("v1.34.0"),
+        testResolutionOptions
+      )
       val result  = service.versions(applyOptions(exampleConfigPath))
 
       assert(result.exitCode == 0)

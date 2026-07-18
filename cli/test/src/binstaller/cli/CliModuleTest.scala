@@ -10,6 +10,7 @@ import binstaller.core.DirectBinaryInstaller
 import binstaller.core.HttpTextClient
 import binstaller.core.HttpTextError
 import binstaller.core.HttpTextResponse
+import binstaller.core.HostPlatform
 import binstaller.core.InstallFileSystem
 import binstaller.core.InstallerEventObserver
 import binstaller.core.InstallerOptions
@@ -17,6 +18,7 @@ import binstaller.core.InstallerResult
 import binstaller.core.LockedApplyMode
 import binstaller.core.LockOptions
 import binstaller.core.ResetState
+import binstaller.core.ResolutionOptions
 import binstaller.core.ApplyStateStore
 import binstaller.core.UrlProvenance
 import binstaller.core.UrlRedirectHop
@@ -283,7 +285,8 @@ object CliModuleTest extends TestSuite:
               302
             ))
           )
-        )
+        ),
+        exampleResolutionOptions
       )
 
       val result = runCli(Vector("versions", "--config", configExamplePath.toString), service)
@@ -549,14 +552,22 @@ object CliModuleTest extends TestSuite:
 
   private val configExamplePath: Path = findRepoFile("config.example.yaml")
 
+  private val exampleResolutionOptions: ResolutionOptions =
+    ResolutionOptions.fromEnvironment().copy(hostPlatform = HostPlatform("linux", "amd64"))
+
   private val resolvingService: BinaryInstallerService =
-    BinaryInstallerService.resolving(FakeHttpTextClient("v1.34.0"))
+    BinaryInstallerService.resolving(
+      FakeHttpTextClient("v1.34.0"),
+      DirectBinaryInstaller.default,
+      resolutionOptions = exampleResolutionOptions
+    )
 
   private def resolvingServiceWithStateRoot(stateRoot: Path): BinaryInstallerService =
     BinaryInstallerService.resolving(
       FakeHttpTextClient("v1.34.0"),
       DirectBinaryInstaller.default,
-      ApplyStateStore.nio(stateRoot)
+      ApplyStateStore.nio(stateRoot),
+      resolutionOptions = exampleResolutionOptions
     )
 
   private val exampleToolNames: Vector[String] = Vector(

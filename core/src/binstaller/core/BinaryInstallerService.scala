@@ -47,6 +47,17 @@ object BinaryInstallerService:
   def resolving(httpTextClient: HttpTextClient): BinaryInstallerService =
     resolving(httpTextClient, DirectBinaryInstaller.default)
 
+  /** Create a resolving service with explicit resolution inputs, primarily for deterministic
+   *  host-platform tests. */
+  def resolving(
+      httpTextClient: HttpTextClient,
+      resolutionOptions: ResolutionOptions
+  ): BinaryInstallerService = resolving(
+    httpTextClient,
+    DirectBinaryInstaller.default,
+    resolutionOptions = resolutionOptions
+  )
+
   /** Create the production resolving service with explicit sudo credential handling. */
   def resolving(
       httpTextClient: HttpTextClient,
@@ -62,10 +73,11 @@ object BinaryInstallerService:
       installer: DirectBinaryInstaller,
       stateStore: ApplyStateStore = ApplyStateStore.cwd,
       metadataClient: BinaryMetadataClient = BinaryMetadataClient.jdk,
-      lockFileStore: LockFileStore = LockFileStore.nio
+      lockFileStore: LockFileStore = LockFileStore.nio,
+      resolutionOptions: ResolutionOptions = ResolutionOptions.fromEnvironment()
   ): BinaryInstallerService = ResolvingBinaryInstallerService(
     httpTextClient,
-    ResolutionOptions.fromEnvironment(),
+    resolutionOptions,
     installer,
     stateStore,
     metadataClient,

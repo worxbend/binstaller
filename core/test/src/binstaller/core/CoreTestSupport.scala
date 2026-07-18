@@ -629,7 +629,9 @@ private[core] trait CoreTestSupport:
        |""".stripMargin
 
   protected val testResolutionOptions: ResolutionOptions = ResolutionOptions(
-    Map("HOME" -> "/home/test")
+    Map("HOME" -> "/home/test"),
+    SensitiveValueRedactions.empty,
+    HostPlatform("linux", "amd64")
   )
 
   protected val exampleToolNames: Vector[String] = Vector(
