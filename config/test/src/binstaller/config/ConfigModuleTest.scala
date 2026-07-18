@@ -295,6 +295,14 @@ object ConfigModuleTest extends TestSuite:
       assert(errors.exists(errorAt("metadata.name")))
       assert(errors.exists(_.message.contains("path separators")))
 
+    test("error accumulation surfaces every failing sibling field, not just the first"):
+      val errors = validationErrors(twoEmptySiblingFieldsYaml)
+
+      // url and filename are decoded as siblings in the same accumulate body; both must surface.
+      assert(errors.exists(errorAt("spec.plan[0].spec.download.url")))
+      assert(errors.exists(errorAt("spec.plan[0].spec.download.filename")))
+      assert(errors.count(_.message.contains("must not be empty")) >= 2)
+
   private def validationErrors(yaml: String): Vector[ValidationError] =
     ConfigModule.loadString(yaml) match
       case Left(ConfigLoadError.ValidationFailed(errors)) => errors
@@ -744,6 +752,30 @@ object ConfigModuleTest extends TestSuite:
                                                  |        executables:
                                                  |          - path: bin/alpha
                                                  |""".stripMargin
+
+  private val twoEmptySiblingFieldsYaml: String = """
+                                                    |apiVersion: binstaller.io/v1alpha1
+                                                    |kind: BinaryDistributionProfile
+                                                    |metadata:
+                                                    |  name: two-empty-siblings
+                                                    |spec:
+                                                    |  policy:
+                                                    |    appsDir: "${HOME}/.apps"
+                                                    |  vars: {}
+                                                    |  versions:
+                                                    |    alpha: "1.0.0"
+                                                    |  plan:
+                                                    |    - name: alpha
+                                                    |      kind: binary-tool
+                                                    |      spec:
+                                                    |        versionRef: alpha
+                                                    |        installDir: "${appsDir}/alpha"
+                                                    |        download:
+                                                    |          url: ""
+                                                    |          filename: ""
+                                                    |        executables:
+                                                    |          - path: bin/alpha
+                                                    |""".stripMargin
 
   private def policyModeYaml(policyLines: String): String =
     s"""

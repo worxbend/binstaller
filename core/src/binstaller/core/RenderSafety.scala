@@ -12,7 +12,13 @@ object SensitiveValueRedactions:
   /** Redaction policy that does not hide any values. */
   val empty: SensitiveValueRedactions = SensitiveValueRedactions(Vector.empty)
 
-  /** Derive sensitive values from environment-like variables by inspecting variable names. */
+  /** Derive sensitive values from environment-like variables by inspecting variable names.
+   *
+   * Note: in production this is always empty, because [[RuntimeTemplateEnvironment.allowed]] admits
+   * only non-secret names (HOME/USER/XDG_*), none of which are sensitive-named. It is real
+   * defense-in-depth only for callers that inject their own runtime variables (and if the allowlist
+   * ever grows to include a secret-named var). Control-character scrubbing in [[display]] is
+   * unconditional and independent of this list — that is the always-on protection. */
   def fromRuntimeVariables(values: Map[String, String]): SensitiveValueRedactions =
     val redactedValues = values.toVector.collect:
       case (name, value) if isSensitiveName(name) && value.length >= 4 => value

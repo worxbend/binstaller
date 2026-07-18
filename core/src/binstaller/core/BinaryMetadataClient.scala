@@ -28,17 +28,23 @@ trait BinaryMetadataClient:
 
 /** Binary metadata client constructors. */
 object BinaryMetadataClient:
-  /** JDK HTTP implementation using HEAD with HTTPS, redirects, and timeout. */
+  /** JDK HTTP implementation. Note: sha256 requires the artifact bytes, so this performs a full
+   *  streamed GET (hashing in a single pass), not a HEAD. Under `--locked` the artifact is fetched
+   *  here for lock validation and again by the installer; this keeps lock validation all-or-nothing
+   *  (every tool verified before any install) without holding every artifact on disk at once. */
   def jdk: BinaryMetadataClient = JdkBinaryMetadataClient(RuntimeHttpClient.create())
 
-private[core] final class JdkBinaryMetadataClient(client: HttpClient) extends BinaryMetadataClient:
+private[core] final class JdkBinaryMetadataClient(
+    client: HttpClient,
+    hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved
+) extends BinaryMetadataClient:
 
   private val maxBytes = BinaryDownloadLimits.default.maxBytes
 
   def metadata(url: String): Either[BinaryMetadataError, BinaryMetadata] =
     RuntimeUrl.httpsUri(url) match
       case Left(message) => Left(BinaryMetadataError(url, message))
-      case Right(_)      => Try(RuntimeHttpClient.getInputStream(client, url)) match
+      case Right(_)      => Try(RuntimeHttpClient.getInputStream(client, url, hostGuard)) match
           case Success(Right(result))
               if result.response.statusCode() >= 200 &&
                 result.response.statusCode() < 300 =>

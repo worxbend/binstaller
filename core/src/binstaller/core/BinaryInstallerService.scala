@@ -54,40 +54,15 @@ object BinaryInstallerService:
   ): BinaryInstallerService =
     resolving(httpTextClient, DirectBinaryInstaller.default(sudoCredentials))
 
-  /** Create a resolving service with an injected installer and the default cwd state store. */
-  def resolving(
-      httpTextClient: HttpTextClient,
-      installer: DirectBinaryInstaller
-  ): BinaryInstallerService = ResolvingBinaryInstallerService(
-    httpTextClient,
-    ResolutionOptions.fromEnvironment(),
-    installer,
-    ApplyStateStore.cwd,
-    BinaryMetadataClient.jdk,
-    LockFileStore.nio
-  )
-
-  /** Create a resolving service with injectable installer and state storage boundaries. */
+  /** Create a resolving service with an injected installer and optionally-overridden state, lock
+   *  metadata, and lock-file storage boundaries. Defaults reproduce the production wiring, so
+   *  callers override only the boundaries a given test needs. */
   def resolving(
       httpTextClient: HttpTextClient,
       installer: DirectBinaryInstaller,
-      stateStore: ApplyStateStore
-  ): BinaryInstallerService = ResolvingBinaryInstallerService(
-    httpTextClient,
-    ResolutionOptions.fromEnvironment(),
-    installer,
-    stateStore,
-    BinaryMetadataClient.jdk,
-    LockFileStore.nio
-  )
-
-  /** Create a resolving service with injectable installer, state, and lock metadata boundaries. */
-  def resolving(
-      httpTextClient: HttpTextClient,
-      installer: DirectBinaryInstaller,
-      stateStore: ApplyStateStore,
-      metadataClient: BinaryMetadataClient,
-      lockFileStore: LockFileStore
+      stateStore: ApplyStateStore = ApplyStateStore.cwd,
+      metadataClient: BinaryMetadataClient = BinaryMetadataClient.jdk,
+      lockFileStore: LockFileStore = LockFileStore.nio
   ): BinaryInstallerService = ResolvingBinaryInstallerService(
     httpTextClient,
     ResolutionOptions.fromEnvironment(),

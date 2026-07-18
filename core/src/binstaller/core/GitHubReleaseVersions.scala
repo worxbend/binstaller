@@ -8,12 +8,18 @@ import scala.util.Try
 /** GitHub release metadata used to annotate `versions` output. */
 private[core] object GitHubReleaseVersions:
 
-  def newerVersionsByTool(
+  /** Whether a newer GitHub release exists for a tool, or the status could not be determined. */
+  enum LatestReleaseStatus:
+    case Newer(tag: String)
+    case UpToDate
+    case Unknown
+
+  def versionStatusByTool(
       plan: ResolvedPlan,
       httpTextClient: HttpTextClient
-  ): Map[String, String] = candidates(plan)
+  ): Map[String, LatestReleaseStatus] = candidates(plan)
     .view
-    .flatMap(candidate => newerVersion(candidate, httpTextClient).map(candidate.toolName -> _))
+    .map(candidate => candidate.toolName -> latestStatus(candidate, httpTextClient))
     .toMap
 
   private def candidates(
@@ -29,11 +35,17 @@ private[core] object GitHubReleaseVersions:
     case ResolvedVersion.Concrete(_, _)                       => None
     case ResolvedVersion.DynamicLatestUrl(_)                  => None
 
-  private def newerVersion(
+  // A failed latest-release fetch (rate limit, network, malformed JSON) or an unorderable version
+  // pair yields Unknown so callers can distinguish "could not check" from a genuine "up to date".
+  private def latestStatus(
       candidate: GitHubReleaseCandidate,
       httpTextClient: HttpTextClient
-  ): Option[String] = latestTag(candidate.repo, httpTextClient).toOption.flatMap: latest =>
-    Option.when(VersionOrdering.compare(latest, candidate.current) == VersionOrder.Greater)(latest)
+  ): LatestReleaseStatus = latestTag(candidate.repo, httpTextClient) match
+    case Left(_)    => LatestReleaseStatus.Unknown
+    case Right(tag) => VersionOrdering.compare(tag, candidate.current) match
+        case VersionOrder.Greater                   => LatestReleaseStatus.Newer(tag)
+        case VersionOrder.Equal | VersionOrder.Less => LatestReleaseStatus.UpToDate
+        case VersionOrder.Unknown                   => LatestReleaseStatus.Unknown
 
   private def latestTag(repo: GitHubRepo, httpTextClient: HttpTextClient): Either[String, String] =
     httpTextClient.getText(repo.latestReleaseApiUrl)

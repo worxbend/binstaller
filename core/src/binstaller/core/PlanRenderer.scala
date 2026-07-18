@@ -81,12 +81,13 @@ private[core] object PlanRenderer:
 
   private def renderChecksum(checksum: Option[ResolvedChecksum]): String = checksum match
     case Some(value) => s"${value.algorithm.value} ${value.value} (${checksumStatus(value)})"
-    case None        => "missing (not configured)"
+    case None => "missing (not configured) - NO integrity verification will be performed"
 
   private def checksumStatus(checksum: ResolvedChecksum): String = checksum.source match
-    case ResolvedChecksumSource.Configured                        => "configured"
+    case ResolvedChecksumSource.Configured                        => "configured (pinned by author)"
     case ResolvedChecksumSource.Discovered(url, file, provenance) =>
-      s"discovered from $url for $file" + UrlProvenance.redirectSuffix(Some(provenance))
+      s"discovered from $url for $file" + UrlProvenance.redirectSuffix(Some(provenance)) +
+        "; trust-on-first-use: fetched from the same release, not independent integrity"
 
   private def renderCreateDirectories(tool: ResolvedTool): Vector[String] =
     if tool.createDirectories.isEmpty then Vector.empty

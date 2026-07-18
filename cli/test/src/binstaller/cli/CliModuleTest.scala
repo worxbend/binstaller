@@ -166,6 +166,34 @@ object CliModuleTest extends TestSuite:
       assert(result.exitCode == 0)
       assert(service.applyOptions.exists(_.applyParallelism == ApplyParallelism(8)))
 
+    test("apply rejects a non-positive parallelism with a usage error, not a stack trace"):
+      val service = RecordingInstallerService()
+      val result  = runCli(Vector("apply", "--parallelism", "0"), service)
+
+      assert(result.exitCode == 2)
+      assert(result.err.contains("parallelism must be at least 1"))
+      assert(service.applyOptions.isEmpty)
+
+    test("output style honors NO_COLOR, TERM=dumb, and force-color escape hatches"):
+      import CliOutputStyle.{Ansi, Plain}
+      assert(CliOutputStyle.forProcessOutput(Map.empty, interactive = true) == Ansi)
+      assert(CliOutputStyle.forProcessOutput(Map.empty, interactive = false) == Plain)
+      assert(CliOutputStyle.forProcessOutput(Map("NO_COLOR" -> ""), interactive = true) == Plain)
+      assert(CliOutputStyle.forProcessOutput(Map("TERM" -> "dumb"), interactive = true) == Plain)
+      // stdin redirected (non-interactive) but the user forces color:
+      assert(CliOutputStyle.forProcessOutput(Map("FORCE_COLOR" -> "1"), interactive = false) == Ansi)
+      assert(
+        CliOutputStyle.forProcessOutput(Map("CLICOLOR_FORCE" -> "1"), interactive = false) == Ansi
+      )
+      assert(CliOutputStyle.forProcessOutput(Map("FORCE_COLOR" -> "0"), interactive = false) == Plain)
+      // NO_COLOR wins even against a force request:
+      assert(
+        CliOutputStyle.forProcessOutput(
+          Map("NO_COLOR" -> "", "FORCE_COLOR" -> "1"),
+          interactive = true
+        ) == Plain
+      )
+
     test("plan forwards locked options"):
       val service = RecordingInstallerService()
       val result  = runCli(

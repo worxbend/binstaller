@@ -1,6 +1,8 @@
 package binstaller.core
 
 import java.net.URI
+import java.net.Inet4Address
+import java.net.Inet6Address
 import java.net.InetAddress
 import java.nio.file.Path
 import scala.jdk.CollectionConverters.*
@@ -28,7 +30,9 @@ private[core] object NetworkTargetGuard:
   )
 
   def validate(host: String): Either[String, Unit] =
-    val normalized = host.stripPrefix("[").stripSuffix("]").toLowerCase
+    // A single trailing dot (FQDN root) still resolves to the same target, so strip it before the
+    // static name/literal checks or `localhost.` would slip past them.
+    val normalized = host.stripPrefix("[").stripSuffix("]").stripSuffix(".").toLowerCase
     if blockedNames(normalized) || normalized.endsWith(".localhost") ||
       normalized.endsWith(".local")
     then Left("URL host must not target a local or metadata endpoint")
@@ -36,26 +40,53 @@ private[core] object NetworkTargetGuard:
       Try(InetAddress.getByName(normalized)).toEither.left
         .map(_ => "URL host contains an invalid IP address")
         .flatMap: address =>
-          if address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress ||
-            address.isSiteLocalAddress || address.isMulticastAddress
-          then Left("URL host must not target a private, local, link-local, or multicast address")
+          // Route the literal through the same predicate as resolved addresses so the static and
+          // resolved checks cannot drift.
+          if isBlockedAddress(address) then
+            Left("URL host must not target a private, local, link-local, or multicast address")
           else Right(())
     else Right(())
 
-  /** Resolve public-looking hostnames immediately before a request to catch DNS aliases to LANs. */
+  /**
+   * Resolve the host immediately before a request as fail-closed defense-in-depth. The authoritative
+   * rebinding guarantee comes from the installed [[GuardedInetAddressResolverProvider]]: the HTTP
+   * client re-resolves independently, so this pre-check alone cannot pin the connected address.
+   */
   def validateResolved(host: String): Either[String, Unit] =
-    Try(InetAddress.getAllByName(host).toVector).toOption match
-      case None => Right(()) // the HTTP request will report the authoritative resolution failure
-      case Some(addresses) if addresses.exists(isBlockedAddress) =>
-        Left("URL host resolves to a private, local, link-local, or multicast address")
-      case Some(_) => Right(())
+    Try(InetAddress.getAllByName(host).toVector).toEither.left
+      .map(_ => "URL host could not be resolved")
+      .flatMap: addresses =>
+        if addresses.isEmpty then Left("URL host did not resolve to any address")
+        else if addresses.exists(isBlockedAddress) then
+          Left("URL host resolves to a private, local, link-local, or multicast address")
+        else Right(())
 
   private def isIpLiteral(host: String): Boolean = host.contains(':') ||
     host.nonEmpty && host.forall(character => character.isDigit || character == '.')
 
-  private def isBlockedAddress(address: InetAddress): Boolean = address.isAnyLocalAddress ||
-    address.isLoopbackAddress || address.isLinkLocalAddress ||
-    address.isSiteLocalAddress || address.isMulticastAddress
+  /** Shared by the static literal path, the pre-request check, and the JVM-wide resolver guard. */
+  private[core] def isBlockedAddress(address: InetAddress): Boolean =
+    address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress ||
+      address.isSiteLocalAddress || address.isMulticastAddress ||
+      isUniqueLocalIpv6(address) || isCarrierGradeNat(address) || isUnspecifiedIpv4Block(address)
+
+  // IPv6 unique-local fc00::/7 (first byte 1111 110x). InetAddress unmaps ::ffff:v4 to Inet4Address,
+  // so IPv4-mapped forms fall through to the IPv4 predicates above.
+  private def isUniqueLocalIpv6(address: InetAddress): Boolean = address match
+    case v6: Inet6Address => (v6.getAddress()(0) & 0xfe) == 0xfc
+    case _                => false
+
+  // IPv4 carrier-grade NAT 100.64.0.0/10.
+  private def isCarrierGradeNat(address: InetAddress): Boolean = address match
+    case v4: Inet4Address =>
+      val bytes = v4.getAddress()
+      (bytes(0) & 0xff) == 100 && (bytes(1) & 0xc0) == 0x40
+    case _ => false
+
+  // IPv4 "this network" 0.0.0.0/8.
+  private def isUnspecifiedIpv4Block(address: InetAddress): Boolean = address match
+    case v4: Inet4Address => (v4.getAddress()(0) & 0xff) == 0
+    case _                => false
 
 /** Normalized absolute installation root. */
 final case class InstallRoot private (path: Path)

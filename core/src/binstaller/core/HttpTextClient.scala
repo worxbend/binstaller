@@ -33,7 +33,10 @@ object HttpTextClient:
   /** JDK HTTP implementation with HTTPS, timeout, and normal redirect handling. */
   def jdk: HttpTextClient = JdkHttpTextClient(RuntimeHttpClient.create())
 
-private[core] final class JdkHttpTextClient(client: HttpClient) extends HttpTextClient:
+private[core] final class JdkHttpTextClient(
+    client: HttpClient,
+    hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved
+) extends HttpTextClient:
 
   private val maxResponseBytes = 4L * 1024L * 1024L
 
@@ -43,7 +46,7 @@ private[core] final class JdkHttpTextClient(client: HttpClient) extends HttpText
       url: String
   ): Either[HttpTextError, HttpTextResponse] = RuntimeUrl.httpsUri(url) match
     case Left(message) => Left(HttpTextError(url, message))
-    case Right(_)      => Try(RuntimeHttpClient.getInputStream(client, url)) match
+    case Right(_)      => Try(RuntimeHttpClient.getInputStream(client, url, hostGuard)) match
         case Success(Right(result))
             if result.response.statusCode() >= 200 &&
               result.response.statusCode() < 300 =>

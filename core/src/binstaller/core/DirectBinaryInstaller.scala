@@ -40,8 +40,13 @@ final class DirectBinaryInstaller(
     sudoCredentials: SudoCredentialProvider = SudoCredentialProvider.unavailable
 ):
 
-  /** Install every tool in a plan and render terminal result lines. */
-  def installPlan(
+  /** Install every tool in an already-resolved plan and render terminal result lines.
+   *
+   * Core-internal (tests/helpers): it consumes a [[ResolvedPlan]] directly and therefore skips the
+   * PlanResolver appsDir-containment validation that the production ingest path enforces. Not part
+   * of the public boundary — go through [[BinaryInstallerService]] instead.
+   */
+  private[core] def installPlan(
       plan: ResolvedPlan,
       verboseOutput: VerboseOutput = VerboseOutput.Disabled,
       progressObserver: BinaryDownloadProgressObserver = BinaryDownloadProgressObserver.none
@@ -126,8 +131,10 @@ final class DirectBinaryInstaller(
       Vector(TerminalToolResult.line(terminal, redactions))
     case TerminalToolResult.Failed(_, _) => Vector(TerminalToolResult.line(terminal, redactions))
 
-  /** Install a single tool without sudo symlink support. Intended for focused tests and helpers. */
-  def installTool(tool: ResolvedTool): Either[ToolInstallError, ToolInstallSuccess] =
+  /** Install a single tool without sudo symlink support. Core-internal (tests/helpers): it takes a
+   *  [[ResolvedTool]] directly and so bypasses the PlanResolver appsDir-containment validation the
+   *  production path enforces; not part of the public boundary. */
+  private[core] def installTool(tool: ResolvedTool): Either[ToolInstallError, ToolInstallSuccess] =
     val policy = ResolvedPolicy(
       tool.installDir,
       None,
@@ -199,33 +206,17 @@ final class DirectBinaryInstaller(
         case None => None
       RenderSafety.displayLines(Vector(downloadLine) ++ extractionLine.toVector, redactions)
 
+  // The synchronous path is exactly the parallel prepare + finalize pipeline run inline: prepare
+  // downloads/verifies/stages (and discards the artifact + staging on its own failure), then
+  // completePreparedTool replaces/verifies/links. Composing them keeps the two paths in lockstep.
   private def installDownloadedBinaryOrArchive(
       policy: ResolvedPolicy,
       tool: ResolvedTool,
       eventContext: InstallerEventContext,
       redactions: SensitiveValueRedactions
   ): Either[ToolInstallError, ToolInstallSuccess] =
-    download(tool, eventContext, redactions).flatMap: artifact =>
-      val result =
-        for
-          // Integrity is checked before staging/replacement so a bad artifact cannot overwrite a
-          // previously working install.
-          _ <- withPhase(tool, InstallerPhase.VerifyingChecksum, eventContext)(
-            verifyChecksum(tool, artifact.sha256)
-          )
-          staged <-
-            withPhase(tool, InstallerPhase.Staging, eventContext)(stage(tool, artifact.path))
-          _ <- prepareStagedInstall(tool, staged, eventContext)
-          _ <- withPhase(tool, InstallerPhase.ReplacingInstall, eventContext)(replace(tool, staged))
-          _ <- withPhase(tool, InstallerPhase.VerifyingExecutables, eventContext)(
-            verifyExecutables(tool)
-          )
-          _ <- withPhase(tool, InstallerPhase.CreatingSymlinks, eventContext)(
-            SymlinkInstaller.create(policy, tool, commandExecutor, sudoCredentials)
-          )
-        yield ToolInstallSuccess(tool.name, tool.installDir, Some(artifact.provenance))
-      artifact.discard()
-      result
+    prepareDownloadedBinaryOrArchive(tool, eventContext, redactions).flatMap:
+      case (staged, provenance) => completePreparedTool(policy, tool, staged, provenance, eventContext)
 
   private def prepareTool(
       tool: ResolvedTool,
@@ -234,14 +225,21 @@ final class DirectBinaryInstaller(
       eventContext: InstallerEventContext
   ): PreparedToolResult =
     val verbose = verboseLines(tool, verboseOutput, redactions)
-    verbose.foreach(line =>
-      eventContext.emit(InstallerEvent.LogLine(Some(tool.name), line, _))
-    )
-    eventContext.emit(InstallerEvent.ToolStarted(tool.name, InstallerPhase.Downloading, _))
-    prepareDownloadedBinaryOrArchive(tool, eventContext, redactions) match
-      case Right((stagedInstall, provenance)) =>
-        PreparedToolResult.Ready(tool, stagedInstall, provenance, verbose)
-      case Left(error) => PreparedToolResult.Failed(tool.name, error, verbose)
+    // Keep this total: a thrown fork aborts Flow.runToList before finalize runs, so sibling staged
+    // installs would never be discarded. Converting a throw into a Failed result preserves cleanup.
+    try
+      verbose.foreach(line =>
+        eventContext.emit(InstallerEvent.LogLine(Some(tool.name), line, _))
+      )
+      eventContext.emit(InstallerEvent.ToolStarted(tool.name, InstallerPhase.Downloading, _))
+      prepareDownloadedBinaryOrArchive(tool, eventContext, redactions) match
+        case Right((stagedInstall, provenance)) =>
+          PreparedToolResult.Ready(tool, stagedInstall, provenance, verbose)
+        case Left(error) => PreparedToolResult.Failed(tool.name, error, verbose)
+    catch
+      case scala.util.control.NonFatal(error) =>
+        val message = Option(error.getMessage).getOrElse(error.getClass.getName)
+        PreparedToolResult.Failed(tool.name, ToolInstallError.StagingFailed(tool.name, message), verbose)
 
   private def prepareDownloadedBinaryOrArchive(
       tool: ResolvedTool,

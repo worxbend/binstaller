@@ -90,7 +90,10 @@ private[core] object SymlinkInstaller:
           tool.name,
           path.toString,
           target.toString,
-          s"create sudo symlink ${target} -> ${path}"
+          // Defense-in-depth: path/target are already control-char-free (ResolvedPathValidator
+          // rejects them post-interpolation), but scrub at the terminal boundary too so this prompt
+          // can never be spoofed via escape sequences should an upstream check ever regress.
+          RenderSafety.terminalLine(s"create sudo symlink $target -> $path")
         )
         sudoCredentials.requestSudoPassword(request) match
           case Right(password) =>

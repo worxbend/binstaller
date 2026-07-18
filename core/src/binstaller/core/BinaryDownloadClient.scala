@@ -117,7 +117,8 @@ object BinaryDownloadLimits:
 
 private[core] final class JdkBinaryDownloadClient(
     client: HttpClient,
-    limits: BinaryDownloadLimits = BinaryDownloadLimits.default
+    limits: BinaryDownloadLimits = BinaryDownloadLimits.default,
+    hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved
 ) extends BinaryDownloadClient:
 
   def download(url: String): Either[BinaryDownloadError, Array[Byte]] =
@@ -147,7 +148,7 @@ private[core] final class JdkBinaryDownloadClient(
       progressObserver: BinaryDownloadProgressObserver
   ): Either[BinaryDownloadError, BinaryDownloadArtifact] = RuntimeUrl.httpsUri(url) match
     case Left(message) => Left(BinaryDownloadError(url, message))
-    case Right(_)      => Try(RuntimeHttpClient.getInputStream(client, url)) match
+    case Right(_)      => Try(RuntimeHttpClient.getInputStream(client, url, hostGuard)) match
         case Success(Right(result))
             if result.response.statusCode() >= 200 &&
               result.response.statusCode() < 300 =>

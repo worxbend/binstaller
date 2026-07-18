@@ -25,7 +25,10 @@ final class SecretText private (private val value: Array[Char]):
     encoded.get(bytes, 0, bytes.length - 1)
     bytes(bytes.length - 1) = '\n'.toByte
     try output.write(bytes)
-    finally java.util.Arrays.fill(bytes, 0.toByte)
+    finally
+      java.util.Arrays.fill(bytes, 0.toByte)
+      // The encoder's backing array holds a copy of the secret bytes; clear it too.
+      if encoded.hasArray then java.util.Arrays.fill(encoded.array(), 0.toByte)
 
   private[core] def redact(text: String): String =
     if value.isEmpty then text

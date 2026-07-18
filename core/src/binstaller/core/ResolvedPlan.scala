@@ -147,6 +147,13 @@ final case class ResolvedChecksum(
 /** How a checksum entered the resolved plan. */
 enum ResolvedChecksumSource:
   case Configured
+
+  /**
+   * Checksum fetched from a discovery source published alongside the artifact in the same release.
+   * This is trust-on-first-use: it catches corruption or truncation in transit but is not an
+   * independent integrity guarantee, since anyone who can publish the artifact can publish a
+   * matching digest. Prefer a [[Configured]] checksum pinned by the manifest author.
+   */
   case Discovered(url: String, file: String, provenance: UrlProvenance)
 
 /** Rendering helpers for resolved checksum provenance. */
@@ -165,7 +172,8 @@ object ResolvedChecksum:
   def sourceDescription(checksum: ResolvedChecksum): String = checksum.source match
     case ResolvedChecksumSource.Configured                        => "configured in manifest"
     case ResolvedChecksumSource.Discovered(url, file, provenance) =>
-      s"discovered from $url for $file" + UrlProvenance.redirectSuffix(Some(provenance))
+      s"discovered from $url for $file" + UrlProvenance.redirectSuffix(Some(provenance)) +
+        "; trust-on-first-use: fetched from the same release, not independent integrity"
 
 /** Resolved archive mappings paired with the original archive declaration. */
 final case class ResolvedArchive(

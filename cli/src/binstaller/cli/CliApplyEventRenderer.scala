@@ -120,7 +120,7 @@ private[cli] final class CliApplyEventRenderer(
     downloads.get(toolName).filter(row => activeTools.contains(row.toolName))
 
   private def clearActiveLine(): Unit = if activeLineLength > 0 then
-    out.print(s"\r${" " * activeLineLength}\r")
+    out.print("\r\u001b[K")
     out.flush()
     activeLineLength = 0
 
@@ -179,14 +179,12 @@ private[cli] final class CliApplyEventRenderer(
     ProgressLine(plain, styled)
 
   private def renderInPlace(line: ProgressLine): Unit =
-    val padding = " " * (activeLineLength - line.visibleLength).max(0)
-    out.print(s"\r${line.styled}$padding")
+    out.print(s"\r${line.styled}\u001b[K")
     out.flush()
     activeLineLength = line.visibleLength
 
   private def renderCompleted(line: ProgressLine): Unit =
-    val padding = " " * (activeLineLength - line.visibleLength).max(0)
-    out.print(s"\r${line.styled}$padding\n")
+    out.print(s"\r${line.styled}\u001b[K\n")
     out.flush()
     activeLineLength = 0
 

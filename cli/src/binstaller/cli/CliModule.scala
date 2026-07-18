@@ -18,6 +18,8 @@ import picocli.CommandLine.ScopeType
 import java.io.PrintWriter
 import java.nio.file.Path
 import java.util.concurrent.Callable
+import scala.annotation.meta.field
+import scala.annotation.nowarn
 
 /** Picocli-backed command boundary for the `binstaller` process. */
 object CliModule:
@@ -271,6 +273,11 @@ private[cli] final class ApplyCommand(
   private var lockPath: String                   = LockOptions.defaultOutputPath
   private var applyParallelism: ApplyParallelism = ApplyParallelism.default
 
+  // @field forces the annotation onto the backing field (not the getter) so picocli injects the spec
+  // reflectively; @nowarn silences the "unset private variable" warning that injection triggers.
+  @(CommandLine.Spec @field) @nowarn("msg=unset private variable")
+  private var commandSpec: CommandLine.Model.CommandSpec = scala.compiletime.uninitialized
+
   @CliOption(
     names = Array("--locked"),
     description = Array("Require a compatible JSON lock file before applying.")
@@ -291,7 +298,10 @@ private[cli] final class ApplyCommand(
   )
   def setParallelism(value: Int): Unit = ApplyParallelism.fromInt(value) match
     case Right(parallelism) => applyParallelism = parallelism
-    case Left(message)      => throw IllegalArgumentException(message)
+    case Left(message) =>
+      // Route through picocli so an out-of-range value renders a usage error (exit 2), not a raw
+      // stack trace.
+      throw CommandLine.ParameterException(commandSpec.commandLine(), message)
 
   override def call(): Integer = executeWithOptions(
     _.copy(

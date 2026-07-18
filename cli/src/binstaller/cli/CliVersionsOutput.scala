@@ -38,6 +38,7 @@ private[cli] object CliVersionsOutput:
 
   private def colorNewerVersion(value: String, outputStyle: CliOutputStyle): String =
     if value == "-" then outputStyle.color(value)(fansi.Color.Blue)
+    else if value == "?" then outputStyle.color(value)(fansi.Color.Yellow)
     else outputStyle.color(value)(fansi.Color.Green)
 
   private def boldColor(

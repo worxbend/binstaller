@@ -165,12 +165,15 @@ private[core] final class ResolvingBinaryInstallerService(
     ))
 
   private def renderVersions(prepared: PreparedPlan): InstallerResult =
-    val newerVersions = GitHubReleaseVersions.newerVersionsByTool(prepared.plan, httpTextClient)
-    val rows          = prepared.plan.tools.map: tool =>
+    val statuses = GitHubReleaseVersions.versionStatusByTool(prepared.plan, httpTextClient)
+    val rows     = prepared.plan.tools.map: tool =>
       VersionSummaryRow(
         packageName = tool.name,
         version = ResolvedVersion.render(tool.version),
-        newerVersion = newerVersions.get(tool.name).getOrElse("-")
+        newerVersion = statuses.get(tool.name) match
+          case Some(GitHubReleaseVersions.LatestReleaseStatus.Newer(tag)) => tag
+          case Some(GitHubReleaseVersions.LatestReleaseStatus.Unknown)    => "?"
+          case _                                                          => "-"
       )
     val lines = renderVersionSummaryTable(rows)
     InstallerResult(

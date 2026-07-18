@@ -5,6 +5,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.io.InputStream
+import scala.util.Try
 import scala.util.boundary
 import scala.util.boundary.break
 import java.time.Duration
@@ -22,14 +23,17 @@ private[core] object RuntimeHttpClient:
 
   def getInputStream(
       client: HttpClient,
-      initialUrl: String
+      initialUrl: String,
+      // Injectable so tests can drive the redirect/status logic against a stubbed transport without
+      // live DNS. Production uses the fail-closed resolved check as defense-in-depth.
+      hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved
   ): Either[String, RuntimeHttpResponse] = RuntimeUrl.httpsUri(initialUrl).flatMap: initialUri =>
     boundary:
       var current   = initialUri
       var redirects = Vector.empty[UrlRedirectHop]
       var remaining = maxRedirects
       while true do
-        NetworkTargetGuard.validateResolved(current.getHost) match
+        hostGuard(current.getHost) match
           case Left(message) => break(Left(message))
           case Right(())     => ()
         val request  = HttpRequest.newBuilder(current).timeout(requestTimeout).GET().build()
@@ -39,19 +43,24 @@ private[core] object RuntimeHttpClient:
             response.body().close()
             break(Left(s"HTTP redirect limit exceeded ($maxRedirects)"))
           val location = response.headers().firstValue("Location")
-          if location.isEmpty then
+          if location.isEmpty || location.get().trim.isEmpty then
             response.body().close()
             break(Left(s"HTTP ${response.statusCode()} redirect is missing Location"))
-          val next = current.resolve(location.get()).toString
-          RuntimeUrl.httpsUri(next) match
-            case Left(message) =>
+          // A malformed Location makes URI.resolve throw IllegalArgumentException; treat it as a
+          // failed redirect rather than letting it escape the download boundary uncaught.
+          Try(current.resolve(location.get()).toString).toEither match
+            case Left(error) =>
               response.body().close()
-              break(Left(s"unsafe redirect target: $message"))
-            case Right(uri) =>
-              redirects :+= UrlRedirectHop(current.toString, uri.toString, response.statusCode())
-              response.body().close()
-              current = uri
-              remaining -= 1
+              break(Left(s"invalid redirect Location: ${error.getMessage}"))
+            case Right(next) => RuntimeUrl.httpsUri(next) match
+                case Left(message) =>
+                  response.body().close()
+                  break(Left(s"unsafe redirect target: $message"))
+                case Right(uri) =>
+                  redirects :+= UrlRedirectHop(current.toString, uri.toString, response.statusCode())
+                  response.body().close()
+                  current = uri
+                  remaining -= 1
         else
           val provenance =
             if redirects.nonEmpty then UrlProvenance(initialUrl, current.toString, redirects)

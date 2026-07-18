@@ -10,6 +10,7 @@ import utest.*
 
 import java.io.ByteArrayInputStream
 import java.io.InputStream
+import java.net.InetAddress
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -37,15 +38,21 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
     test("network target guard rejects loopback link-local and metadata hosts"):
       val blocked = Vector(
         "localhost",
+        "localhost.",
         "sub.localhost",
         "service.local",
         "127.0.0.1",
         "0.0.0.0",
+        "0.1.2.3",
+        "100.64.0.1",
+        "100.127.255.1",
         "169.254.169.254",
         "10.0.0.5",
         "192.168.1.10",
         "metadata.google.internal",
-        "[::1]"
+        "[::1]",
+        "[fc00::1]",
+        "[fd12:3456:789a::1]"
       )
       blocked.foreach: host =>
         assert(NetworkTargetGuard.validate(host).isLeft)
@@ -53,6 +60,28 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
     test("network target guard allows ordinary public hosts and ip literals"):
       assert(NetworkTargetGuard.validate("example.com").isRight)
       assert(NetworkTargetGuard.validate("8.8.8.8").isRight)
+      assert(NetworkTargetGuard.validate("101.64.0.1").isRight)
+
+    test("validateResolved fails closed for unresolvable hosts"):
+      assert(NetworkTargetGuard.validateResolved("does-not-exist.invalid").isLeft)
+
+    test("guarded resolver drops blocked addresses and fails closed when none remain"):
+      val privateAddr = InetAddress.getByName("10.0.0.5")
+      val publicAddr  = InetAddress.getByName("8.8.8.8")
+      val filtered = GuardedInetAddressResolverProvider
+        .guard("mixed.example", java.util.stream.Stream.of(publicAddr, privateAddr))
+        .iterator()
+        .asScala
+        .toVector
+      assert(filtered == Vector(publicAddr))
+      val rebindOnly = scala.util.Try(
+        GuardedInetAddressResolverProvider
+          .guard("rebind.example", java.util.stream.Stream.of(privateAddr))
+          .iterator()
+          .asScala
+          .toVector
+      )
+      assert(rebindOnly.failed.toOption.exists(_.isInstanceOf[java.net.UnknownHostException]))
 
     test("installer event context measures elapsed time from injected monotonic clock"):
       var now     = 1_000L
@@ -132,7 +161,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         responseStatusCode = 200,
         responseBody = ByteArrayInputStream("v1.0.0".getBytes(StandardCharsets.UTF_8))
       )
-      val client = JdkHttpTextClient(StaticHttpClient(response))
+      val client = JdkHttpTextClient(StaticHttpClient(response), _ => Right(()))
 
       val result = client.getTextWithProvenance("https://example.invalid/stable.txt")
 
@@ -162,7 +191,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         responseBody = ByteArrayInputStream("v1.0.1".getBytes(StandardCharsets.UTF_8)),
         previous = Some(second)
       )
-      val client = JdkHttpTextClient(StaticHttpClient(finalResponse))
+      val client = JdkHttpTextClient(StaticHttpClient(finalResponse), _ => Right(()))
 
       val result = client.getTextWithProvenance("https://example.invalid/stable.txt")
 
@@ -191,7 +220,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         responseBody = ByteArrayInputStream(Array.emptyByteArray),
         responseHeaders = Map("Location" -> Vector("https://169.254.169.254/latest/meta-data"))
       )
-      val client = JdkHttpTextClient(StaticHttpClient(redirect))
+      val client = JdkHttpTextClient(StaticHttpClient(redirect), _ => Right(()))
 
       val result = client.getTextWithProvenance("https://example.invalid/stable.txt")
 
@@ -280,6 +309,19 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(errors.exists(error =>
         error.path == "spec.plan[2].spec.installDir" &&
           error.message.contains("nested inside tool 'beta'")
+      ))
+
+    test("a direct binary tool with multiple executables is rejected at plan time"):
+      val installDir = Files.createTempDirectory("binstaller-multi-exec").resolve("alpha")
+      val multiExecYaml = directBinaryYaml(installDir).replace(
+        "          - path: bin/alpha",
+        "          - path: bin/alpha\n          - path: bin/beta"
+      )
+      val errors = resolveErrors(multiExecYaml)
+
+      assert(errors.exists(error =>
+        error.path == "spec.plan[0].spec.executables" &&
+          error.message.contains("exactly one executable")
       ))
 
     test("interpolated path fields are revalidated after variables resolve"):
@@ -396,7 +438,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         responseBody = ByteArrayInputStream("alpha".getBytes(StandardCharsets.UTF_8)),
         responseHeaders = Map("Content-Length" -> Vector("5"))
       )
-      val client = JdkBinaryDownloadClient(StaticHttpClient(response))
+      val client = JdkBinaryDownloadClient(StaticHttpClient(response), hostGuard = _ => Right(()))
 
       val result = client.downloadWithProvenance("https://example.invalid/alpha")
 
@@ -420,7 +462,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         responseHeaders = Map("Content-Length" -> Vector("5"))
       )
       val progress = RecordingBinaryDownloadProgressObserver()
-      val client   = JdkBinaryDownloadClient(StaticHttpClient(finalResponse))
+      val client   = JdkBinaryDownloadClient(StaticHttpClient(finalResponse), hostGuard = _ => Right(()))
 
       val result = client.downloadWithProvenance("https://example.invalid/alpha", progress)
 
@@ -570,9 +612,11 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(result.lines.exists(line =>
         line.startsWith("package") && line.endsWith("newer version")
       ))
-      assert(versionSummaryRowExists(result.lines, "yazi", "v26.5.6", "-"))
+      // yazi and kustomize are GitHub release-download tools; the fake client cannot reach the
+      // GitHub latest-release API, so their status is unknown ("?") rather than a false "-".
+      assert(versionSummaryRowExists(result.lines, "yazi", "v26.5.6", "?"))
       assert(versionSummaryRowExists(result.lines, "helm", "v3.21.2", "-"))
-      assert(versionSummaryRowExists(result.lines, "kustomize", "v5.8.1", "-"))
+      assert(versionSummaryRowExists(result.lines, "kustomize", "v5.8.1", "?"))
       assert(versionSummaryRowExists(result.lines, "kubectl", "v1.34.0", "-"))
       assert(versionSummaryRowExists(result.lines, "minikube", "dynamic latest-url", "-"))
       assert(!result.lines.exists(_.contains("https://")))
@@ -601,7 +645,40 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(VersionOrdering.compare("v1.2.0-rc.2", "v1.2.0-rc.1") == VersionOrder.Greater)
       assert(VersionOrdering.compare("v1.2.0-rc.1", "v1.2.0") == VersionOrder.Less)
 
-    test("versions output omits unavailable GitHub release metadata without failing"):
+    test("sha256sum lookup prefers exact path over basename and resolves it"):
+      val content = s"${"a" * 64}  linux/tool\n${"b" * 64}  darwin/tool\n"
+      assert(Sha256SumChecksumFile.find(content, "linux/tool") == Sha256SumChecksumFile.Lookup.Found(
+        "a" * 64
+      ))
+      assert(
+        Sha256SumChecksumFile.find(content, "darwin/tool") == Sha256SumChecksumFile.Lookup.Found(
+          "b" * 64
+        )
+      )
+
+    test("sha256sum lookup reports ambiguity for basename-colliding entries"):
+      val content = s"${"a" * 64}  linux/tool\n${"b" * 64}  darwin/tool\n"
+      Sha256SumChecksumFile.find(content, "tool") match
+        case Sha256SumChecksumFile.Lookup.Ambiguous(paths) =>
+          assert(paths == Vector("linux/tool", "darwin/tool"))
+        case other => abort(s"expected ambiguous lookup, got $other")
+
+    test("sha256sum lookup collapses duplicate identical digests to a single found entry"):
+      val content = s"${"c" * 64}  tool\n${"C" * 64} *tool\n"
+      assert(Sha256SumChecksumFile.find(content, "tool") == Sha256SumChecksumFile.Lookup.Found(
+        "c" * 64
+      ))
+
+    test("sha256sum lookup reports not found when no entry matches"):
+      val content = s"${"a" * 64}  other\n"
+      assert(Sha256SumChecksumFile.find(content, "tool") == Sha256SumChecksumFile.Lookup.NotFound)
+
+    test("sha256sum lookup unescapes GNU backslash-prefixed filenames"):
+      val content = s"\\${"a" * 64}  weird\\\\name\n"
+      assert(Sha256SumChecksumFile.find(content, "weird\\name") ==
+        Sha256SumChecksumFile.Lookup.Found("a" * 64))
+
+    test("versions output flags unavailable GitHub release metadata without failing"):
       val tempRoot = Files.createTempDirectory("binstaller-core-github-unavailable")
       val config   = writeConfig(tempRoot, githubReleaseYaml(tempRoot, "0.40.0"))
       val service  = BinaryInstallerService.resolving(
@@ -617,7 +694,8 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       val result = service.versions(applyOptions(config))
 
       assert(result.exitCode == 0)
-      assert(versionSummaryRowExists(result.lines, "jujutsu", "0.40.0", "-"))
+      // A failed latest-release fetch renders "?" so it is distinguishable from a genuine "-".
+      assert(versionSummaryRowExists(result.lines, "jujutsu", "0.40.0", "?"))
       assert(!result.lines.exists(_.contains("HTTP 403")))
 
     test("lock writes pinned http-text and dynamic source metadata without apply state"):
@@ -753,6 +831,29 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         checksum.source == "discovered" &&
           checksum.discoveryUrl.contains(checksumFileUrl) &&
           checksum.discoveryFile.contains("alpha-1.0.0.tar.gz")
+      ))
+
+    test("ambiguous discovered checksum fails resolution with a colliding-path diagnostic"):
+      val tempRoot        = Files.createTempDirectory("binstaller-core-checksum-ambiguous")
+      val checksumFileUrl = "https://example.invalid/releases/1.0.0/SHA256SUMS"
+      val config          = writeConfig(tempRoot, checksumDiscoveryYaml(tempRoot, checksumFileUrl))
+      val service         = BinaryInstallerService.resolving(
+        RoutingHttpTextClient(Map(
+          checksumFileUrl -> Right(HttpTextResponse(
+            s"${"a" * 64}  linux/alpha-1.0.0.tar.gz\n${"b" * 64}  darwin/alpha-1.0.0.tar.gz\n",
+            UrlProvenance.direct(checksumFileUrl)
+          ))
+        ))
+      )
+
+      val result = service.plan(applyOptions(config))
+
+      assert(result.exitCode == 1)
+      assert(result.lines.exists(_.contains(
+        "checksum discovery found multiple sha256sum entries matching 'alpha-1.0.0.tar.gz'"
+      )))
+      assert(result.lines.exists(line =>
+        line.contains("linux/alpha-1.0.0.tar.gz") && line.contains("darwin/alpha-1.0.0.tar.gz")
       ))
 
     test("missing checksum file fails resolution with a typed diagnostic"):
@@ -1264,6 +1365,100 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(ArchiveExtractor.validateExtractedSize(ArchiveExtractor.maxExtractedBytes).isRight)
       assert(ArchiveExtractor.validateExtractedSize(ArchiveExtractor.maxExtractedBytes + 1).isLeft)
 
+    test("tar.gz unplanned member exceeding the byte budget is rejected during the single pass"):
+      // Regression guard for the decompression-bomb DoS: an unplanned member declaring more bytes
+      // than the aggregate budget must be rejected even though NONE of the bomb members are part of
+      // the copy plan. The previous two-pass extractor skipped unplanned members with no budget.
+      val tempRoot   = Files.createTempDirectory("binstaller-core-targz-bomb")
+      val installDir = tempRoot.resolve("alpha")
+      val output     = java.io.ByteArrayOutputStream()
+      val gzip       = java.util.zip.GZIPOutputStream(output)
+      val planned    = "pkg-alpha".getBytes(StandardCharsets.UTF_8)
+      gzip.write(tarHeader("pkg/alpha", planned.length, '0'))
+      gzip.write(planned)
+      gzip.write(Array.fill[Byte]((512 - (planned.length % 512)) % 512)(0))
+      // Unplanned member declaring 2 GiB while carrying no payload; extraction must not inflate it.
+      gzip.write(tarHeader("pkg/bomb", 2000000000, '0'))
+      gzip.write(Array.fill[Byte](1024)(0))
+      gzip.close()
+      val installer = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success(output.toByteArray),
+        InstallFileSystem.nio
+      )
+
+      val result = installer.installTool(archiveTool(
+        installDir,
+        ArchiveType.TarGz,
+        files = Vector("pkg/alpha" -> "bin/alpha")
+      ))
+
+      assert(result.left.exists:
+        case ToolInstallError.ArchiveExtractionFailed(_, message) =>
+          message.contains("extracted byte limit")
+        case _ => false)
+
+    test("tar.gz archive exceeding the max entry count is rejected"):
+      val tempRoot   = Files.createTempDirectory("binstaller-core-targz-count")
+      val installDir = tempRoot.resolve("alpha")
+      val output     = java.io.ByteArrayOutputStream()
+      val gzip       = java.util.zip.GZIPOutputStream(output)
+      val total      = ArchiveExtractor.maxEntries + 1
+      var index      = 0
+      while index < total do
+        gzip.write(tarHeader(s"pkg/file-$index", 0, '0'))
+        index += 1
+      gzip.write(Array.fill[Byte](1024)(0))
+      gzip.close()
+      val installer = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success(output.toByteArray),
+        InstallFileSystem.nio
+      )
+
+      val result = installer.installTool(archiveTool(
+        installDir,
+        ArchiveType.TarGz,
+        files = Vector("pkg/file-0" -> "bin/alpha")
+      ))
+
+      assert(result.left.exists:
+        case ToolInstallError.ArchiveExtractionFailed(_, message) =>
+          message.contains("max entry count")
+        case _ => false)
+
+    test("tar.gz base-256 encoded entry size is decoded without a NumberFormatException"):
+      val tempRoot   = Files.createTempDirectory("binstaller-core-targz-base256")
+      val installDir = tempRoot.resolve("alpha")
+      val content    = "base256".getBytes(StandardCharsets.UTF_8)
+      val header     = tarHeader("pkg/alpha", 0, '0')
+      // Overwrite the 12-byte size field (offset 124) with a GNU base-256 big-endian encoding: the
+      // high bit of the first byte marks base-256, the value follows big-endian in the low bytes.
+      header(124) = 0x80.toByte
+      var index = 1
+      while index < 12 do
+        header(124 + index) = 0.toByte
+        index += 1
+      header(124 + 11) = content.length.toByte
+      val output = java.io.ByteArrayOutputStream()
+      val gzip   = java.util.zip.GZIPOutputStream(output)
+      gzip.write(header)
+      gzip.write(content)
+      gzip.write(Array.fill[Byte]((512 - (content.length % 512)) % 512)(0))
+      gzip.write(Array.fill[Byte](1024)(0))
+      gzip.close()
+      val installer = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success(output.toByteArray),
+        InstallFileSystem.nio
+      )
+
+      val result = installer.installTool(archiveTool(
+        installDir,
+        ArchiveType.TarGz,
+        files = Vector("pkg/alpha" -> "bin/alpha")
+      ))
+
+      assertInstallSuccess(result, installDir.toString)
+      assert(Files.readString(installDir.resolve("bin/alpha")) == "base256")
+
     test("process command executor times out long-running commands"):
       val tempRoot = Files.createTempDirectory("binstaller-core-process-timeout")
       val executor = CommandExecutor.processWithTimeout(Duration.ofMillis(100))
@@ -1292,6 +1487,16 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
           assert(error.output.stdout.contains("stdout-line"))
           assert(error.output.stderr.contains("stderr-line"))
         case Right(()) => abort("expected command failure")
+
+    test("production runtime-variable allowlist produces no redactions"):
+      // Guards the documented invariant that redaction is empty in production: every allowlisted
+      // env name is non-secret, so none is redacted (control scrubbing in display() is the
+      // always-on protection).
+      val allowlisted =
+        RuntimeTemplateEnvironment.allowed.map(name => name -> "some-non-secret-value").toMap
+      assert(
+        SensitiveValueRedactions.fromRuntimeVariables(allowlisted) == SensitiveValueRedactions.empty
+      )
 
     test("apply errors redact sensitive runtime values and scrub terminal controls"):
       val secret = "secret-token-value"
@@ -1441,6 +1646,28 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.readString(existingFile) == "existing")
       assert(!Using.resource(Files.list(tempRoot)): stream =>
         stream.iterator().asScala.exists(_.getFileName.toString.contains(".backup-")))
+
+    test("staging reclaims stale sibling temp dirs but not fresh ones"):
+      val tempRoot   = Files.createTempDirectory("binstaller-core-sweep")
+      val installDir = tempRoot.resolve("alpha")
+      val staleOrphan = Files.createDirectory(tempRoot.resolve(".alpha.stage-stale"))
+      Files.writeString(staleOrphan.resolve("leftover"), "x")
+      val freshOrphan = Files.createDirectory(tempRoot.resolve(".alpha.backup-fresh"))
+      val twoHoursAgo = java.nio.file.attribute.FileTime.fromMillis(
+        System.currentTimeMillis() - java.time.Duration.ofHours(2).toMillis
+      )
+      val _ = Files.setLastModifiedTime(staleOrphan, twoHoursAgo)
+
+      val staged = InstallFileSystem.nio.stageDirectBinary(
+        installDir,
+        Vector.empty,
+        "bin/alpha",
+        "alpha".getBytes(StandardCharsets.UTF_8)
+      )
+
+      assert(staged.isRight)
+      assert(!Files.exists(staleOrphan))
+      assert(Files.exists(freshOrphan))
 
     test("direct install verifies expected executables"):
       val tempRoot   = Files.createTempDirectory("binstaller-core-direct-missing")
