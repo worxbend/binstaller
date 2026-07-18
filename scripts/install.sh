@@ -109,6 +109,7 @@ info "installed binstaller ${VERSION} to ${INSTALL_DIR}/binstaller"
 
 path_line="export PATH=\"${INSTALL_DIR}:\$PATH\""
 
+# add_to_rc adds the install directory to a shell startup file when it is not already present.
 add_to_rc() {
   rc_file="$1"
   if [ -f "${rc_file}" ] && grep -qF "${INSTALL_DIR}" "${rc_file}"; then
