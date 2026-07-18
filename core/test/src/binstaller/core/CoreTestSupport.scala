@@ -467,7 +467,7 @@ private[core] trait CoreTestSupport:
     gzip.close()
     output.toByteArray
 
-  protected def tarHeader(name: String, size: Int, entryType: Char): Array[Byte] =
+  protected def tarHeader(name: String, size: Long, entryType: Char): Array[Byte] =
     val header = Array.fill[Byte](512)(0)
     writeTarField(header, 0, 100, name)
     writeTarField(header, 124, 12, f"$size%011o")

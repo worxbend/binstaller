@@ -1377,8 +1377,9 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       gzip.write(tarHeader("pkg/alpha", planned.length, '0'))
       gzip.write(planned)
       gzip.write(Array.fill[Byte]((512 - (planned.length % 512)) % 512)(0))
-      // Unplanned member declaring 2 GiB while carrying no payload; extraction must not inflate it.
-      gzip.write(tarHeader("pkg/bomb", 2000000000, '0'))
+      // Unplanned member declaring > maxInflatedBytes (4 GiB) while carrying no payload; extraction
+      // must reject it at the up-front inflate charge rather than skip-inflate it unbounded.
+      gzip.write(tarHeader("pkg/bomb", 5000000000L, '0'))
       gzip.write(Array.fill[Byte](1024)(0))
       gzip.close()
       val installer = DirectBinaryInstaller(
@@ -1394,8 +1395,38 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       assert(result.left.exists:
         case ToolInstallError.ArchiveExtractionFailed(_, message) =>
-          message.contains("extracted byte limit")
+          message.contains("inflated byte limit")
         case _ => false)
+
+    test("a member covered by both a file and a directory mapping extracts to both targets"):
+      // Regression guard: the single-pass extractor must mark the directory prefix matched even
+      // when a file mapping claims the member first, or finish() falsely reports "directory not
+      // found"; and the member must land at both mapped targets, as the two-pass planner produced.
+      val tempRoot   = Files.createTempDirectory("binstaller-core-overlap")
+      val installDir = tempRoot.resolve("alpha")
+      val output     = java.io.ByteArrayOutputStream()
+      val gzip       = java.util.zip.GZIPOutputStream(output)
+      val payload    = "tool-bytes".getBytes(StandardCharsets.UTF_8)
+      gzip.write(tarHeader("pkg/tool", payload.length, '0'))
+      gzip.write(payload)
+      gzip.write(Array.fill[Byte]((512 - (payload.length % 512)) % 512)(0))
+      gzip.write(Array.fill[Byte](1024)(0))
+      gzip.close()
+      val installer = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success(output.toByteArray),
+        InstallFileSystem.nio
+      )
+
+      val result = installer.installTool(archiveTool(
+        installDir,
+        ArchiveType.TarGz,
+        files = Vector("pkg/tool" -> "bin/alpha"),
+        directories = Vector("pkg" -> "share")
+      ))
+
+      assert(result.isRight)
+      assert(Files.readString(installDir.resolve("bin/alpha")) == "tool-bytes")
+      assert(Files.readString(installDir.resolve("share/tool")) == "tool-bytes")
 
     test("tar.gz archive exceeding the max entry count is rejected"):
       val tempRoot   = Files.createTempDirectory("binstaller-core-targz-count")

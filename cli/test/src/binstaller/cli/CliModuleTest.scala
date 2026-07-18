@@ -171,7 +171,7 @@ object CliModuleTest extends TestSuite:
       val result  = runCli(Vector("apply", "--parallelism", "0"), service)
 
       assert(result.exitCode == 2)
-      assert(result.err.contains("parallelism must be at least 1"))
+      assert(result.out.contains("parallelism must be at least 1"))
       assert(service.applyOptions.isEmpty)
 
     test("output style honors NO_COLOR, TERM=dumb, and force-color escape hatches"):

@@ -7,6 +7,7 @@ import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.util.zip.GZIPInputStream
 import java.util.zip.ZipInputStream
@@ -20,16 +21,29 @@ private[core] enum ArchiveEntryKind:
   case File, Directory
 
 private[core] object ArchiveExtractor:
+  // Bytes actually written to disk (the extracted output).
   private[core] val maxExtractedBytes: Long = 1024L * 1024L * 1024L
 
-  // Backstops that bound work independently of the byte budget so a pathological archive cannot
-  // stall extraction with millions of tiny members or an unbounded inflation loop.
+  // Bytes inflated from the compressed stream, whether written or merely skipped over to reach the
+  // next entry. This is the decompression-bomb guard and is deliberately larger than the extracted
+  // limit so a legitimate archive whose *written* output is small but whose unused members total
+  // more than 1 GiB still extracts — while a bomb (which inflates at >100x) is still rejected.
+  private[core] val maxInflatedBytes: Long = 4L * 1024L * 1024L * 1024L
+
+  // Backstops that bound work independently of the byte budgets so a pathological archive cannot
+  // stall extraction with millions of tiny members or an unbounded inflation loop. The time budget
+  // is generous: the byte/entry budgets are the real bomb guards, so this only catches degenerate
+  // stalls and must not trip on a large legitimate archive extracted on a slow machine.
   private[core] val maxEntries: Int = 65536
-  private val extractionTimeBudgetMillis: Long = 60_000L
+  private val extractionTimeBudgetMillis: Long = 300_000L
 
   private[core] def validateExtractedSize(bytes: Long): Either[String, Unit] =
     if bytes >= 0 && bytes <= maxExtractedBytes then Right(())
     else Left(s"archive exceeds extracted byte limit of $maxExtractedBytes bytes")
+
+  private[core] def validateInflatedSize(bytes: Long): Either[String, Unit] =
+    if bytes >= 0 && bytes <= maxInflatedBytes then Right(())
+    else Left(s"archive exceeds inflated byte limit of $maxInflatedBytes bytes")
 
   private enum ArchiveKind:
     case Zip, Tar
@@ -119,9 +133,11 @@ private[core] object ArchiveExtractor:
       // charge the budget per chunk rather than trusting the declared size.
       if entry.isDirectory then boundedDrain(zip, run.budget)
       else
-        run.targetFor(name, isDirectory = false) match
-          case Some(target) => copyStream(zip, target, run.budget)
-          case None         => boundedDrain(zip, run.budget)
+        val targets = run.targetsFor(name)
+        if targets.isEmpty then boundedDrain(zip, run.budget)
+        else
+          copyStream(zip, targets.head, run.budget)
+          duplicateTo(targets.head, targets.tail)
       zip.closeEntry()
       entry = zip.getNextEntry
 
@@ -135,9 +151,11 @@ private[core] object ArchiveExtractor:
           // bogus size cannot inflate unbounded.
           boundedSkip(content, entry.size, run.budget)
         case ArchiveEntryKind.File =>
-          run.targetFor(entry.name, isDirectory = false) match
-            case Some(target) => copyBounded(content, target, entry.size, run.budget)
-            case None         => boundedSkip(content, entry.size, run.budget)
+          val targets = run.targetsFor(entry.name)
+          if targets.isEmpty then boundedSkip(content, entry.size, run.budget)
+          else
+            copyBounded(content, targets.head, entry.size, run.budget)
+            duplicateTo(targets.head, targets.tail)
 
   private final case class DirPrefix(prefix: String, toRoot: String, origin: String)
 
@@ -186,28 +204,31 @@ private[core] object ArchiveExtractor:
     def register(name: String): Unit =
       if !seenSources.add(name) then throw IllegalArgumentException(s"duplicate archive member: $name")
 
-    // Resolve the target a member should be written to, or None when it is not part of the plan.
-    // Claims the target so two members mapping to the same path fail with the historical message.
-    def targetFor(name: String, isDirectory: Boolean): Option[Path] =
-      val resolved: Option[Path] =
-        if !isDirectory && plan.fileTargets.contains(name) then
+    // Every target a member must be written to: its explicit file mapping (if any) AND one target
+    // per directory mapping whose prefix it falls under. A member can be covered by both, matching
+    // the previous two-pass planner which planned file and directory targets independently — so we
+    // must mark EVERY matching prefix (not stop at the file match) or finish() falsely reports the
+    // directory as missing. Each resolved target is claimed so two members colliding on one path
+    // fail with the historical message.
+    def targetsFor(name: String): Vector[Path] =
+      val fileTarget = plan.fileTargets.get(name) match
+        case Some(target) =>
           val _ = matchedFiles.add(name)
-          Some(plan.fileTargets(name))
-        else if isDirectory then None
-        else
-          plan.directoryPrefixes.find(prefix => name.startsWith(prefix.prefix)) match
-            case Some(prefix) =>
-              val _        = matchedDirectories.add(prefix.prefix)
-              val relative = name.stripPrefix(prefix.prefix)
-              val target   = joinArchivePath(prefix.toRoot, relative)
-              resolveInside(stagingDir, target) match
-                case Right(path)   => Some(path)
-                case Left(message) => throw IllegalArgumentException(message)
-            case None => None
-      resolved.foreach: target =>
+          Vector(target)
+        case None => Vector.empty
+      val directoryTargets = plan.directoryPrefixes.flatMap: prefix =>
+        if name.startsWith(prefix.prefix) then
+          val _        = matchedDirectories.add(prefix.prefix)
+          val relative = name.stripPrefix(prefix.prefix)
+          resolveInside(stagingDir, joinArchivePath(prefix.toRoot, relative)) match
+            case Right(path)   => Vector(path)
+            case Left(message) => throw IllegalArgumentException(message)
+        else Vector.empty
+      val targets = fileTarget ++ directoryTargets
+      targets.foreach: target =>
         if !usedTargets.add(target) then
           throw IllegalArgumentException(s"multiple archive members map to $target")
-      resolved
+      targets
 
     def finish(): Unit =
       plan.fileOrigins.foreach: (source, origin) =>
@@ -274,7 +295,10 @@ private[core] object ArchiveExtractor:
       if (first & 0x80) != 0 then decodeBase256(header, offset, length)
       else tarOctal(header, offset, length)
     if size < 0 then throw IllegalArgumentException("tar entry declares a negative size")
-    validateExtractedSize(size).left.foreach: message =>
+    // A declared size bounds how many bytes must be inflated to advance past this member (whether
+    // or not it is extracted), so it is checked against the inflated ceiling; the tighter extracted
+    // ceiling is enforced at copy time for members actually written.
+    validateInflatedSize(size).left.foreach: message =>
       throw IllegalArgumentException(message)
     size
 
@@ -358,7 +382,7 @@ private[core] object ArchiveExtractor:
       val buffer = Array.ofDim[Byte](8192)
       var count  = input.read(buffer)
       while count != -1 do
-        budget.consume(count.toLong)
+        budget.extract(count.toLong)
         output.write(buffer, 0, count)
         count = input.read(buffer)
 
@@ -368,7 +392,7 @@ private[core] object ArchiveExtractor:
       bytes: Long,
       budget: ExtractedByteBudget
   ): Unit =
-    budget.consume(bytes)
+    budget.extract(bytes)
     Option(target.getParent).foreach(parent => Files.createDirectories(parent))
     Using.resource(Files.newOutputStream(
       target,
@@ -386,8 +410,16 @@ private[core] object ArchiveExtractor:
 
   // Skip a tar member of known length, charging its declared size to the budget up front so a
   // bomb is rejected before it can inflate, and failing loudly if the stream ends early.
+  // Copy an already-extracted member to any additional targets (a member covered by both a file
+  // and a directory mapping). Disk-to-disk, so it does not inflate; the count is bounded by the
+  // manifest's mapping count, so it needs no budget charge.
+  private def duplicateTo(source: Path, extras: Vector[Path]): Unit =
+    extras.foreach: target =>
+      Option(target.getParent).foreach(parent => Files.createDirectories(parent))
+      val _ = Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
+
   private def boundedSkip(input: InputStream, bytes: Long, budget: ExtractedByteBudget): Unit =
-    budget.consume(bytes)
+    budget.inflate(bytes)
     val buffer    = Array.ofDim[Byte](8192)
     var remaining = bytes
     while remaining > 0 do
@@ -400,17 +432,28 @@ private[core] object ArchiveExtractor:
     val buffer = Array.ofDim[Byte](8192)
     var count  = input.read(buffer)
     while count != -1 do
-      budget.consume(count.toLong)
+      budget.inflate(count.toLong)
       count = input.read(buffer)
 
   private final class ExtractedByteBudget private ():
-    private var consumed = 0L
+    private var extracted = 0L
+    private var inflated  = 0L
 
-    def consume(bytes: Long): Unit =
-      val next = if bytes < 0 || consumed > Long.MaxValue - bytes then -1L else consumed + bytes
-      validateExtractedSize(next).left.foreach: message =>
+    /** Charge bytes that are inflated AND written to disk (a copied member). */
+    def extract(bytes: Long): Unit =
+      inflate(bytes)
+      extracted = plus(extracted, bytes)
+      validateExtractedSize(extracted).left.foreach: message =>
         throw IllegalArgumentException(message)
-      consumed += bytes
+
+    /** Charge bytes that are inflated but not written (a skipped or drained member). */
+    def inflate(bytes: Long): Unit =
+      inflated = plus(inflated, bytes)
+      validateInflatedSize(inflated).left.foreach: message =>
+        throw IllegalArgumentException(message)
+
+    private def plus(current: Long, bytes: Long): Long =
+      if bytes < 0L || current > Long.MaxValue - bytes then -1L else current + bytes
 
   private object ExtractedByteBudget:
     def apply(): ExtractedByteBudget = new ExtractedByteBudget()
