@@ -1,46 +1,71 @@
-# binstaller
+<div align="center">
+
+<img src="assets/banner.svg" alt="binstaller — one YAML profile, every binary, every machine" width="820">
+
+<br>
+
+**One YAML profile. Every binary. Same result on every machine.**
+
+`binstaller` is a native CLI that installs binary tool distributions from a single declarative profile —
+with a dry-run plan you read first, SHA-256 verification you can trust, and a lock file that pins the result.
+
+<br>
 
 [![Release](https://github.com/worxbend/binstaller/actions/workflows/release.yml/badge.svg)](https://github.com/worxbend/binstaller/actions/workflows/release.yml)
+[![Pages](https://github.com/worxbend/binstaller/actions/workflows/pages.yml/badge.svg)](https://worxbend.github.io/binstaller/)
+[![Latest release](https://img.shields.io/github/v/release/worxbend/binstaller?logo=github&color=6366f1)](https://github.com/worxbend/binstaller/releases/latest)
+
 ![Scala 3](https://img.shields.io/badge/Scala-3.8.2-dc322f?logo=scala&logoColor=white)
 ![Mill](https://img.shields.io/badge/Mill-1.1.7-5b5bd6)
-![GraalVM](https://img.shields.io/badge/GraalVM-native%20ready-f2a900?logo=graalvm&logoColor=111111)
-![Linux](https://img.shields.io/badge/Linux-amd64%20binary%20installer-2ea44f?logo=linux&logoColor=white)
+![GraalVM](https://img.shields.io/badge/GraalVM-native%20image-f2a900?logo=graalvm&logoColor=111111)
+![Linux](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-2ea44f?logo=linux&logoColor=white)
+![macOS](https://img.shields.io/badge/macOS-amd64%20%7C%20arm64-000000?logo=apple&logoColor=white)
+![Sigstore](https://img.shields.io/badge/Sigstore-keyless%20signed-1e4bff?logo=sigstore&logoColor=white)
 
-`binstaller` is a command-line installer for Linux amd64 binary tool
-distributions described by one YAML profile. It resolves versions, previews
-what will be downloaded and unpacked, then installs selected tools under a
-user-controlled apps directory such as `${HOME}/.apps`.
+<br>
 
-The supported scope is deliberately narrow: command-line plan/apply workflows,
-direct binary downloads, `zip`, `tar.gz`, and `tar.xz` archives, executable
-checks, local symlinks, optional sudo symlinks, plan previews, apply
-state/resume, CLI progress, and version reporting. It is not a package manager,
-dotfiles runner, installer-script host, broad shell-command runner, or multi-OS
-workstation provisioner.
+### 🌐 [**Website**](https://worxbend.github.io/binstaller/) &nbsp;·&nbsp; 📚 [**Wiki**](https://github.com/worxbend/binstaller/wiki) &nbsp;·&nbsp; 📦 [**Releases**](https://github.com/worxbend/binstaller/releases) &nbsp;·&nbsp; 🔐 [**Security model**](docs/security.md)
 
-## Install
+</div>
 
-Native Linux amd64 and arm64 builds are published from `v*` tags by GitHub
-Actions.
+<br>
 
-Install with the curl-pipe script, which downloads the release tarball,
-verifies its SHA-256 checksum, additionally verifies the keyless Sigstore
-signature when `cosign` is installed, and installs `binstaller` to
-`~/.local/bin` (set `BINSTALLER_INSTALL_DIR` to override):
+<div align="center">
+  <img src="assets/demo-apply.svg" alt="binstaller apply — concurrent downloads with progress bars and an install summary" width="880">
+</div>
+
+<br>
+
+---
+
+## ⚡ Install
+
+<div align="center">
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSfL \
   https://github.com/worxbend/binstaller/releases/latest/download/install.sh | sh
 ```
 
-The script does not modify your shell configuration by default; it prints the
-`export PATH=...` line to run for the current shell. Set
-`BINSTALLER_UPDATE_PATH=1` to have it append the install directory to
-`~/.bashrc` and `~/.zshrc`. Pin a specific version with
-`BINSTALLER_VERSION=v0.3.0`.
+</div>
 
-Release artifacts (each `.tar.gz` and the example config ship with a
-`.sha256` checksum file):
+The script downloads the release tarball, verifies its SHA-256 checksum, additionally verifies the
+keyless Sigstore signature when `cosign` is installed, and installs `binstaller` to `~/.local/bin`.
+
+| Knob | Effect |
+|---|---|
+| `BINSTALLER_INSTALL_DIR` | 📁 Install somewhere other than `~/.local/bin`. |
+| `BINSTALLER_VERSION` | 📌 Pin a specific version, e.g. `v0.2.0`. |
+| `BINSTALLER_UPDATE_PATH=1` | 🧭 Append the install dir to `~/.bashrc` and `~/.zshrc`. |
+
+> [!NOTE]
+> By default nothing in your shell configuration is modified — the script just prints the
+> `export PATH=...` line to run.
+
+<details>
+<summary><b>📦 Release artifacts</b> — every <code>.tar.gz</code> and the example config ship with a <code>.sha256</code> file</summary>
+
+<br>
 
 - `binstaller-<version>-linux-amd64.tar.gz`
 - `binstaller-<version>-linux-arm64.tar.gz`
@@ -49,148 +74,245 @@ Release artifacts (each `.tar.gz` and the example config ship with a
 - `config.example.<version>.yaml`
 - `install.sh`
 
-## Quick Start
+</details>
 
-Copy the checked-in [config.example.yaml](config.example.yaml) to `config.yaml`
-in your working directory, or pass it explicitly with `--config`.
+---
+
+## 🚀 Quick Start
+
+**1️⃣ Copy a profile**
 
 ```bash
 cp config.example.yaml config.yaml
 ```
 
-Preview the resolved plan:
+**2️⃣ Read the plan — nothing is written**
 
 ```bash
 binstaller plan
 ```
 
-Apply the profile.
+<div align="center">
+  <img src="assets/demo-plan.svg" alt="binstaller plan output showing resolved versions, URLs, checksums and archive mappings" width="760">
+</div>
+
+**3️⃣ Apply it**
 
 ```bash
 binstaller apply
 ```
 
-Select or omit tools by name. These flags may be repeated.
-
-```bash
-binstaller plan --only yazi
-binstaller apply --skip neovim
-```
-
-Print a package/version summary table. For tools downloaded from GitHub
-Releases, this also checks the repository's latest release tag and prints the
-newer version when an update is available.
+**4️⃣ Watch for drift**
 
 ```bash
 binstaller versions
 ```
 
-Write a reproducible lock file without installing tools:
+<div align="center">
+  <img src="assets/demo-versions.svg" alt="binstaller versions output with pinned versions next to newer GitHub releases" width="620">
+</div>
+
+**Narrow the blast radius** — both flags are repeatable, `--only` is applied first and `--skip` second:
 
 ```bash
-binstaller lock --output /tmp/binstaller.lock.json
+binstaller plan  --only yazi
+binstaller apply --skip neovim
 ```
 
-The manifest policy defaults to `mode: developer`, which preserves local
-tooling convenience. Production-oriented profiles can set `policy.mode: strict`
-to reject dynamic latest URLs, missing checksums, sudo symlinks, and `tar.xz`
-fallback extraction unless those risks are explicitly allowed in the manifest.
-
-Source-development equivalents use the checked-in Mill launcher:
+**Pin everything to a lock file:**
 
 ```bash
-./mill app.run --help
-./mill app.run plan --config config.example.yaml
-./mill app.run apply --config config.example.yaml
-./mill app.run versions --config config.example.yaml
-./mill app.run lock --config config.example.yaml --output /tmp/binstaller.lock.json
+binstaller lock --output binstaller.lock.json
+binstaller apply --locked --lock-file binstaller.lock.json
 ```
 
-## CLI Surface
+---
 
-Top-level commands:
+## ✨ Why binstaller
+
+| | | |
+|---|---|---|
+| 🔍 **Plan before apply**<br>Every version, URL, archive mapping and symlink resolved and printed. Zero filesystem writes. | 🔐 **Checksums, loudly**<br>SHA-256 verified when configured — and a missing checksum is called out in the plan. | 🧊 **Lock files**<br>`lock` writes resolved versions and digests; `apply --locked` refuses to drift. |
+| 🛡️ **SSRF-guarded**<br>HTTPS only. Loopback, private and cloud-metadata hosts rejected — on every redirect hop. | ↩️ **Resumable state**<br>State is saved after each tool and keyed to the manifest fingerprint, so re-runs skip what worked. | ⚡ **Native, no JVM**<br>GraalVM native images for Linux and macOS, amd64 and arm64. |
+| 📦 **Archives handled**<br>Direct binaries, `zip`, `tar.gz`, `tar.xz` — member paths validated so nothing escapes staging. | 🔗 **Sudo is opt-in**<br>System-wide symlinks need `allowSudoSymlinks` and are flagged `sudo risk` in the plan. | 🧱 **Strict mode**<br>`policy.mode: strict` rejects latest-URLs, missing checksums, sudo symlinks and `tar.xz` fallbacks. |
+
+> [!IMPORTANT]
+> The scope is deliberately narrow. `binstaller` is **not** a package manager, a dotfiles runner,
+> an installer-script host, a shell-command runner, or a multi-OS provisioner. Manifest `installer:`
+> blocks are rejected at load time, on purpose.
+
+---
+
+## 🎛️ CLI Surface
 
 | Command | Purpose | Writes files |
-|---|---|---|
-| `plan` | Render the resolved install plan. | No |
-| `apply` | Download, stage, install, symlink, and save state. | Yes |
-| `versions` | Print package versions and available GitHub release updates. | No |
-| `lock` | Resolve and write a JSON lock file. | Lock file only |
+|---|---|:---:|
+| 🔍 `plan` | Render the resolved install plan. | ❌ |
+| 🚀 `apply` | Download, verify, stage, install, symlink, save state. | ✅ |
+| 🆙 `versions` | Print package versions and available GitHub release updates. | ❌ |
+| 🧊 `lock` | Resolve and write a JSON lock file. | 🧊 lock file only |
 
-Useful shared options:
+<details>
+<summary><b>⚙️ Shared options and exit codes</b></summary>
 
-- `--config FILE`: path to the YAML profile. Defaults to `config.yaml` in the
-  current directory.
-- `--state FILE`: override the profile state file for apply.
-- `--reset-state`: ignore saved execution state and start fresh for apply.
-- `--verbose`: show additional command diagnostics.
-- `--only TOOL`: include only a named tool for `plan`, `apply`, or `lock`;
-  repeatable.
-- `--skip TOOL`: omit a named tool for `plan`, `apply`, or `lock`; repeatable.
+<br>
 
-`apply` also accepts:
+**Shared options**
 
-- `--locked`: require a compatible JSON lock file before applying.
-- `--lock-file FILE`: path to the JSON lock file used by `--locked`.
+| Flag | Meaning |
+|---|---|
+| `--config FILE` | Path to the YAML profile. Defaults to `config.yaml` in the current directory. |
+| `--state FILE` | Override the profile state file for `apply`. |
+| `--reset-state` | Ignore saved execution state and start fresh. |
+| `--verbose` | Show additional command diagnostics. |
+| `--only TOOL` | Include only a named tool (`plan`, `apply`, `lock`). Repeatable. |
+| `--skip TOOL` | Omit a named tool (`plan`, `apply`, `lock`). Repeatable. |
 
-`lock` also accepts:
+**`plan` and `apply` also accept**
 
-- `--output FILE`: path to the JSON lock file to write. The default is
-  `binstaller.lock.json`.
+| Flag | Meaning |
+|---|---|
+| `--locked` | Require a compatible JSON lock file before rendering or applying. |
+| `--lock-file FILE` | Path to the JSON lock file used by `--locked`. |
 
-Exit codes:
+**`lock` also accepts**
 
-- `0`: command completed successfully, including help and plan commands.
-- `1`: manifest loading or resolution failed, selection was invalid, apply
-  failed, or state persistence failed.
-- `2`: command-line usage error.
+| Flag | Meaning |
+|---|---|
+| `--output FILE` | Lock file to write. Default `binstaller.lock.json`. |
 
-## State And Resume
+**Exit codes**
 
-`apply` writes state after each per-tool result. State is tied to the profile
-name and manifest fingerprint, so a later apply can skip tools already completed
-for the same profile.
+| Code | Meaning |
+|:---:|---|
+| `0` | ✅ Completed successfully, including help and plan. |
+| `1` | ❌ Manifest loading/resolution failed, selection invalid, apply failed, or state persistence failed. |
+| `2` | ⚠️ Command-line usage error. |
 
-The state path comes from `--state` or `spec.policy.stateFile`. Current apply
-state paths are current-directory filenames only; absolute, nested, and empty
-paths are rejected. `plan` does not touch state.
+</details>
 
-Use `--reset-state` when you intentionally want to ignore compatible saved
-state and retry from the beginning.
+---
 
-## Build From Source
+## 📄 The Manifest
 
-Requirements:
+One file describes the whole toolchain — reviewable in a pull request, validated before a byte is downloaded.
 
-- JDK 21+
-- GraalVM 21 only when building native images locally
+```yaml
+apiVersion: binstaller.io/v1alpha1
+kind: BinaryDistributionProfile
 
-Common checks:
+spec:
+  policy:
+    mode: strict                      # 🧱 reject latest-URLs, missing checksums, sudo symlinks
+    appsDir: "${HOME}/.apps"
+    allowSudoSymlinks: false
 
-```bash
-./mill config.test
-./mill core.test
-./mill cli.test
-./mill __.compile
-./mill __.test
-./mill mill.scalalib.scalafmt/checkFormatAll
-git diff --check
+  versions:
+    lazygit: 0.61.0                   # 📌 pinned
+    kubectl:
+      resolver:                       # 🌐 resolved at plan time
+        type: http-text
+        url: https://dl.k8s.io/release/stable.txt
+
+  plan:
+    - name: lazygit
+      kind: binary-tool
+      spec:
+        versionRef: lazygit
+        installDir: "${appsDir}/lazygit"
+        download:
+          url: "https://github.com/jesseduffield/lazygit/releases/download/v${version}/lazygit_${version}_Linux_x86_64.tar.gz"
+          filename: lazygit.tar.gz
+          checksum:                   # 🔐 verified before anything is unpacked
+            algorithm: sha256
+            value: 45d49e06…78633d
+          archive:
+            type: tar.gz
+            extract:
+              files:
+                - from: lazygit
+                  to: bin/lazygit
+        executables:
+          - path: bin/lazygit
 ```
 
-Build a native image locally when GraalVM is installed:
+📖 Full field reference: [`docs/manifest-reference.md`](docs/manifest-reference.md) ·
+📋 Complete working profile: [`config.example.yaml`](config.example.yaml)
+
+---
+
+## ↩️ State And Resume
+
+`apply` writes state after each per-tool result. State is tied to the profile name and the manifest
+fingerprint, so a later apply can skip tools already completed for the same profile.
+
+- 📍 The state path comes from `--state` or `spec.policy.stateFile`.
+- 🔒 State paths are current-directory filenames only — absolute, nested and empty paths are rejected.
+- 🧊 `plan` never touches state.
+- 🔄 Use `--reset-state` to intentionally ignore compatible saved state and retry from the beginning.
+
+---
+
+## 🛠️ Build From Source
+
+**Requirements:** JDK 21+ · GraalVM 21 only for local native images.
+
+```bash
+./mill __.compile                          # 🏗️  compile everything
+./mill __.test                             # 🧪  run every test module
+./mill mill.scalalib.scalafmt/checkFormatAll   # 🎨  formatting gate
+
+./mill app.run plan --config config.example.yaml   # ▶️  run from source
+```
+
+Build a native image locally:
 
 ```bash
 GRAALVM_HOME=/path/to/graalvm ./mill app.nativeImage
 ```
 
-## Documentation
+<details>
+<summary><b>🧩 Module graph</b></summary>
 
-- [Architecture](docs/architecture.md): module graph, data flow, and event
-  contract.
-- [Manifest reference](docs/manifest-reference.md): supported profile shape,
-  policy fields, versions, downloads, archives, symlinks, and selection.
-- [Security model](docs/security.md): trust boundaries, checksums, archive
-  safety, sudo policy, state rules, redaction, and known risks.
-- [Testing guide](docs/testing.md): project-native checks and test patterns.
-- [Release guide](docs/release.md): native artifacts, release workflow, and
-  smoke checks.
+<br>
+
+```text
+app  ──▶ cli ──▶ core ──▶ config
+```
+
+| Module | Responsibility |
+|---|---|
+| `config` | YAML reading, typed decoding, validation, unsupported-field rejection. |
+| `core` | Resolution, downloads, checksums, extraction, staging, symlinks, state, events. |
+| `cli` | Picocli parsing, exit codes, colored progress, script-friendly output. |
+| `app` | Process entry and exit-code propagation only. |
+
+</details>
+
+---
+
+## 📚 Documentation
+
+| Doc | What's inside |
+|---|---|
+| 🌐 [**Website**](https://worxbend.github.io/binstaller/) | Feature tour, screenshots and quick start. |
+| 📚 [**Wiki**](https://github.com/worxbend/binstaller/wiki) | Getting started, recipes, troubleshooting, FAQ. |
+| 🏗️ [Architecture](docs/architecture.md) | Module graph, data flow, event contract. |
+| 📄 [Manifest reference](docs/manifest-reference.md) | Profile shape, policy, versions, downloads, archives, symlinks. |
+| 🔐 [Security model](docs/security.md) | Trust boundaries, checksums, archive safety, sudo policy, known risks. |
+| 🧪 [Testing guide](docs/testing.md) | Project-native checks and test patterns. |
+| 🚢 [Release guide](docs/release.md) | Native artifacts, release workflow, smoke checks. |
+
+---
+
+<div align="center">
+
+**Found it useful? ⭐ Star the repo — it genuinely helps.**
+
+[🐛 Report a bug](https://github.com/worxbend/binstaller/issues/new) &nbsp;·&nbsp;
+[💡 Request a feature](https://github.com/worxbend/binstaller/issues/new) &nbsp;·&nbsp;
+[🌐 Website](https://worxbend.github.io/binstaller/)
+
+<sub>Built with Scala 3, Mill and GraalVM.</sub>
+
+</div>

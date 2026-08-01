@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="380" viewBox="0 0 1280 380" role="img" aria-label="binstaller — one YAML profile, reproducible binaries">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a0f18"/>
+      <stop offset="0.5" stop-color="#0d1420"/>
+      <stop offset="1" stop-color="#0a0f18"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="0.55" stop-color="#818cf8"/>
+      <stop offset="1" stop-color="#c084fc"/>
+    </linearGradient>
+    <linearGradient id="arrow" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0" stop-color="#7dd3fc"/>
+      <stop offset="1" stop-color="#34d399"/>
+    </linearGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7dd3fc"/>
+      <stop offset="0.5" stop-color="#a5b4fc"/>
+      <stop offset="1" stop-color="#f0f6fc"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#38bdf8" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#38bdf8" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#c084fc" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#c084fc" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="1" y="1" width="1278" height="378" rx="26" fill="url(#bg)" stroke="#1e2836" stroke-width="2"/>
+  <ellipse cx="235" cy="150" rx="330" ry="230" fill="url(#glow)"/>
+  <ellipse cx="1050" cy="330" rx="360" ry="240" fill="url(#glow2)"/>
+
+  <!-- grid texture -->
+  <g stroke="#1b2534" stroke-width="1" opacity="0.55">
+    <path d="M0 95h1280M0 190h1280M0 285h1280"/>
+    <path d="M160 0v380M320 0v380M480 0v380M640 0v380M800 0v380M960 0v380M1120 0v380"/>
+  </g>
+
+  <!-- mark -->
+  <g transform="translate(96,118) scale(1.13)">
+    <rect x="6" y="6" width="116" height="116" rx="30" fill="#0e1622" stroke="url(#edge)" stroke-width="4"/>
+    <rect x="57" y="26" width="14" height="38" rx="7" fill="url(#arrow)"/>
+    <path d="M40 58h48a2 2 0 0 1 1.6 3.2L67.2 89.5a4 4 0 0 1-6.4 0L38.4 61.2A2 2 0 0 1 40 58Z" fill="url(#arrow)"/>
+    <path d="M32 88v10a4 4 0 0 0 4 4h56a4 4 0 0 0 4-4V88" fill="none" stroke="url(#edge)" stroke-width="7" stroke-linecap="round"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="278" y="184" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="82" font-weight="700" letter-spacing="-2" fill="url(#word)">binstaller</text>
+  <text x="282" y="228" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="23" fill="#8b98ad">One YAML profile. Every binary. Every machine.</text>
+
+  <!-- pills -->
+  <g font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="17">
+    <rect x="280" y="256" width="150" height="36" rx="18" fill="#0f1a26" stroke="#1f4d5c"/>
+    <text x="355" y="280" fill="#56d4dd" text-anchor="middle">plan → apply</text>
+    <rect x="442" y="256" width="196" height="36" rx="18" fill="#101a14" stroke="#1f5136"/>
+    <text x="540" y="280" fill="#3fb950" text-anchor="middle">sha256 verified</text>
+    <rect x="650" y="256" width="168" height="36" rx="18" fill="#181425" stroke="#463a72"/>
+    <text x="734" y="280" fill="#bc8cff" text-anchor="middle">lockfile ready</text>
+    <rect x="830" y="256" width="184" height="36" rx="18" fill="#1c1810" stroke="#5c4a1c"/>
+    <text x="922" y="280" fill="#e3b341" text-anchor="middle">native binary</text>
+  </g>
+
+  <!-- mini terminal -->
+  <g font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="15">
+    <rect x="978" y="92" width="246" height="156" rx="12" fill="#0b1119" stroke="#243043"/>
+    <path d="M978 104a12 12 0 0 1 12-12h222a12 12 0 0 1 12 12v18H978Z" fill="#161d29"/>
+    <circle cx="996" cy="107" r="4" fill="#ff5f57"/>
+    <circle cx="1010" cy="107" r="4" fill="#febc2e"/>
+    <circle cx="1024" cy="107" r="4" fill="#28c840"/>
+    <text x="998" y="152" fill="#3fb950">$</text>
+    <text x="1014" y="152" fill="#f0f6fc">binstaller apply</text>
+    <text x="998" y="180" fill="#56d4dd">⬇ downloading zellij</text>
+    <text x="998" y="206" fill="#3fb950">✅ installed: 12</text>
+    <text x="998" y="232" fill="#bc8cff">🎉 exit code: 0</text>
+  </g>
+</svg>

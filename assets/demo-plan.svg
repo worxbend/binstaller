@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="799" height="784" viewBox="0 0 799 784" role="img" aria-label="binstaller plan — dry run, nothing written">
+<defs>
+<linearGradient id="tb" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#1b222d"/><stop offset="1" stop-color="#161b22"/>
+</linearGradient></defs>
+<rect x="0.5" y="0.5" width="798" height="783" rx="12" fill="#0b0f16" stroke="#272e3a"/>
+<path d="M0.5 12.5a12 12 0 0 1 12-12h774a12 12 0 0 1 12 12V36H0.5Z" fill="url(#tb)"/>
+<line x1="0.5" y1="36" x2="798.5" y2="36" stroke="#272e3a"/>
+<circle cx="22" cy="18.5" r="5.5" fill="#ff5f57"/>
+<circle cx="40" cy="18.5" r="5.5" fill="#febc2e"/>
+<circle cx="58" cy="18.5" r="5.5" fill="#28c840"/>
+<text x="399.5" y="23" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="12" fill="#8b949e" text-anchor="middle">binstaller plan — dry run, nothing written</text>
+<text x="20.0" y="66.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#3fb950">➜</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#56d4dd">~/dev</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#bc8cff">$</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#f0f6fc">binstaller plan</tspan>
+</text>
+<text x="20.0" y="108.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#f0f6fc">binstaller plan</tspan>
+</text>
+<text x="20.0" y="129.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">tools: </tspan>
+<tspan fill="#f0f6fc">15</tspan>
+</text>
+<text x="20.0" y="150.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">apps dir: </tspan>
+<tspan fill="#56d4dd">/home/you/.apps</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#8b949e">(not created)</tspan>
+</text>
+<text x="20.0" y="171.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">policy mode: </tspan>
+<tspan fill="#e3b341">developer</tspan>
+</text>
+<text x="20.0" y="192.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">state file: </tspan>
+<tspan fill="#56d4dd">developer-binaries.state.json</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#8b949e">(not created)</tspan>
+</text>
+<text x="20.0" y="213.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">lock file: </tspan>
+<tspan fill="#8b949e">not required</tspan>
+</text>
+<text x="20.0" y="234.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">filesystem: </tspan>
+<tspan fill="#3fb950">no changes will be made</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#8b949e">(version resolution may use the network)</tspan>
+</text>
+<text x="20.0" y="255.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">sudo risk: </tspan>
+<tspan fill="#f85149">YES</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#8b949e">- 5 sudo symlink command(s) require elevated privileges</tspan>
+</text>
+<text x="20.0" y="297.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#f0f6fc">1. yazi</tspan>
+</text>
+<text x="20.0" y="318.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">   destination: </tspan>
+<tspan fill="#56d4dd">/home/you/.apps/yazi</tspan>
+</text>
+<text x="20.0" y="339.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">   version: </tspan>
+<tspan fill="#3fb950">concrete v26.5.6</tspan>
+</text>
+<text x="20.0" y="360.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">   download: </tspan>
+<tspan fill="#4f7cc4">https://github.com/sxyazi/yazi/releases/download/v26.5.6/yazi-…-gnu.zip</tspan>
+</text>
+<text x="20.0" y="381.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">   checksum: </tspan>
+<tspan fill="#e3b341">missing (not configured)</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#8b949e">- NO integrity verification</tspan>
+</text>
+<text x="20.0" y="402.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">   archive: </tspan>
+<tspan fill="#f0f6fc">zip</tspan>
+</text>
+<text x="20.0" y="423.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">     file yazi-x86_64-unknown-linux-gnu/yazi </tspan>
+<tspan fill="#bc8cff">-&gt;</tspan>
+<tspan fill="#c9d1d9"> bin/yazi</tspan>
+</text>
+<text x="20.0" y="444.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">     file yazi-x86_64-unknown-linux-gnu/ya   </tspan>
+<tspan fill="#bc8cff">-&gt;</tspan>
+<tspan fill="#c9d1d9"> bin/ya</tspan>
+</text>
+<text x="20.0" y="465.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">   executables:</tspan>
+</text>
+<text x="20.0" y="486.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">     </tspan>
+<tspan fill="#3fb950">/home/you/.apps/yazi/bin/yazi</tspan>
+</text>
+<text x="20.0" y="507.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">     </tspan>
+<tspan fill="#3fb950">/home/you/.apps/yazi/bin/ya</tspan>
+</text>
+<text x="20.0" y="528.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">   symlinks: </tspan>
+<tspan fill="#8b949e">none</tspan>
+</text>
+<text x="20.0" y="570.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#f0f6fc">14. dotbot</tspan>
+</text>
+<text x="20.0" y="591.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">   destination: </tspan>
+<tspan fill="#56d4dd">/home/you/.apps/dotbot</tspan>
+</text>
+<text x="20.0" y="612.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">   version: </tspan>
+<tspan fill="#3fb950">concrete v0.3.0</tspan>
+</text>
+<text x="20.0" y="633.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">   download: </tspan>
+<tspan fill="#4f7cc4">https://github.com/worxbend/dotbot-go/…/dotbot-linux-amd64.tar.gz</tspan>
+</text>
+<text x="20.0" y="654.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">   checksum: </tspan>
+<tspan fill="#3fb950">sha256 45d49e06…78633d</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#8b949e">(pinned by author)</tspan>
+</text>
+<text x="20.0" y="675.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">   archive: </tspan>
+<tspan fill="#f0f6fc">tar.gz</tspan>
+</text>
+<text x="20.0" y="696.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">     file dotbot </tspan>
+<tspan fill="#bc8cff">-&gt;</tspan>
+<tspan fill="#c9d1d9"> bin/dotbot</tspan>
+</text>
+<text x="20.0" y="717.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">   executables:</tspan>
+</text>
+<text x="20.0" y="738.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">     </tspan>
+<tspan fill="#3fb950">/home/you/.apps/dotbot/bin/dotbot</tspan>
+</text>
+<text x="20.0" y="759.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">   symlinks: </tspan>
+<tspan fill="#8b949e">none</tspan>
+</text>
+</svg>

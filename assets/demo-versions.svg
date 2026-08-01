@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="644" height="406" viewBox="0 0 644 406" role="img" aria-label="binstaller versions — what is installed, what moved on">
+<defs>
+<linearGradient id="tb" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#1b222d"/><stop offset="1" stop-color="#161b22"/>
+</linearGradient></defs>
+<rect x="0.5" y="0.5" width="643" height="405" rx="12" fill="#0b0f16" stroke="#272e3a"/>
+<path d="M0.5 12.5a12 12 0 0 1 12-12h619a12 12 0 0 1 12 12V36H0.5Z" fill="url(#tb)"/>
+<line x1="0.5" y1="36" x2="643.5" y2="36" stroke="#272e3a"/>
+<circle cx="22" cy="18.5" r="5.5" fill="#ff5f57"/>
+<circle cx="40" cy="18.5" r="5.5" fill="#febc2e"/>
+<circle cx="58" cy="18.5" r="5.5" fill="#28c840"/>
+<text x="322.0" y="23" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="12" fill="#8b949e" text-anchor="middle">binstaller versions — what is installed, what moved on</text>
+<text x="20.0" y="66.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#3fb950">➜</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#56d4dd">~/dev</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#bc8cff">$</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#f0f6fc">binstaller versions</tspan>
+</text>
+<text x="20.0" y="108.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#f0f6fc">binstaller versions</tspan>
+</text>
+<text x="20.0" y="129.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#8b949e">package              version             newer version</tspan>
+</text>
+<text x="20.0" y="150.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">yazi                 </tspan>
+<tspan fill="#3fb950">v26.5.6</tspan>
+<tspan fill="#c9d1d9">             </tspan>
+<tspan fill="#8b949e">-</tspan>
+</text>
+<text x="20.0" y="171.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">zig                  </tspan>
+<tspan fill="#3fb950">0.15.2</tspan>
+<tspan fill="#c9d1d9">              </tspan>
+<tspan fill="#8b949e">-</tspan>
+</text>
+<text x="20.0" y="192.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">minikube             </tspan>
+<tspan fill="#e3b341">dynamic latest-url</tspan>
+<tspan fill="#c9d1d9">  </tspan>
+<tspan fill="#8b949e">-</tspan>
+</text>
+<text x="20.0" y="213.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">kubectl              </tspan>
+<tspan fill="#3fb950">v1.36.3</tspan>
+<tspan fill="#c9d1d9">             </tspan>
+<tspan fill="#8b949e">-</tspan>
+</text>
+<text x="20.0" y="234.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">zellij               </tspan>
+<tspan fill="#3fb950">0.44.1</tspan>
+<tspan fill="#c9d1d9">              </tspan>
+<tspan fill="#bc8cff">v0.44.3</tspan>
+</text>
+<text x="20.0" y="255.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">helm                 </tspan>
+<tspan fill="#3fb950">v3.21.2</tspan>
+<tspan fill="#c9d1d9">             </tspan>
+<tspan fill="#8b949e">-</tspan>
+</text>
+<text x="20.0" y="276.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">kustomize            </tspan>
+<tspan fill="#3fb950">v5.8.1</tspan>
+<tspan fill="#c9d1d9">              </tspan>
+<tspan fill="#8b949e">?</tspan>
+</text>
+<text x="20.0" y="297.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">neovim               </tspan>
+<tspan fill="#e3b341">dynamic latest-url</tspan>
+<tspan fill="#c9d1d9">  </tspan>
+<tspan fill="#8b949e">-</tspan>
+</text>
+<text x="20.0" y="318.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">lazygit              </tspan>
+<tspan fill="#3fb950">0.61.0</tspan>
+<tspan fill="#c9d1d9">              </tspan>
+<tspan fill="#bc8cff">v0.63.1</tspan>
+</text>
+<text x="20.0" y="339.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">jujutsu              </tspan>
+<tspan fill="#3fb950">0.40.0</tspan>
+<tspan fill="#c9d1d9">              </tspan>
+<tspan fill="#bc8cff">v0.43.0</tspan>
+</text>
+<text x="20.0" y="360.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">dotbot               </tspan>
+<tspan fill="#3fb950">v0.3.0</tspan>
+<tspan fill="#c9d1d9">              </tspan>
+<tspan fill="#bc8cff">v0.4.2</tspan>
+</text>
+<text x="20.0" y="381.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">nerd-font-installer  </tspan>
+<tspan fill="#3fb950">v1.0.6</tspan>
+<tspan fill="#c9d1d9">              </tspan>
+<tspan fill="#bc8cff">v1.0.7</tspan>
+</text>
+</svg>

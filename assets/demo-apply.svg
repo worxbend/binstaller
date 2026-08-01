@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="981" height="406" viewBox="0 0 981 406" role="img" aria-label="binstaller apply — concurrent downloads, verified installs">
+<defs>
+<linearGradient id="tb" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#1b222d"/><stop offset="1" stop-color="#161b22"/>
+</linearGradient></defs>
+<rect x="0.5" y="0.5" width="980" height="405" rx="12" fill="#0b0f16" stroke="#272e3a"/>
+<path d="M0.5 12.5a12 12 0 0 1 12-12h956a12 12 0 0 1 12 12V36H0.5Z" fill="url(#tb)"/>
+<line x1="0.5" y1="36" x2="980.5" y2="36" stroke="#272e3a"/>
+<circle cx="22" cy="18.5" r="5.5" fill="#ff5f57"/>
+<circle cx="40" cy="18.5" r="5.5" fill="#febc2e"/>
+<circle cx="58" cy="18.5" r="5.5" fill="#28c840"/>
+<text x="490.5" y="23" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="12" fill="#8b949e" text-anchor="middle">binstaller apply — concurrent downloads, verified installs</text>
+<text x="20.0" y="66.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#3fb950">➜</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#56d4dd">~/dev</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#bc8cff">$</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#f0f6fc">binstaller apply</tspan>
+</text>
+<text x="20.0" y="108.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">✅ </tspan>
+<tspan fill="#3fb950">completed dotbot dotbot-linux-amd64.tar.gz</tspan>
+<tspan fill="#c9d1d9"> [</tspan>
+<tspan fill="#3fb950">██████████████████████████████</tspan>
+<tspan fill="#c9d1d9">] </tspan>
+<tspan fill="#3fb950">100%</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#3fb950">2.0 MiB/2.0 MiB</tspan>
+</text>
+<text x="20.0" y="129.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">⬇ </tspan>
+<tspan fill="#56d4dd">downloading</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#e3b341">zig zig-x86_64-linux-0.15.2.tar.xz</tspan>
+<tspan fill="#c9d1d9"> [</tspan>
+<tspan fill="#e3b341">█████████████████████</tspan>
+<tspan fill="#4f7cc4">░░░░░░░░░</tspan>
+<tspan fill="#c9d1d9">] </tspan>
+<tspan fill="#e3b341">70%</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#56d4dd">33.9 MiB/48.4 MiB</tspan>
+</text>
+<text x="20.0" y="150.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">⬇ </tspan>
+<tspan fill="#56d4dd">downloading</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#e3b341">neovim nvim-linux-x86_64.tar.gz</tspan>
+<tspan fill="#c9d1d9"> [</tspan>
+<tspan fill="#56d4dd">████████████</tspan>
+<tspan fill="#4f7cc4">░░░░░░░░░░░░░░░░░░</tspan>
+<tspan fill="#c9d1d9">] </tspan>
+<tspan fill="#56d4dd">40%</tspan>
+<tspan fill="#c9d1d9"> </tspan>
+<tspan fill="#56d4dd">4.3 MiB/10.7 MiB</tspan>
+</text>
+<text x="20.0" y="192.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#3fb950">installed dotbot to /home/you/.apps/dotbot</tspan>
+</text>
+<text x="20.0" y="213.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#3fb950">installed zig to /home/you/.apps/zig</tspan>
+</text>
+<text x="20.0" y="234.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#3fb950">installed neovim to /home/you/.apps/neovim</tspan>
+</text>
+<text x="20.0" y="276.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#bc8cff">✨ Summary</tspan>
+</text>
+<text x="20.0" y="297.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">  </tspan>
+<tspan fill="#3fb950">✅ installed: 3</tspan>
+</text>
+<text x="20.0" y="318.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">  </tspan>
+<tspan fill="#f85149">❌ failed: 0</tspan>
+</text>
+<text x="20.0" y="339.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">  </tspan>
+<tspan fill="#e3b341">⏭ skipped: 0</tspan>
+</text>
+<text x="20.0" y="360.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">  </tspan>
+<tspan fill="#56d4dd">🚦 exit code: 0</tspan>
+</text>
+<text x="20.0" y="381.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
+<tspan fill="#c9d1d9">  </tspan>
+<tspan fill="#3fb950">🎉 apply completed successfully</tspan>
+</text>
+</svg>
