@@ -553,44 +553,53 @@ private[core] final class ResolutionBuilder(
       version: ResolvedVersion
   ): ResolvedValue[String] = resolveTemplate(raw, path, vars, version, (_, _) => Vector.empty)
 
+  /** Normalize a manifest path, or report why it is not a usable path.
+   *
+   *  Both steps have to happen before any two paths can be compared: `pathSyntax` rejects the
+   *  values that must never reach the filesystem at all, and normalization resolves `.`, `..` and
+   *  relative segments so that a containment check on the result means what it says.
+   */
+  private def normalizedPath(
+      value: String,
+      path: String,
+      label: String
+  ): Either[Vector[ValidationError], Path] =
+    val syntaxErrors = ResolvedPathValidator.pathSyntax(value, path, label)
+    if syntaxErrors.nonEmpty then Left(syntaxErrors)
+    else
+      Try(Path.of(value).toAbsolutePath.normalize()) match
+        case Failure(error) =>
+          Left(Vector(ValidationError(path, s"invalid $label: ${error.getMessage}")))
+        case Success(result) => Right(result)
+
+  /** The rule: an install root must live strictly inside appsDir.
+   *
+   *  Equal to appsDir is rejected as well as outside it, because a tool whose installDir *is* the
+   *  apps root would have the replace step delete every other tool on the next apply.
+   */
+  private def containmentErrors(
+      tool: ResolvedTool,
+      index: Int,
+      appsDir: Path
+  ): Vector[ValidationError] =
+    val path = s"spec.plan[$index].spec.installDir"
+    normalizedPath(tool.installDir, path, "installDir") match
+      case Left(errors)                       => errors
+      case Right(installDir) if installDir == appsDir =>
+        Vector(ValidationError(path, "installDir must be a child of appsDir, not appsDir itself"))
+      case Right(installDir) if !installDir.startsWith(appsDir) =>
+        Vector(ValidationError(path, "installDir must resolve inside spec.policy.appsDir"))
+      case Right(_) => Vector.empty
+
   private def validateInstallDirectories(
       policy: ResolvedPolicy,
       tools: Vector[ResolvedTool]
   ): Vector[ValidationError] =
-    val appsDirPath         = "spec.policy.appsDir"
-    val appsDirSyntaxErrors =
-      ResolvedPathValidator.pathSyntax(policy.appsDir, appsDirPath, "appsDir")
-    if appsDirSyntaxErrors.nonEmpty then appsDirSyntaxErrors
-    else
-      Try(Path.of(policy.appsDir).toAbsolutePath.normalize()) match
-        case Failure(error) =>
-          Vector(ValidationError(appsDirPath, s"invalid appsDir: ${error.getMessage}"))
-        case Success(appsDir) =>
-          // Install roots must stay under appsDir and must not nest inside another tool. This keeps a
-          // bad manifest from replacing the apps root or another tool's install directory.
-          val containmentErrors = tools.zipWithIndex.flatMap:
-            case (tool, index) =>
-              val path         = s"spec.plan[$index].spec.installDir"
-              val syntaxErrors =
-                ResolvedPathValidator.pathSyntax(tool.installDir, path, "installDir")
-              if syntaxErrors.nonEmpty then syntaxErrors
-              else
-                Try(Path.of(tool.installDir).toAbsolutePath.normalize()) match
-                  case Failure(error) =>
-                    Vector(ValidationError(path, s"invalid installDir: ${error.getMessage}"))
-                  case Success(installDir) if installDir == appsDir =>
-                    Vector(ValidationError(
-                      path,
-                      "installDir must be a child of appsDir, not appsDir itself"
-                    ))
-                  case Success(installDir) if !installDir.startsWith(appsDir) =>
-                    Vector(ValidationError(
-                      path,
-                      "installDir must resolve inside spec.policy.appsDir"
-                    ))
-                  case Success(_) => Vector.empty
-
-          containmentErrors ++ nestedInstallDirectoryErrors(tools)
+    normalizedPath(policy.appsDir, "spec.policy.appsDir", "appsDir") match
+      case Left(errors)   => errors
+      case Right(appsDir) =>
+        tools.zipWithIndex.flatMap((tool, index) => containmentErrors(tool, index, appsDir)) ++
+          nestedInstallDirectoryErrors(tools)
 
   private def nestedInstallDirectoryErrors(tools: Vector[ResolvedTool]): Vector[ValidationError] =
     val indexed = tools.zipWithIndex.flatMap:
