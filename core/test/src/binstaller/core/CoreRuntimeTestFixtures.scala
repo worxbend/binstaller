@@ -484,7 +484,7 @@ private[core] final class RecordingInstallFileSystem(
       installDir: Path
   ): Either[InstallFileSystemError.StagingFailed, StagedInstall] =
     try
-      val stagingDir = Files.createTempDirectory("binstaller-recording-stage")
+      val stagingDir = TestTempDirectories.create("recording-stage")
       stagedFiles.foreach: file =>
         val target = stagingDir.resolve(file)
         Files.createDirectories(target.getParent)

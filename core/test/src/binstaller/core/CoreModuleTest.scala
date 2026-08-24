@@ -359,7 +359,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       ))
 
     test("a direct binary tool with multiple executables is rejected at plan time"):
-      val installDir = Files.createTempDirectory("binstaller-multi-exec").resolve("alpha")
+      val installDir = tempDirectory("multi-exec").resolve("alpha")
       val multiExecYaml = directBinaryYaml(installDir).replace(
         "          - path: bin/alpha",
         "          - path: bin/alpha\n          - path: bin/beta"
@@ -397,7 +397,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(plan.tools.forall(_.installDir.startsWith(s"${plan.policy.appsDir}/")))
 
     test("direct binary install writes download bytes to first executable path"):
-      val tempRoot   = Files.createTempDirectory("binstaller-core-direct")
+      val tempRoot   = tempDirectory("core-direct")
       val installDir = tempRoot.resolve("alpha")
       val installer  = DirectBinaryInstaller(
         FakeBinaryDownloadClient.success("alpha-binary".getBytes),
@@ -410,7 +410,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.readString(installDir.resolve("bin/alpha")) == "alpha-binary")
 
     test("sha256 mismatch fails before replacing an existing install"):
-      val tempRoot     = Files.createTempDirectory("binstaller-core-checksum")
+      val tempRoot     = tempDirectory("core-checksum")
       val installDir   = tempRoot.resolve("alpha")
       val existingFile = installDir.resolve("bin/alpha")
       Files.createDirectories(existingFile.getParent)
@@ -456,7 +456,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(fileSystem.recordedModes.map(_.mode.numeric) == Vector(448, 493))
 
     test("download failure preserves existing install and returns a typed error"):
-      val tempRoot     = Files.createTempDirectory("binstaller-core-download")
+      val tempRoot     = tempDirectory("core-download")
       val installDir   = tempRoot.resolve("alpha")
       val existingFile = installDir.resolve("bin/alpha")
       Files.createDirectories(existingFile.getParent)
@@ -568,7 +568,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(result.left.exists(_.message.contains("download body timed out")))
 
     test("staging failure preserves existing install and does not replace"):
-      val tempRoot     = Files.createTempDirectory("binstaller-core-staging")
+      val tempRoot     = tempDirectory("core-staging")
       val installDir   = tempRoot.resolve("alpha")
       val existingFile = installDir.resolve("bin/alpha")
       Files.createDirectories(existingFile.getParent)
@@ -586,7 +586,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.readString(existingFile) == "existing")
 
     test("mode application failure preserves existing install and does not replace"):
-      val tempRoot     = Files.createTempDirectory("binstaller-core-mode")
+      val tempRoot     = tempDirectory("core-mode")
       val installDir   = tempRoot.resolve("alpha")
       val existingFile = installDir.resolve("bin/alpha")
       Files.createDirectories(existingFile.getParent)
@@ -612,7 +612,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.readString(existingFile) == "existing")
 
     test("apply renders expected executor failures without throwing"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-cli-error")
+      val tempRoot = tempDirectory("core-cli-error")
       val config   = tempRoot.resolve("profile.yaml")
       Files.writeString(config, directBinaryYaml(tempRoot.resolve("alpha")))
       val service = BinaryInstallerService.resolving(
@@ -639,7 +639,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!result.lines.exists(_.contains("at binstaller.")))
 
     test("invalid config reports every aggregated validation error concisely"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-invalid-config")
+      val tempRoot = tempDirectory("core-invalid-config")
       val config   = writeConfig(tempRoot, invalidConfigYaml(tempRoot))
       val service  = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
 
@@ -685,7 +685,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!result.lines.exists(_.contains("final url")))
 
     test("versions output reports newer GitHub release for pinned downloads"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-github-latest")
+      val tempRoot = tempDirectory("core-github-latest")
       val config   = writeConfig(tempRoot, githubReleaseYaml(tempRoot, "0.40.0"))
       val service  = BinaryInstallerService.resolving(
         RoutingHttpTextClient(Map(
@@ -736,7 +736,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         Sha256SumChecksumFile.Lookup.Found(digest("a" * 64)))
 
     test("versions output flags unavailable GitHub release metadata without failing"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-github-unavailable")
+      val tempRoot = tempDirectory("core-github-unavailable")
       val config   = writeConfig(tempRoot, githubReleaseYaml(tempRoot, "0.40.0"))
       val service  = BinaryInstallerService.resolving(
         RoutingHttpTextClient(Map(
@@ -756,7 +756,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!result.lines.exists(_.contains("HTTP 403")))
 
     test("lock writes pinned http-text and dynamic source metadata without apply state"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-lock")
+      val tempRoot = tempDirectory("core-lock")
       val config   = writeConfig(tempRoot, lockYaml(tempRoot))
       val lockPath = tempRoot.resolve("resolved.lock.json")
       val service  = BinaryInstallerService.resolving(
@@ -840,7 +840,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!Files.exists(tempRoot.resolve("apps")))
 
     test("discovered checksum succeeds and is visible in plan versions and lock output"):
-      val tempRoot        = Files.createTempDirectory("binstaller-core-checksum-discovered")
+      val tempRoot        = tempDirectory("core-checksum-discovered")
       val artifactBytes   = "alpha-binary".getBytes(StandardCharsets.UTF_8)
       val artifactHash    = sha256(artifactBytes)
       val checksumFileUrl = "https://example.invalid/releases/1.0.0/SHA256SUMS"
@@ -897,7 +897,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       )
 
     test("ambiguous discovered checksum fails resolution with a colliding-path diagnostic"):
-      val tempRoot        = Files.createTempDirectory("binstaller-core-checksum-ambiguous")
+      val tempRoot        = tempDirectory("core-checksum-ambiguous")
       val checksumFileUrl = "https://example.invalid/releases/1.0.0/SHA256SUMS"
       val config          = writeConfig(tempRoot, checksumDiscoveryYaml(tempRoot, checksumFileUrl))
       val service         = BinaryInstallerService.resolving(
@@ -920,7 +920,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       ))
 
     test("missing checksum file fails resolution with a typed diagnostic"):
-      val tempRoot        = Files.createTempDirectory("binstaller-core-checksum-missing-file")
+      val tempRoot        = tempDirectory("core-checksum-missing-file")
       val checksumFileUrl = "https://example.invalid/releases/1.0.0/SHA256SUMS"
       val config          = writeConfig(tempRoot, checksumDiscoveryYaml(tempRoot, checksumFileUrl))
       val service         = BinaryInstallerService.resolving(
@@ -936,7 +936,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(result.lines.exists(_.contains("spec.plan[0].spec.download.checksum.discover.url")))
 
     test("mismatched discovered checksum fails before replacement"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-checksum-discovered-mismatch")
+      val tempRoot = tempDirectory("core-checksum-discovered-mismatch")
       val checksumFileUrl = "https://example.invalid/releases/1.0.0/SHA256SUMS"
       val config          = writeConfig(tempRoot, checksumDiscoveryYaml(tempRoot, checksumFileUrl))
       val existingFile    = tempRoot.resolve("apps/alpha/bin/alpha")
@@ -969,7 +969,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.readString(existingFile) == "existing")
 
     test("locked plan validates lock and renders locked provenance without writes"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-locked-plan")
+      val tempRoot = tempDirectory("core-locked-plan")
       val config   = writeConfig(tempRoot, lockYaml(tempRoot))
       val lockPath = tempRoot.resolve("binstaller.lock.json")
       writeLock(lockPath, currentLockFile(config, dynamicSize = Some(33L)))
@@ -1002,7 +1002,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!Files.exists(tempRoot.resolve("lock.state.json")))
 
     test("locked apply rejects stale manifest fingerprint before install"):
-      val tempRoot  = Files.createTempDirectory("binstaller-core-locked-stale")
+      val tempRoot  = tempDirectory("core-locked-stale")
       val config    = writeConfig(tempRoot, lockYaml(tempRoot))
       val lockPath  = tempRoot.resolve("binstaller.lock.json")
       val staleLock = currentLockFile(config, dynamicSize = Some(33L)).copy(
@@ -1026,7 +1026,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
     test("locked apply rejects a malformed locked checksum even when the manifest pins one"):
       // The format check used to run only for tools with no manifest checksum, so a corrupt digest
       // on a pinned tool fell through to a comparison against an unvalidated string.
-      val tempRoot = Files.createTempDirectory("binstaller-core-locked-bad-digest")
+      val tempRoot = tempDirectory("core-locked-bad-digest")
       val config   = writeConfig(tempRoot, lockYaml(tempRoot))
       val lockPath = tempRoot.resolve("binstaller.lock.json")
       val current  = currentLockFile(config, dynamicSize = Some(33L))
@@ -1050,7 +1050,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!Files.exists(tempRoot.resolve("apps/alpha")))
 
     test("locked apply rejects download provenance drift before install"):
-      val tempRoot  = Files.createTempDirectory("binstaller-core-locked-url-drift")
+      val tempRoot  = tempDirectory("core-locked-url-drift")
       val config    = writeConfig(tempRoot, lockYaml(tempRoot))
       val lockPath  = tempRoot.resolve("binstaller.lock.json")
       val staleBeta = currentLockFile(config, dynamicSize = Some(33L)).tools.map:
@@ -1083,7 +1083,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!Files.exists(tempRoot.resolve("lock.state.json")))
 
     test("locked apply rejects missing dynamic lock data"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-locked-dynamic-missing")
+      val tempRoot = tempDirectory("core-locked-dynamic-missing")
       val config   = writeConfig(tempRoot, lockYaml(tempRoot))
       val lockPath = tempRoot.resolve("binstaller.lock.json")
       writeLock(lockPath, currentLockFile(config, dynamicSize = None))
@@ -1102,7 +1102,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!Files.exists(tempRoot.resolve("lock.state.json")))
 
     test("locked apply rejects missing lock before install"):
-      val tempRoot   = Files.createTempDirectory("binstaller-core-locked-missing")
+      val tempRoot   = tempDirectory("core-locked-missing")
       val installDir = tempRoot.resolve("alpha")
       val config     = writeConfig(tempRoot, directBinaryYaml(installDir))
       val lockPath   = tempRoot.resolve("missing.lock.json")
@@ -1120,7 +1120,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!Files.exists(installDir))
 
     test("locked apply verifies digest against bytes from the installation GET"):
-      val tempRoot     = Files.createTempDirectory("binstaller-core-locked-get-digest")
+      val tempRoot     = tempDirectory("core-locked-get-digest")
       val installDir   = tempRoot.resolve("alpha")
       val config       = writeConfig(tempRoot, directBinaryYaml(installDir))
       val lockPath     = tempRoot.resolve("binstaller.lock.json")
@@ -1173,7 +1173,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!Files.exists(installDir))
 
     test("apply installs a resolved plan"):
-      val tempRoot   = Files.createTempDirectory("binstaller-core-confirm")
+      val tempRoot   = tempDirectory("core-confirm")
       val installDir = tempRoot.resolve("alpha")
       val config     = writeConfig(tempRoot, directBinaryYaml(installDir))
       val service    = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
@@ -1184,7 +1184,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.exists(installDir.resolve("bin/alpha")))
 
     test("continueOnError false stops apply after the first failed tool"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-stop-on-error")
+      val tempRoot = tempDirectory("core-stop-on-error")
       val config   = writeConfig(tempRoot, twoToolYaml(tempRoot, "stop.state.json"))
       val service  = statefulService(
         tempRoot,
@@ -1203,7 +1203,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!hasStagedInstall(tempRoot, "beta"))
 
     test("continueOnError true continues apply after failed tools"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-continue-on-error")
+      val tempRoot = tempDirectory("core-continue-on-error")
       val config   = writeConfig(
         tempRoot,
         twoToolYaml(tempRoot, "continue.state.json", continueOnError = true)
@@ -1224,7 +1224,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.isRegularFile(tempRoot.resolve("apps/beta/bin/beta")))
 
     test("apply downloads and stages tools concurrently up to configured parallelism"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-parallel-downloads")
+      val tempRoot = tempDirectory("core-parallel-downloads")
       val config   = writeConfig(tempRoot, twoToolYaml(tempRoot, "parallel.state.json"))
       val client   = ConcurrentTrackingDownloadClient(
         Vector("https://example.invalid/alpha", "https://example.invalid/beta")
@@ -1243,7 +1243,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.isRegularFile(tempRoot.resolve("apps/beta/bin/beta")))
 
     test("service honors apply parallelism of one"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-serial-downloads")
+      val tempRoot = tempDirectory("core-serial-downloads")
       val config   = writeConfig(tempRoot, twoToolYaml(tempRoot, "serial.state.json"))
       val client   = ParallelismProbeDownloadClient()
       val service  = BinaryInstallerService.resolving(
@@ -1258,7 +1258,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(client.maxInFlight == 1)
 
     test("sudo password requests stay serialized after parallel downloads"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-parallel-sudo")
+      val tempRoot = tempDirectory("core-parallel-sudo")
       val config   = writeConfig(tempRoot, twoSudoToolYaml(tempRoot))
       val client   = ConcurrentTrackingDownloadClient(
         Vector("https://example.invalid/alpha", "https://example.invalid/beta")
@@ -1283,7 +1283,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(credentials.toolNames == Vector("alpha", "beta"))
 
     test("zip archive file mapping lands at configured relative target path"):
-      val tempRoot   = Files.createTempDirectory("binstaller-core-zip")
+      val tempRoot   = tempDirectory("core-zip")
       val installDir = tempRoot.resolve("alpha")
       val installer  = DirectBinaryInstaller(
         FakeBinaryDownloadClient.success(zipArchive(Vector("pkg/alpha" -> "zip-alpha"))),
@@ -1300,7 +1300,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.readString(installDir.resolve("bin/alpha")) == "zip-alpha")
 
     test("tar.gz archive file mapping lands at configured relative target path"):
-      val tempRoot   = Files.createTempDirectory("binstaller-core-targz")
+      val tempRoot   = tempDirectory("core-targz")
       val installDir = tempRoot.resolve("alpha")
       val installer  = DirectBinaryInstaller(
         FakeBinaryDownloadClient.success(tarGzArchive(Vector("pkg/alpha" -> "tar-alpha"))),
@@ -1317,7 +1317,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.readString(installDir.resolve("bin/alpha")) == "tar-alpha")
 
     test("tar.gz directory mapping moves extracted root directory into install root"):
-      val tempRoot   = Files.createTempDirectory("binstaller-core-targz-dir")
+      val tempRoot   = tempDirectory("core-targz-dir")
       val installDir = tempRoot.resolve("alpha")
       val installer  = DirectBinaryInstaller(
         FakeBinaryDownloadClient.success(tarGzArchive(Vector(
@@ -1338,7 +1338,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.readString(installDir.resolve("share/readme")) == "docs")
 
     test("tar.gz root directory entries do not fail extraction"):
-      val tempRoot   = Files.createTempDirectory("binstaller-core-targz-root-dir")
+      val tempRoot   = tempDirectory("core-targz-root-dir")
       val installDir = tempRoot.resolve("alpha")
       val installer  = DirectBinaryInstaller(
         FakeBinaryDownloadClient.success(tarGzArchiveWithDirectories(
@@ -1359,7 +1359,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.readString(installDir.resolve("bin/jj")) == "jujutsu")
 
     test("archive entries that escape staging are rejected and preserve existing install"):
-      val tempRoot     = Files.createTempDirectory("binstaller-core-zip-slip")
+      val tempRoot     = tempDirectory("core-zip-slip")
       val installDir   = tempRoot.resolve("alpha")
       val existingFile = installDir.resolve("bin/alpha")
       Files.createDirectories(existingFile.getParent)
@@ -1379,7 +1379,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.readString(existingFile) == "existing")
 
     test("duplicate zip archive members are rejected before replacement"):
-      val tempRoot     = Files.createTempDirectory("binstaller-core-zip-duplicate")
+      val tempRoot     = tempDirectory("core-zip-duplicate")
       val installDir   = tempRoot.resolve("alpha")
       val existingFile = installDir.resolve("bin/alpha")
       Files.createDirectories(existingFile.getParent)
@@ -1405,7 +1405,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.readString(existingFile) == "existing")
 
     test("tar.gz hardlink metadata is rejected before replacement"):
-      val tempRoot     = Files.createTempDirectory("binstaller-core-targz-hardlink")
+      val tempRoot     = tempDirectory("core-targz-hardlink")
       val installDir   = tempRoot.resolve("alpha")
       val existingFile = installDir.resolve("bin/alpha")
       Files.createDirectories(existingFile.getParent)
@@ -1430,7 +1430,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.readString(existingFile) == "existing")
 
     test("tar.xz extraction uses the validated in-process archive path"):
-      val tempRoot        = Files.createTempDirectory("binstaller-core-tarxz")
+      val tempRoot        = tempDirectory("core-tarxz")
       val installDir      = tempRoot.resolve("zig")
       val commandExecutor = FakeArchiveCommandExecutor("zig-root/bin/zig", "zig")
       val installer       = DirectBinaryInstaller(
@@ -1458,7 +1458,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       // Regression guard for the decompression-bomb DoS: an unplanned member declaring more bytes
       // than the aggregate budget must be rejected even though NONE of the bomb members are part of
       // the copy plan. The previous two-pass extractor skipped unplanned members with no budget.
-      val tempRoot   = Files.createTempDirectory("binstaller-core-targz-bomb")
+      val tempRoot   = tempDirectory("core-targz-bomb")
       val installDir = tempRoot.resolve("alpha")
       val output     = java.io.ByteArrayOutputStream()
       val gzip       = java.util.zip.GZIPOutputStream(output)
@@ -1491,7 +1491,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       // Regression guard: the single-pass extractor must mark the directory prefix matched even
       // when a file mapping claims the member first, or finish() falsely reports "directory not
       // found"; and the member must land at both mapped targets, as the two-pass planner produced.
-      val tempRoot   = Files.createTempDirectory("binstaller-core-overlap")
+      val tempRoot   = tempDirectory("core-overlap")
       val installDir = tempRoot.resolve("alpha")
       val output     = java.io.ByteArrayOutputStream()
       val gzip       = java.util.zip.GZIPOutputStream(output)
@@ -1518,7 +1518,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.readString(installDir.resolve("share/tool")) == "tool-bytes")
 
     test("tar.gz archive exceeding the max entry count is rejected"):
-      val tempRoot   = Files.createTempDirectory("binstaller-core-targz-count")
+      val tempRoot   = tempDirectory("core-targz-count")
       val installDir = tempRoot.resolve("alpha")
       val output     = java.io.ByteArrayOutputStream()
       val gzip       = java.util.zip.GZIPOutputStream(output)
@@ -1546,7 +1546,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         case _ => false)
 
     test("tar.gz base-256 encoded entry size is decoded without a NumberFormatException"):
-      val tempRoot   = Files.createTempDirectory("binstaller-core-targz-base256")
+      val tempRoot   = tempDirectory("core-targz-base256")
       val installDir = tempRoot.resolve("alpha")
       val content    = "base256".getBytes(StandardCharsets.UTF_8)
       val header     = tarHeader("pkg/alpha", 0, '0')
@@ -1580,7 +1580,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.readString(installDir.resolve("bin/alpha")) == "base256")
 
     test("process command executor times out long-running commands"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-process-timeout")
+      val tempRoot = tempDirectory("core-process-timeout")
       val executor = CommandExecutor.processWithTimeout(Duration.ofMillis(100))
 
       val result = executor.run(CommandSpec(
@@ -1592,7 +1592,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(result.left.exists(_.message.contains("timed out")))
 
     test("process command executor captures stdout and stderr on failure"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-process-output")
+      val tempRoot = tempDirectory("core-process-output")
       val executor = CommandExecutor.processWithTimeout(Duration.ofSeconds(5))
 
       val result = executor.run(CommandSpec(
@@ -1682,7 +1682,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!output.contains(secret))
 
     test("apply output omits redirected download provenance while state records it"):
-      val tempRoot   = Files.createTempDirectory("binstaller-core-download-redirect-state")
+      val tempRoot   = tempDirectory("core-download-redirect-state")
       val config     = writeConfig(tempRoot, directBinaryYaml(tempRoot.resolve("alpha")))
       val stateStore = RecordingApplyStateStore(ApplyStateStore.nio(tempRoot))
       val download   = UrlProvenance(
@@ -1738,7 +1738,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!output.contains("download redirects:"))
 
     test("failed replacement restores previous install directory"):
-      val tempRoot     = Files.createTempDirectory("binstaller-core-rollback")
+      val tempRoot     = tempDirectory("core-rollback")
       val installDir   = tempRoot.resolve("alpha")
       val existingFile = installDir.resolve("bin/alpha")
       Files.createDirectories(existingFile.getParent)
@@ -1753,7 +1753,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         stream.iterator().asScala.exists(_.getFileName.toString.contains(".backup-")))
 
     test("staging reclaims stale sibling temp dirs but not fresh ones"):
-      val tempRoot   = Files.createTempDirectory("binstaller-core-sweep")
+      val tempRoot   = tempDirectory("core-sweep")
       val installDir = tempRoot.resolve("alpha")
       val staleOrphan = Files.createDirectory(tempRoot.resolve(".alpha.stage-stale"))
       Files.writeString(staleOrphan.resolve("leftover"), "x")
@@ -1764,8 +1764,9 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       val _ = Files.setLastModifiedTime(staleOrphan, twoHoursAgo)
 
       // The artifact lives outside tempRoot so it cannot be mistaken for one of the orphaned
-      // staging siblings this test is asserting about.
-      val artifact = Files.createTempFile("binstaller-core-sweep-artifact", ".bin")
+      // staging siblings this test is asserting about — hence its own directory rather than a
+      // bare temp file, which would otherwise be the one thing a run still left behind.
+      val artifact = tempDirectory("core-sweep-artifact").resolve("alpha.bin")
       Files.writeString(artifact, "alpha")
       val staged = InstallFileSystem.nio.stageDirectBinaryFromFile(
         installDir,
@@ -1779,7 +1780,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.exists(freshOrphan))
 
     test("direct install verifies expected executables"):
-      val tempRoot   = Files.createTempDirectory("binstaller-core-direct-missing")
+      val tempRoot   = tempDirectory("core-direct-missing")
       val installDir = tempRoot.resolve("alpha")
       val installer  = DirectBinaryInstaller(
         FakeBinaryDownloadClient.success("alpha".getBytes(StandardCharsets.UTF_8)),
@@ -1798,7 +1799,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!hasStagedInstall(tempRoot, "alpha"))
 
     test("local symlinks are created under installDir with targets resolved from installDir"):
-      val tempRoot   = Files.createTempDirectory("binstaller-core-local-symlink")
+      val tempRoot   = tempDirectory("core-local-symlink")
       val installDir = tempRoot.resolve("alpha")
       val installer  = DirectBinaryInstaller(
         FakeBinaryDownloadClient.success("alpha-binary".getBytes(StandardCharsets.UTF_8)),
@@ -1817,7 +1818,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         installDir.toAbsolutePath.normalize().resolve("bin/alpha"))
 
     test("sudo symlink apply requires policy before writes"):
-      val tempRoot        = Files.createTempDirectory("binstaller-core-sudo-gate")
+      val tempRoot        = tempDirectory("core-sudo-gate")
       val installDir      = tempRoot.resolve("alpha")
       val commandExecutor = RecordingCommandExecutor()
       val installer       = DirectBinaryInstaller(
@@ -1838,7 +1839,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!Files.exists(installDir))
 
     test("sudo symlink apply uses structured argv after policy allowance"):
-      val tempRoot        = Files.createTempDirectory("binstaller-core-sudo-apply")
+      val tempRoot        = tempDirectory("core-sudo-apply")
       val installDir      = tempRoot.resolve("alpha")
       val commandExecutor = RecordingCommandExecutor()
       val credentials     =
@@ -1873,7 +1874,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(commandExecutor.commands.forall(_.env == CommandEnvironment.baseline))
 
     test("sudo symlink apply requests credentials when sudo cache is unavailable"):
-      val tempRoot        = Files.createTempDirectory("binstaller-core-sudo-credentials")
+      val tempRoot        = tempDirectory("core-sudo-credentials")
       val installDir      = tempRoot.resolve("alpha")
       val password        = "core-test-password"
       val commandExecutor =
@@ -1918,7 +1919,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!commandExecutor.commands.map(_.toString).exists(_.contains(password)))
 
     test("sudo credential cancellation fails current operation and continues when policy allows"):
-      val tempRoot        = Files.createTempDirectory("binstaller-core-sudo-cancel")
+      val tempRoot        = tempDirectory("core-sudo-cancel")
       val alphaInstall    = tempRoot.resolve("alpha")
       val betaInstall     = tempRoot.resolve("beta")
       val commandExecutor = SequencedCommandExecutor(Vector(Left("sudo password required")))
@@ -1947,7 +1948,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(credentials.requests.map(_.toolName.value) == Vector("alpha"))
 
     test("sudo command failure rendering redacts password from diagnostics"):
-      val tempRoot        = Files.createTempDirectory("binstaller-core-sudo-redaction")
+      val tempRoot        = tempDirectory("core-sudo-redaction")
       val installDir      = tempRoot.resolve("alpha")
       val password        = "super-secret-password"
       val commandExecutor = PasswordLeakingCommandExecutor(password)
@@ -1973,7 +1974,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!commandExecutor.commands.map(_.toString).exists(_.contains(password)))
 
     test("sudo password is redacted from events and apply state"):
-      val tempRoot        = Files.createTempDirectory("binstaller-core-sudo-state-redaction")
+      val tempRoot        = tempDirectory("core-sudo-state-redaction")
       val installDir      = tempRoot.resolve("alpha")
       val stateFile       = "sudo-redaction.state.json"
       val password        = "state-secret-password"
@@ -2006,7 +2007,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!commandExecutor.commands.exists(_.argv.contains(password)))
 
     test("completed state entries are skipped and failed entries are retried"):
-      val tempRoot     = Files.createTempDirectory("binstaller-core-state-resume")
+      val tempRoot     = tempDirectory("core-state-resume")
       val config       = writeConfig(tempRoot, twoToolYaml(tempRoot, "resume.state.json"))
       val firstService = statefulService(
         tempRoot,
@@ -2046,7 +2047,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!hasTempStateFile(tempRoot, "resume.state.json"))
 
     test("incompatible state fails clearly unless reset-state is enabled"):
-      val tempRoot  = Files.createTempDirectory("binstaller-core-state-reset")
+      val tempRoot  = tempDirectory("core-state-reset")
       val config    = writeConfig(tempRoot, twoToolYaml(tempRoot, "mismatch.state.json"))
       val store     = ApplyStateStore.nio(tempRoot)
       val statePath = tempRoot.resolve("mismatch.state.json")
@@ -2068,7 +2069,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(loadState(tempRoot, "mismatch.state.json").profileName == "resume-profile")
 
     test("state schema version is validated before resume"):
-      val tempRoot  = Files.createTempDirectory("binstaller-core-state-schema")
+      val tempRoot  = tempDirectory("core-state-schema")
       val stateFile = "schema.state.json"
       val config    = writeConfig(tempRoot, twoToolYaml(tempRoot, stateFile))
       val service   = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
@@ -2086,7 +2087,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(result.lines.exists(_.contains("expected 1")))
 
     test("completed state is retried when installed executables disappear"):
-      val tempRoot  = Files.createTempDirectory("binstaller-core-state-drift")
+      val tempRoot  = tempDirectory("core-state-drift")
       val stateFile = "drift.state.json"
       val config    = writeConfig(tempRoot, twoToolYaml(tempRoot, stateFile))
       val service   = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
@@ -2103,7 +2104,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(Files.isRegularFile(alpha))
 
     test("state paths must be cwd-local filenames"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-state-path")
+      val tempRoot = tempDirectory("core-state-path")
       val config   = writeConfig(tempRoot, twoToolYaml(tempRoot, "valid.state.json"))
       val service  = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
 
@@ -2123,7 +2124,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(!Files.exists(tempRoot.resolve("apps")))
 
     test("state is saved after each terminal tool result"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-state-writes")
+      val tempRoot = tempDirectory("core-state-writes")
       val config   = writeConfig(tempRoot, twoToolYaml(tempRoot, "writes.state.json"))
       val store    = RecordingApplyStateStore(ApplyStateStore.nio(tempRoot))
       val service  = BinaryInstallerService.resolving(
@@ -2146,7 +2147,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         ))
 
     test("rendered terminal lines pair each apply line with its status"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-rendered-lines")
+      val tempRoot = tempDirectory("core-rendered-lines")
       val config   = writeConfig(tempRoot, twoToolYaml(tempRoot, "rendered.state.json"))
       val service  = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
 
@@ -2177,7 +2178,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
     test("a hand-edited state file with an unsafe tool name fails to decode"):
       // Tool name keys the state row and is used as a path segment. Reading it back through the
       // same validation the manifest goes through means a hand-edited file cannot smuggle one in.
-      val tempRoot  = Files.createTempDirectory("binstaller-core-state-toolname")
+      val tempRoot  = tempDirectory("core-state-toolname")
       val stateFile = tempRoot.resolve("evil.state.json")
       Files.writeString(
         stateFile,
@@ -2250,7 +2251,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(ApplyStateToolStatus.fromString("pending").isEmpty)
       assert(ApplyStateToolStatus.fromString("completed").contains(ApplyStateToolStatus.Completed))
 
-      val tempRoot  = Files.createTempDirectory("binstaller-core-state-status")
+      val tempRoot  = tempDirectory("core-state-status")
       val stateFile = tempRoot.resolve("corrupt.state.json")
       Files.writeString(
         stateFile,
@@ -2278,7 +2279,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         case other => abort(s"expected a decode failure, got $other")
 
     test("plan emits resolving plan-ready and summary events in order"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-events-plan")
+      val tempRoot = tempDirectory("core-events-plan")
       val config   = writeConfig(tempRoot, twoToolYaml(tempRoot, "plan.state.json"))
       val observer = RecordingInstallerEventObserver()
       val service  = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
@@ -2310,7 +2311,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         ))
 
     test("successful apply emits tool start progress result and summary in order"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-events-success")
+      val tempRoot = tempDirectory("core-events-success")
       val config   = writeConfig(tempRoot, directBinaryYaml(tempRoot.resolve("alpha")))
       val observer = RecordingInstallerEventObserver()
       val service  = BinaryInstallerService.resolving(
@@ -2382,7 +2383,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       ))
 
     test("failed apply emits failed result with root-cause summary"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-events-failed")
+      val tempRoot = tempDirectory("core-events-failed")
       val config   = writeConfig(tempRoot, directBinaryYaml(tempRoot.resolve("alpha")))
       val observer = RecordingInstallerEventObserver()
       val service  = statefulService(tempRoot, FakeBinaryDownloadClient.failure("network down"))
@@ -2404,7 +2405,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         case _                                                                      => false)
 
     test("completed state entries emit skipped events with state file path"):
-      val tempRoot     = Files.createTempDirectory("binstaller-core-events-skipped")
+      val tempRoot     = tempDirectory("core-events-skipped")
       val config       = writeConfig(tempRoot, twoToolYaml(tempRoot, "resume.state.json"))
       val firstService = statefulService(
         tempRoot,
@@ -2444,7 +2445,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(skipIndex < summaryIndex)
 
     test("continue-on-error emits failed then completed results before failed summary"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-events-continue")
+      val tempRoot = tempDirectory("core-events-continue")
       val config   = writeConfig(
         tempRoot,
         twoToolYaml(tempRoot, "continue.state.json", continueOnError = true)
@@ -2505,7 +2506,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       ))
 
     test("plan renders strict policy failures with typed suggestions"):
-      val tempRoot = Files.createTempDirectory("binstaller-core-strict-policy-output")
+      val tempRoot = tempDirectory("core-strict-policy-output")
       val config   = writeConfig(tempRoot, strictPolicyYaml())
       val service  = BinaryInstallerService.resolving(FakeHttpTextClient(""))
 

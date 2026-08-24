@@ -28,6 +28,8 @@ import binstaller.core.ApplyStateStore
 import binstaller.core.UrlProvenance
 import binstaller.core.UrlRedirectHop
 import utest.*
+
+import scala.jdk.CollectionConverters.*
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.nio.file.Files
@@ -36,6 +38,28 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 object CliModuleTest extends TestSuite:
+
+  // Same leak as the core suite had: nothing deleted the temp directories these tests create, so a
+  // run left them behind permanently. `CoreTestSupport`'s registry is `private[core]`, so the CLI
+  // suite keeps its own rather than widening that.
+  private val createdTempDirectories =
+    java.util.concurrent.ConcurrentLinkedQueue[java.nio.file.Path]()
+
+  private def tempDirectory(name: String): java.nio.file.Path =
+    val directory = Files.createTempDirectory(s"binstaller-$name-")
+    val _         = createdTempDirectories.add(directory)
+    directory
+
+  override def utestAfterAll(): Unit =
+    createdTempDirectories.forEach(deleteRecursively)
+    createdTempDirectories.clear()
+
+  private def deleteRecursively(path: java.nio.file.Path): Unit =
+    if Files.exists(path) then
+      scala.util.Using.resource(Files.walk(path)): stream =>
+        stream.iterator().asScala.toVector.sortBy(_.getNameCount).reverse.foreach: child =>
+          val _ = scala.util.Try(Files.deleteIfExists(child))
+
 
   val tests: Tests = Tests:
     test("terminal password conversion copies and clears the mutable input buffer"):
@@ -351,7 +375,7 @@ object CliModuleTest extends TestSuite:
       assert(unknown.out.contains("unknown tool 'nope'"))
 
     test("plan renders local and sudo symlink actions without executing them"):
-      val tempRoot = Files.createTempDirectory("binstaller-cli-dry-symlinks")
+      val tempRoot = tempDirectory("cli-dry-symlinks")
       val appsDir  = tempRoot.resolve("apps")
       val config   = writeConfig(tempRoot, noWriteYaml(appsDir, "state.json"))
 
@@ -366,7 +390,7 @@ object CliModuleTest extends TestSuite:
       assert(!Files.exists(appsDir))
 
     test("plan does not create install or state paths"):
-      val tempRoot  = Files.createTempDirectory("binstaller-cli-test")
+      val tempRoot  = tempDirectory("cli-test")
       val appsDir   = tempRoot.resolve("apps")
       val stateFile = tempRoot.resolve("state.json")
       val config    = writeConfig(tempRoot, noWriteYaml(appsDir, stateFile.getFileName.toString))
@@ -380,7 +404,7 @@ object CliModuleTest extends TestSuite:
       assert(!Files.exists(appsDir.resolve("alpha")))
 
     test("apply renders download progress bar in place"):
-      val tempRoot = Files.createTempDirectory("binstaller-cli-progress")
+      val tempRoot = tempDirectory("cli-progress")
       val appsDir  = tempRoot.resolve("apps")
       val config   = writeConfig(tempRoot, progressYaml(appsDir))
       val service  = BinaryInstallerService.resolving(
@@ -410,7 +434,7 @@ object CliModuleTest extends TestSuite:
       assert(Files.readString(appsDir.resolve("alpha/bin/alpha")) == "alpha-binary")
 
     test("apply plain output omits ANSI and cursor controls"):
-      val tempRoot = Files.createTempDirectory("binstaller-cli-progress-plain")
+      val tempRoot = tempDirectory("cli-progress-plain")
       val appsDir  = tempRoot.resolve("apps")
       val config   = writeConfig(tempRoot, progressYaml(appsDir))
       val service  = BinaryInstallerService.resolving(
@@ -438,7 +462,7 @@ object CliModuleTest extends TestSuite:
       // The colour must come from the typed status core pairs with each rendered line. A prefix
       // test on the text would keep passing here while silently losing its colour the moment core
       // reworded "installed " or "failed ".
-      val tempRoot = Files.createTempDirectory("binstaller-cli-result-colour")
+      val tempRoot = tempDirectory("cli-result-colour")
       val appsDir  = tempRoot.resolve("apps")
       val config   = writeConfig(tempRoot, progressYaml(appsDir))
       val service  = BinaryInstallerService.resolving(
@@ -457,7 +481,7 @@ object CliModuleTest extends TestSuite:
       assert(result.out.contains(s"${greenPrefix}installed alpha"))
 
     test("apply renders overlapping downloads as separate progress lines"):
-      val tempRoot = Files.createTempDirectory("binstaller-cli-parallel-progress")
+      val tempRoot = tempDirectory("cli-parallel-progress")
       val appsDir  = tempRoot.resolve("apps")
       val config   = writeConfig(tempRoot, parallelProgressYaml(appsDir))
       val service  = BinaryInstallerService.resolving(

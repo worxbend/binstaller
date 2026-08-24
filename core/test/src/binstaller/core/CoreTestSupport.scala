@@ -26,7 +26,13 @@ import scala.jdk.CollectionConverters.*
 import scala.util.Using
 import upickle.default.write
 
-private[core] trait CoreTestSupport:
+private[core] trait CoreTestSupport extends TestSuite:
+
+  /** Create a temp directory named `binstaller-<name>-…`, deleted when the suite finishes. */
+  protected def tempDirectory(name: String): Path = TestTempDirectories.create(name)
+
+  override def utestAfterAll(): Unit = TestTempDirectories.deleteAll()
+
 
   protected def resolve(
       yaml: String,
@@ -1156,3 +1162,26 @@ private[core] trait CoreTestSupport:
       |        executables:
       |          - path: bin/gamma
       |""".stripMargin
+
+/** Tracks the temp directories a test run creates so they can be deleted afterwards.
+ *
+ *  Nothing in the test tree used to delete one. A full run left dozens behind, several holding
+ *  staged installs and written binaries, and they accumulated across runs indefinitely — a
+ *  developer's `/tmp` reaches five figures of them. Registering creation in one place means a new
+ *  test gets cleanup by using the helper, rather than by remembering to add a teardown.
+ *
+ *  Test fixtures that create directories outside a suite (staging fakes, for instance) register
+ *  here too, which is why this is an object rather than trait state.
+ */
+private[core] object TestTempDirectories:
+
+  private val created = java.util.concurrent.ConcurrentLinkedQueue[Path]()
+
+  def create(name: String): Path =
+    val directory = Files.createTempDirectory(s"binstaller-$name-")
+    val _         = created.add(directory)
+    directory
+
+  def deleteAll(): Unit =
+    created.forEach(SafePaths.deleteRecursively)
+    created.clear()
