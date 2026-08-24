@@ -1,6 +1,7 @@
 package binstaller.core
 
 import binstaller.config.ArchiveType
+import binstaller.config.Diagnostics
 import org.tukaani.xz.XZInputStream
 
 import java.io.ByteArrayInputStream
@@ -118,7 +119,7 @@ private[core] object ArchiveExtractor:
         run.finish()
       match
         case Success(_)     => Right(())
-        case Failure(error) => Left(error.getMessage)
+        case Failure(error) => Left(Diagnostics.describe(error))
 
   private def streamZipEntries(run: ExtractionRun, zip: ZipInputStream): Unit =
     var entry = zip.getNextEntry

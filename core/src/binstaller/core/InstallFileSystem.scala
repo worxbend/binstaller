@@ -1,5 +1,6 @@
 package binstaller.core
 
+import binstaller.config.Diagnostics
 import binstaller.config.ExecutableMode
 
 import java.nio.file.Files
@@ -85,7 +86,7 @@ trait InstallFileSystem:
   ): Either[InstallFileSystemError.StagingFailed, StagedInstall] = Try(
     Files.readAllBytes(artifact)
   ) match
-    case Failure(error) => Left(InstallFileSystemError.StagingFailed(error.getMessage))
+    case Failure(error) => Left(InstallFileSystemError.StagingFailed(Diagnostics.describe(error)))
     case Success(bytes) => stageDirectBinary(installDir, createDirectories, executablePath, bytes)
 
   /** Stage a direct binary into a temporary install tree. */
@@ -115,7 +116,7 @@ trait InstallFileSystem:
   ): Either[InstallFileSystemError.StagingFailed, StagedInstall] = Try(
     Files.readAllBytes(artifact)
   ) match
-    case Failure(error) => Left(InstallFileSystemError.StagingFailed(error.getMessage))
+    case Failure(error) => Left(InstallFileSystemError.StagingFailed(Diagnostics.describe(error)))
     case Success(bytes) => stageArchive(
         installDir,
         createDirectories,
@@ -287,7 +288,8 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
     StagedInstall(Files.createTempDirectory(parent, s".$name.stage-"), installDir)
   match
     case Success(stagedInstall) => Right(stagedInstall)
-    case Failure(error)         => Left(InstallFileSystemError.StagingFailed(error.getMessage))
+    case Failure(error) =>
+      Left(InstallFileSystemError.StagingFailed(Diagnostics.describe(error)))
 
   private def writeStagedDirectBinary(
       stagedInstall: StagedInstall,
@@ -310,7 +312,7 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
       resolveInside(stagedInstall.stagingDir, directory).flatMap: path =>
         Try(Files.createDirectories(path)) match
           case Success(_)     => Right(())
-          case Failure(error) => Left(error.getMessage)
+          case Failure(error) => Left(Diagnostics.describe(error))
 
     val failures = directoryWrites.flatMap(stagingFailure)
 
@@ -347,7 +349,7 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
             InstallFileSystemError.ModeApplicationFailed(
               executable.path,
               executable.mode.octal,
-              error.getMessage
+              Diagnostics.describe(error)
             )
           )
 
@@ -363,14 +365,14 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
     )
   match
     case Success(_)     => Right(())
-    case Failure(error) => Left(error.getMessage)
+    case Failure(error) => Left(Diagnostics.describe(error))
 
   private def copyBinary(source: Path, target: Path): Either[String, Unit] = Try:
     Option(target.getParent).foreach(Files.createDirectories(_))
     val _ = Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
   match
     case Success(_)     => Right(())
-    case Failure(error) => Left(error.getMessage)
+    case Failure(error) => Left(Diagnostics.describe(error))
 
   private def resolveInside(root: Path, relative: String): Either[String, Path] =
     SafePaths.resolveInside(root, relative)
@@ -388,7 +390,8 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
       backupDir
 
     prepared match
-      case Failure(error)     => Left(InstallFileSystemError.ReplacementFailed(error.getMessage))
+      case Failure(error) =>
+        Left(InstallFileSystemError.ReplacementFailed(Diagnostics.describe(error)))
       case Success(backupDir) => replaceWithBackup(stagedInstall, installDir, backupDir)
 
   private def replaceWithBackup(
@@ -411,8 +414,8 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
         // failed upgrade does not silently leave the tool missing.
         val restoreError = restoreBackup(installDir, backupDir, hadExisting)
         val message      = restoreError match
-          case Some(restore) => s"${error.getMessage}; rollback failed: $restore"
-          case None          => error.getMessage
+          case Some(restore) => s"${Diagnostics.describe(error)}; rollback failed: $restore"
+          case None          => Diagnostics.describe(error)
         Left(InstallFileSystemError.ReplacementFailed(message))
 
   private def restoreBackup(
@@ -437,4 +440,4 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
           val _ = Files.move(backupDir, installDir, StandardCopyOption.REPLACE_EXISTING)
       match
         case Success(_)     => None
-        case Failure(error) => Some(error.getMessage)
+        case Failure(error) => Some(Diagnostics.describe(error))

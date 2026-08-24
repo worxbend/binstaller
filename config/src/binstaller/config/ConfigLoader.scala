@@ -19,7 +19,7 @@ object ConfigLoader:
   def load(path: Path): Either[ConfigLoadError, BinaryDistributionProfile] =
     Try(Files.readString(path)) match
       case Success(yaml)  => loadString(yaml)
-      case Failure(error) => Left(ConfigLoadError.ReadFailed(path, error.getMessage))
+      case Failure(error) => Left(ConfigLoadError.ReadFailed(path, Diagnostics.describe(error)))
 
   /** Parse and validate raw YAML profile text. */
   def loadString(yaml: String): Either[ConfigLoadError, BinaryDistributionProfile] =
@@ -40,13 +40,14 @@ object ConfigLoader:
     try convertYaml(Load(settings).loadFromString(yaml), 0)
         .left.map(ConfigLoadError.ParseFailed.apply)
     catch
-      case error: YamlEngineException => Left(ConfigLoadError.ParseFailed(error.getMessage))
+      case error: YamlEngineException =>
+        Left(ConfigLoadError.ParseFailed(Diagnostics.describe(error)))
       // snakeyaml-engine 3.0.1 has no nesting-depth setting, so a deeply nested document can
       // overflow the parser's own recursion before convertYaml's depth guard is ever reached.
       // StackOverflowError is an Error, so Try/NonFatal would let it escape uncaught.
       case _: StackOverflowError =>
         Left(ConfigLoadError.ParseFailed("YAML document is too deeply nested to parse safely"))
-      case NonFatal(error) => Left(ConfigLoadError.ParseFailed(error.getMessage))
+      case NonFatal(error) => Left(ConfigLoadError.ParseFailed(Diagnostics.describe(error)))
 
   private def loadParsedYaml(value: Any): Either[ConfigLoadError, BinaryDistributionProfile] =
     val decoded = ManifestDecoder.decode(value)

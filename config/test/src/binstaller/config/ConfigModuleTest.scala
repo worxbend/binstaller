@@ -8,6 +8,17 @@ import java.nio.file.Path
 object ConfigModuleTest extends TestSuite:
 
   val tests: Tests = Tests:
+    test("throwable diagnostics never render as the literal null"):
+      // getMessage is nullable, and these are exceptions the program actually hits. Rendering one
+      // straight into a diagnostic produces user-facing output like "staging: null".
+      assert(Diagnostics.describe(java.io.IOException()) == "java.io.IOException")
+      assert(Diagnostics.describe(RuntimeException("boom")) == "boom")
+      // An explicit null message is required: RuntimeException(cause) alone derives getMessage
+      // from the cause's toString, so it would never exercise the fallback.
+      assert(
+        Diagnostics.describe(RuntimeException(null, IllegalStateException("inner"))) == "inner"
+      )
+
     test("config example loads into typed manifest"):
       val profile = exampleProfile
 

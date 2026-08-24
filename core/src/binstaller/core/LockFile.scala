@@ -1,5 +1,7 @@
 package binstaller.core
 
+import binstaller.config.Diagnostics
+
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -129,8 +131,9 @@ private[core] object NioLockFileStore extends LockFileStore:
       Try(read[LockFile](Files.readString(normalized))) match
         case Success(lockFile)                  => Right(lockFile)
         case Failure(error: upickle.core.Abort) =>
-          Left(LockFileError.DecodeFailed(normalized, error.getMessage))
-        case Failure(error) => Left(LockFileError.ReadFailed(normalized, error.getMessage))
+          Left(LockFileError.DecodeFailed(normalized, Diagnostics.describe(error)))
+        case Failure(error) =>
+          Left(LockFileError.ReadFailed(normalized, Diagnostics.describe(error)))
 
   def save(path: Path, lockFile: LockFile): Either[LockFileError, Unit] =
     val normalized = path.toAbsolutePath.normalize()
@@ -154,4 +157,4 @@ private[core] object NioLockFileStore extends LockFileStore:
       case Success(_)     => Right(())
       case Failure(error) =>
         val _ = Files.deleteIfExists(tmp)
-        Left(LockFileError.WriteFailed(normalized, error.getMessage))
+        Left(LockFileError.WriteFailed(normalized, Diagnostics.describe(error)))

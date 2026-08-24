@@ -1,5 +1,7 @@
 package binstaller.core
 
+import binstaller.config.Diagnostics
+
 import java.io.InputStream
 import java.net.http.HttpClient
 import scala.util.Failure
@@ -57,7 +59,7 @@ private[core] final class JdkBinaryMetadataClient(
               Some(result.provenance)
             ))
           case Success(Left(message)) => Left(BinaryMetadataError(url, message))
-          case Failure(error)         => Left(BinaryMetadataError(url, error.getMessage))
+          case Failure(error)         => Left(BinaryMetadataError(url, Diagnostics.describe(error)))
 
   private def inspectBody(
       url: String,
@@ -66,7 +68,8 @@ private[core] final class JdkBinaryMetadataClient(
   ): Either[BinaryMetadataError, BinaryMetadata] = Try:
     Using.resource(input)(Sha256.digestStream(_, maxBytes))
   match
-    case Failure(error) => Left(BinaryMetadataError(url, error.getMessage, Some(provenance)))
+    case Failure(error) =>
+      Left(BinaryMetadataError(url, Diagnostics.describe(error), Some(provenance)))
     case Success(Left(message))         => Left(BinaryMetadataError(url, message, Some(provenance)))
     case Success(Right((digest, size))) =>
       Right(BinaryMetadata(Some(size), provenance, Some(digest)))

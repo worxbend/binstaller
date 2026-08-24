@@ -1,5 +1,7 @@
 package binstaller.core
 
+import binstaller.config.Diagnostics
+
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -147,8 +149,8 @@ private[core] final class NioApplyStateStore(val cwd: Path) extends ApplyStateSt
       Try(read[ApplyState](Files.readString(path))) match
         case Success(state)                     => Right(Some(state))
         case Failure(error: upickle.core.Abort) =>
-          Left(ApplyStateError.DecodeFailed(path, error.getMessage))
-        case Failure(error) => Left(ApplyStateError.ReadFailed(path, error.getMessage))
+          Left(ApplyStateError.DecodeFailed(path, Diagnostics.describe(error)))
+        case Failure(error) => Left(ApplyStateError.ReadFailed(path, Diagnostics.describe(error)))
 
   def save(path: Path, state: ApplyState): Either[ApplyStateError, Unit] =
     val tmp = cwd.resolve(s".${path.getFileName}.tmp-${UUID.randomUUID()}")
@@ -172,4 +174,4 @@ private[core] final class NioApplyStateStore(val cwd: Path) extends ApplyStateSt
       case Success(_)     => Right(())
       case Failure(error) =>
         val _ = Files.deleteIfExists(tmp)
-        Left(ApplyStateError.WriteFailed(path, error.getMessage))
+        Left(ApplyStateError.WriteFailed(path, Diagnostics.describe(error)))

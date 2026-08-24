@@ -1,6 +1,7 @@
 package binstaller.core
 
 import binstaller.config.AllowSudoSymlinks
+import binstaller.config.Diagnostics
 import binstaller.config.SymlinkPrivilege
 
 import java.nio.file.Files
@@ -45,7 +46,7 @@ private[core] object SymlinkInstaller:
             tool.name,
             path.toString,
             target.toString,
-            error.getMessage
+            Diagnostics.describe(error)
           ))
     yield ()
 

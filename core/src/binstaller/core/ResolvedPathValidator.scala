@@ -1,5 +1,6 @@
 package binstaller.core
 
+import binstaller.config.Diagnostics
 import binstaller.config.ValidationError
 
 import java.nio.file.Path
@@ -42,7 +43,7 @@ private[core] object ResolvedPathValidator:
         installRoot -> target
       match
         case Failure(error) =>
-          Vector(ValidationError(path, s"invalid symlink target: ${error.getMessage}"))
+          Vector(ValidationError(path, s"invalid symlink target: ${Diagnostics.describe(error)}"))
         case Success((installRoot, target)) if !target.startsWith(installRoot) =>
           Vector(ValidationError(path, "symlink target must resolve inside installDir"))
         case Success(_) => Vector.empty
@@ -68,7 +69,8 @@ private[core] object ResolvedPathValidator:
       Vector(ValidationError(path, s"$label must not be a traversal segment"))
     else
       Try(Path.of(value)) match
-        case Failure(error) => Vector(ValidationError(path, s"invalid $label: ${error.getMessage}"))
+        case Failure(error) =>
+          Vector(ValidationError(path, s"invalid $label: ${Diagnostics.describe(error)}"))
         case Success(file) if file.isAbsolute || file.getNameCount != 1 =>
           Vector(ValidationError(path, s"$label must be a filename in the current directory"))
         case Success(_) => Vector.empty

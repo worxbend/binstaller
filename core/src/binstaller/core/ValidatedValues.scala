@@ -1,5 +1,7 @@
 package binstaller.core
 
+import binstaller.config.Diagnostics
+
 import java.net.URI
 import java.net.Inet4Address
 import java.net.Inet6Address
@@ -14,7 +16,9 @@ final case class HttpsUrl private (value: String, uri: URI)
 object HttpsUrl:
 
   def fromString(value: String): Either[String, HttpsUrl] =
-    Try(URI.create(value)).toEither.left.map(error => s"invalid URL: ${error.getMessage}").flatMap:
+    Try(URI.create(value)).toEither
+      .left.map(error => s"invalid URL: ${Diagnostics.describe(error)}")
+      .flatMap:
       case uri if !Option(uri.getScheme).exists(_.equalsIgnoreCase("https")) =>
         Left("URL must use https")
       case uri if Option(uri.getHost).forall(_.isEmpty) => Left("URL must include a host")
@@ -102,7 +106,9 @@ object RelativeInstallPath:
     else if value.contains('\\') then Left("must not contain backslashes")
     else if value.matches("^[A-Za-z]:.*") then Left("must not be drive-prefixed")
     else
-      Try(Path.of(value)).toEither.left.map(error => s"is invalid: ${error.getMessage}").flatMap:
+      Try(Path.of(value)).toEither
+        .left.map(error => s"is invalid: ${Diagnostics.describe(error)}")
+        .flatMap:
         case path if path.isAbsolute                                    => Left("must be relative")
         case path if path.iterator().asScala.exists(_.toString == "..") =>
           Left("must not contain traversal segments")

@@ -1,5 +1,7 @@
 package binstaller.core
 
+import binstaller.config.Diagnostics
+
 import java.net.URI
 import scala.util.Failure
 import scala.util.Success
@@ -56,7 +58,7 @@ private[core] object GitHubReleaseVersions:
     Try(ujson.read(json)("tag_name").str.trim) match
       case Success(value) if value.nonEmpty => Right(value)
       case Success(_)                       => Left("empty tag_name")
-      case Failure(error) => Left(s"invalid GitHub release JSON: ${error.getMessage}")
+      case Failure(error) => Left(s"invalid GitHub release JSON: ${Diagnostics.describe(error)}")
 
 private[core] final case class GitHubReleaseCandidate(
     toolName: String,

@@ -1,5 +1,7 @@
 package binstaller.core
 
+import binstaller.config.Diagnostics
+
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
@@ -212,7 +214,7 @@ private[core] final class ProcessCommandExecutor(timeout: Duration) extends Comm
   match
     case Success(result) => result
     case Failure(error)  =>
-      Left(CommandExecutionError(spec, spec.input.redact(error.getMessage), None))
+      Left(CommandExecutionError(spec, spec.input.redact(Diagnostics.describe(error)), None))
 
   private def readBounded(input: InputStream): String = Using.resource(input): stream =>
     val output  = ByteArrayOutputStream()

@@ -6,6 +6,7 @@ import binstaller.config.BinaryToolSpec
 import binstaller.config.ChecksumDiscoveryKind
 import binstaller.config.ChecksumDiscoverySpec
 import binstaller.config.ChecksumSpec
+import binstaller.config.Diagnostics
 import binstaller.config.DownloadSpec
 import binstaller.config.DynamicVersionKind
 import binstaller.config.ExtractMapping
@@ -569,7 +570,7 @@ private[core] final class ResolutionBuilder(
     else
       Try(Path.of(value).toAbsolutePath.normalize()) match
         case Failure(error) =>
-          Left(Vector(ValidationError(path, s"invalid $label: ${error.getMessage}")))
+          Left(Vector(ValidationError(path, s"invalid $label: ${Diagnostics.describe(error)}")))
         case Success(result) => Right(result)
 
   /** The rule: an install root must live strictly inside appsDir.

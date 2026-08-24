@@ -1,5 +1,7 @@
 package binstaller.core
 
+import binstaller.config.Diagnostics
+
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.nio.charset.StandardCharsets
@@ -57,7 +59,7 @@ private[core] final class JdkHttpTextClient(
           result.response.body().close()
           Left(HttpTextError(url, s"HTTP ${result.response.statusCode()}", Some(result.provenance)))
         case Success(Left(message)) => Left(HttpTextError(url, message))
-        case Failure(error)         => Left(HttpTextError(url, error.getMessage))
+        case Failure(error)         => Left(HttpTextError(url, Diagnostics.describe(error)))
 
   private def readBounded(input: InputStream, maxBytes: Long): Either[String, String] = Try:
     Using.resource(input): stream =>
@@ -74,4 +76,4 @@ private[core] final class JdkHttpTextClient(
       output.toString(StandardCharsets.UTF_8)
   match
     case Success(text)  => Right(text)
-    case Failure(error) => Left(error.getMessage)
+    case Failure(error) => Left(Diagnostics.describe(error))

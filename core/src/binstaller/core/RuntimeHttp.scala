@@ -1,5 +1,7 @@
 package binstaller.core
 
+import binstaller.config.Diagnostics
+
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -63,7 +65,7 @@ private[core] object RuntimeHttpClient:
             // A malformed Location makes URI.resolve throw IllegalArgumentException; treat it as a
             // failed redirect rather than letting it escape the download boundary uncaught.
             val next = Try(current.resolve(location.get()).toString).toEither
-              .left.map(error => s"invalid redirect Location: ${error.getMessage}")
+              .left.map(error => s"invalid redirect Location: ${Diagnostics.describe(error)}")
               .flatMap(RuntimeUrl.httpsUri(_).left.map(message =>
                 s"unsafe redirect target: $message"
               ))

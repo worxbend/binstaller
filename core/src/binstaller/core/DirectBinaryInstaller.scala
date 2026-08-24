@@ -2,6 +2,7 @@ package binstaller.core
 
 import binstaller.config.AllowSudoSymlinks
 import binstaller.config.ChecksumAlgorithm
+import binstaller.config.Diagnostics
 import binstaller.config.SymlinkPrivilege
 
 import java.nio.file.Files
@@ -230,7 +231,7 @@ final class DirectBinaryInstaller(
         case Left(error) => PreparedToolResult.Failed(tool.name, error, verbose)
     catch
       case scala.util.control.NonFatal(error) =>
-        val message = Option(error.getMessage).getOrElse(error.getClass.getName)
+        val message = Diagnostics.describe(error)
         PreparedToolResult.Failed(tool.name, ToolInstallError.StagingFailed(tool.name, message), verbose)
 
   private def prepareDownloadedBinaryOrArchive(

@@ -1,5 +1,7 @@
 package binstaller.core
 
+import binstaller.config.Diagnostics
+
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
@@ -96,7 +98,7 @@ trait BinaryDownloadClient:
     match
       case Success(artifact) => Right(artifact)
       case Failure(error)    =>
-        Left(BinaryDownloadError(url, error.getMessage, Some(result.provenance)))
+        Left(BinaryDownloadError(url, Diagnostics.describe(error), Some(result.provenance)))
 
 /** Binary download client constructors. */
 object BinaryDownloadClient:
@@ -140,7 +142,7 @@ private[core] final class JdkBinaryDownloadClient(
     try Right(BinaryDownloadResult(Files.readAllBytes(artifact.path), artifact.provenance))
     catch
       case error: Exception =>
-        Left(BinaryDownloadError(url, error.getMessage, Some(artifact.provenance)))
+        Left(BinaryDownloadError(url, Diagnostics.describe(error), Some(artifact.provenance)))
     finally artifact.discard()
 
   override def downloadArtifactWithProvenance(
@@ -161,7 +163,7 @@ private[core] final class JdkBinaryDownloadClient(
             Some(result.provenance)
           ))
         case Success(Left(message)) => Left(BinaryDownloadError(url, message))
-        case Failure(error)         => Left(BinaryDownloadError(url, error.getMessage))
+        case Failure(error)         => Left(BinaryDownloadError(url, Diagnostics.describe(error)))
 
   private def readBodyToFile(
       provenance: UrlProvenance,
@@ -175,7 +177,7 @@ private[core] final class JdkBinaryDownloadClient(
     val tempPath = Try(Files.createTempFile("binstaller-download-", ".artifact")) match
       case Failure(error) => return Left(BinaryDownloadError(
           provenance.initialUrl,
-          error.getMessage,
+          Diagnostics.describe(error),
           Some(provenance)
         ))
       case Success(path) => path
@@ -204,7 +206,11 @@ private[core] final class JdkBinaryDownloadClient(
             error.copy(url = provenance.initialUrl, provenance = Some(provenance))
       case Failure(error) =>
         val _ = Files.deleteIfExists(tempPath)
-        Left(BinaryDownloadError(provenance.initialUrl, error.getMessage, Some(provenance)))
+        Left(BinaryDownloadError(
+          provenance.initialUrl,
+          Diagnostics.describe(error),
+          Some(provenance)
+        ))
 
 private[core] object BoundedBinaryBodyReader:
 
@@ -240,7 +246,7 @@ private[core] object BoundedBinaryBodyReader:
         Sha256Digest.trusted(digest.digest().map(byte => f"${byte & 0xff}%02x").mkString) -> total
       ) match
         case Success(result) => Right(result)
-        case Failure(error)  => Left(BinaryDownloadError(url, error.getMessage))
+        case Failure(error)  => Left(BinaryDownloadError(url, Diagnostics.describe(error)))
 
   def read(
       url: String,
@@ -287,7 +293,7 @@ private[core] object BoundedBinaryBodyReader:
     output.toByteArray
   match
     case Success(bytes) => Right(bytes)
-    case Failure(error) => Left(BinaryDownloadError(url, error.getMessage))
+    case Failure(error) => Left(BinaryDownloadError(url, Diagnostics.describe(error)))
 
   private def rejectAfterDeadline(now: Long, deadline: Long, timeout: Duration): Unit =
     if now > deadline then
