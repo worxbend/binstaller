@@ -21,7 +21,10 @@ happens.
 
 ## Module Responsibilities
 
-- `config`: reads YAML with SnakeYAML Engine, decodes typed manifest models,
+- `config`: owns the shared validated value types — notably `Sha256Digest`,
+  which normalizes to lowercase at construction so every digest comparison is a
+  plain `==` and the `^[0-9a-f]{64}$` rule exists in exactly one place. It also
+  reads YAML with SnakeYAML Engine, decodes typed manifest models,
   validates supported enum values, rejects unsupported installer scripts, checks
   duplicate tool names, checks unknown `versionRef` values, validates SHA-256
   value shape, and gates sudo symlink declarations through

@@ -1,17 +1,16 @@
 package binstaller.core
 
+import binstaller.config.Sha256Digest
+
 import scala.annotation.tailrec
-import scala.util.matching.Regex
 
 private[core] object Sha256SumChecksumFile:
 
   /** Outcome of looking up a filename in a sha256sum-style checksum file. */
   enum Lookup:
-    case Found(hash: String)
+    case Found(hash: Sha256Digest)
     case NotFound
     case Ambiguous(paths: Vector[String])
-
-  private val HashPattern: Regex = "(?i)^[0-9a-f]{64}$".r
 
   // Prefer an exact path match so a checksum file listing several platforms (e.g. `linux/tool` and
   // `darwin/tool`) never silently resolves the wrong entry for a requested basename. Only when no
@@ -20,20 +19,21 @@ private[core] object Sha256SumChecksumFile:
   def find(content: String, file: String): Lookup =
     val entries = content.linesIterator.flatMap(parseLine).toVector
     entries.filter((_, candidate) => candidate == file) match
-      case Vector((hash, _)) => Lookup.Found(lower(hash))
+      case Vector((hash, _)) => Lookup.Found(hash)
       case Vector()          =>
         entries.filter((_, candidate) => fileName(candidate) == file) match
-          case Vector((hash, _)) => Lookup.Found(lower(hash))
+          case Vector((hash, _)) => Lookup.Found(hash)
           case Vector()          => Lookup.NotFound
           case many              => Lookup.Ambiguous(many.map((_, candidate) => candidate))
       case many =>
         // Duplicate exact lines carrying the same digest are harmless; conflicting digests for the
-        // same requested path must never be silently disambiguated.
-        val hashes = many.map((hash, _) => lower(hash)).distinct
+        // same requested path must never be silently disambiguated. Digests are normalized at
+        // construction, so `distinct` no longer depends on the file's letter case.
+        val hashes = many.map((hash, _) => hash).distinct
         if hashes.sizeIs == 1 then Lookup.Found(hashes.head)
         else Lookup.Ambiguous(many.map((_, candidate) => candidate))
 
-  private def parseLine(line: String): Option[(String, String)] =
+  private def parseLine(line: String): Option[(Sha256Digest, String)] =
     val trimmed = line.trim
     if trimmed.isEmpty || trimmed.startsWith("#") then None
     else
@@ -41,10 +41,12 @@ private[core] object Sha256SumChecksumFile:
       // escaping those characters in the filename token that follows the digest.
       val escaped = trimmed.startsWith("\\")
       val body    = if escaped then trimmed.drop(1) else trimmed
+      // A line whose first token is not a valid digest is skipped, exactly as the old regex
+      // rejection did -- checksum files routinely carry headers and comments.
       body.split("\\s+", 2).toVector match
-        case Vector(hash, path) if HashPattern.pattern.matcher(hash).matches() =>
-          val name = path.stripPrefix("*").trim
-          Some(hash -> (if escaped then unescape(name) else name))
+        case Vector(hash, path) => Sha256Digest.fromString(hash).toOption.map: digest =>
+            val name = path.stripPrefix("*").trim
+            digest -> (if escaped then unescape(name) else name)
         case _ => None
 
   private def unescape(value: String): String =
@@ -59,8 +61,6 @@ private[core] object Sha256SumChecksumFile:
           case _     => loop(index + 1, '\\' :: acc)
       else loop(index + 1, value.charAt(index) :: acc)
     loop(0, Nil)
-
-  private def lower(hash: String): String = hash.toLowerCase(java.util.Locale.ROOT)
 
   private def fileName(path: String): String =
     path.split('/').toVector.filter(_.nonEmpty).lastOption.getOrElse(path)

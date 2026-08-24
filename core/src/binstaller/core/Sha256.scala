@@ -1,20 +1,9 @@
 package binstaller.core
 
+import binstaller.config.Sha256Digest
+
 import java.security.MessageDigest
 import java.io.InputStream
-
-/** Validated lowercase SHA-256 digest. */
-final case class Sha256Digest private (value: String)
-
-/** SHA-256 digest validation and construction. */
-object Sha256Digest:
-
-  def fromString(value: String): Either[String, Sha256Digest] =
-    val normalized = value.toLowerCase
-    if normalized.matches("^[0-9a-f]{64}$") then Right(Sha256Digest(normalized))
-    else Left("sha256 digest must be 64 hexadecimal characters")
-
-  private[core] def trusted(value: String): Sha256Digest = Sha256Digest(value.toLowerCase)
 
 private[core] object Sha256:
 

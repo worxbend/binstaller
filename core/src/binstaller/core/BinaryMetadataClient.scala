@@ -1,6 +1,7 @@
 package binstaller.core
 
 import binstaller.config.Diagnostics
+import binstaller.config.Sha256Digest
 
 import java.io.InputStream
 import java.net.http.HttpClient

@@ -3,6 +3,7 @@ package binstaller.core
 import binstaller.config.PolicyOverride
 import binstaller.config.ChecksumAlgorithm
 import binstaller.config.Diagnostics
+import binstaller.config.Sha256Digest
 import binstaller.config.SymlinkPrivilege
 
 import java.nio.file.Path
@@ -420,11 +421,11 @@ final class DirectBinaryInstaller(
     case None           => Right(())
     case Some(checksum) => checksum.algorithm match
         case ChecksumAlgorithm.Sha256 =>
-          if actual.value.equalsIgnoreCase(checksum.value) then Right(())
+          if actual == checksum.value then Right(())
           else
             Left(ToolInstallError.ChecksumMismatch(
               tool.name,
-              checksum.value,
+              checksum.value.value,
               actual.value,
               ResolvedChecksum.sourceDescription(checksum)
             ))

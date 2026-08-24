@@ -1,5 +1,7 @@
 package binstaller.core
 
+import binstaller.config.Sha256Digest
+
 import java.net.Authenticator
 import java.net.CookieHandler
 import java.net.ProxySelector

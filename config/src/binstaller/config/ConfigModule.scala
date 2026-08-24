@@ -139,7 +139,7 @@ final case class DownloadSpec(
 /** Declared checksum value or typed discovery source. Current validation supports SHA-256 only. */
 final case class ChecksumSpec(
     algorithm: ChecksumAlgorithm,
-    value: Option[String],
+    value: Option[Sha256Digest],
     discover: Option[ChecksumDiscoverySpec]
 )
 
@@ -147,7 +147,7 @@ final case class ChecksumSpec(
 object ChecksumSpec:
 
   /** Build a literal checksum declaration. */
-  def apply(algorithm: ChecksumAlgorithm, value: String): ChecksumSpec =
+  def apply(algorithm: ChecksumAlgorithm, value: Sha256Digest): ChecksumSpec =
     ChecksumSpec(algorithm, Some(value), None)
 
 /** Supported checksum algorithms. */

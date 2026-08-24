@@ -1,9 +1,9 @@
 package binstaller.cli
 
+import binstaller.config.Sha256Digest
 import binstaller.core.BinaryInstallerService
 import binstaller.core.ApplyParallelism
 import binstaller.core.BinaryDownloadArtifact
-import binstaller.core.Sha256Digest
 import binstaller.core.BinaryDownloadClient
 import binstaller.core.BinaryDownloadError
 import binstaller.core.BinaryDownloadProgress
@@ -28,7 +28,6 @@ import binstaller.core.ApplyStateStore
 import binstaller.core.UrlProvenance
 import binstaller.core.UrlRedirectHop
 import utest.*
-
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.nio.file.Files

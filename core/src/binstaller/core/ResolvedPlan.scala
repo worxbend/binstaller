@@ -7,6 +7,7 @@ import binstaller.config.ExecutableMode
 import binstaller.config.InstallPolicy
 import binstaller.config.PolicyMode
 import binstaller.config.PolicyOverride
+import binstaller.config.Sha256Digest
 import binstaller.config.SymlinkPrivilege
 import binstaller.config.ValidationError
 
@@ -183,7 +184,7 @@ final case class ResolvedDownload(
 /** Resolved checksum value paired with its provenance for rendering, locking, and diagnostics. */
 final case class ResolvedChecksum(
     algorithm: ChecksumAlgorithm,
-    value: String,
+    value: Sha256Digest,
     source: ResolvedChecksumSource
 )
 

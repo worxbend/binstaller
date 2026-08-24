@@ -1,5 +1,7 @@
 package binstaller.core
 
+import binstaller.config.Sha256Digest
+
 
 import java.nio.file.Path
 
@@ -224,15 +226,17 @@ private[core] final class ResolvingBinaryInstallerService(
       locked: LockedApplyProvenance
   ): PreparedPlan = prepared.copy(plan = prepared.plan.copy(tools = prepared.plan.tools.map: tool =>
     locked.tools.get(tool.name).flatMap(_.checksum) match
-      case Some(checksum) => tool.copy(download =
-          tool.download.copy(checksum =
-            Some(
-              ResolvedChecksum(
+      // Locked-apply validation rejects any malformed locked digest before this runs, so the parse
+      // cannot fail here; leaving the tool untouched if it somehow did keeps this total without
+      // inventing a digest.
+      case Some(checksum) => Sha256Digest.fromString(checksum.value).toOption.fold(tool): digest =>
+          tool.copy(download =
+            tool.download.copy(checksum =
+              Some(ResolvedChecksum(
                 binstaller.config.ChecksumAlgorithm.Sha256,
-                checksum.value,
+                digest,
                 ResolvedChecksumSource.Configured
-              )
+              ))
             )
           )
-        )
       case None => tool))

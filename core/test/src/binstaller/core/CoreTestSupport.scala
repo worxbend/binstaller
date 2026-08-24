@@ -5,6 +5,7 @@ import binstaller.config.ArchiveExtract
 import binstaller.config.ArchiveSpec
 import binstaller.config.ArchiveType
 import binstaller.config.ExtractMapping
+import binstaller.config.Sha256Digest
 import binstaller.config.ValidationError
 import binstaller.config.SymlinkPrivilege
 import utest.*
@@ -93,6 +94,11 @@ private[core] trait CoreTestSupport:
     else abort(s"event not found in ${events.mkString(", ")}")
 
   protected def abort(message: String): Nothing = throw java.lang.AssertionError(message)
+
+  /** Parse a hex literal into a digest, failing the test rather than the assertion on a typo. */
+  protected def digest(hex: String): Sha256Digest = Sha256Digest.fromString(hex) match
+    case Right(value) => value
+    case Left(error)  => abort(s"invalid test digest: $error")
 
   /** Build a parallelism value through the smart constructor, failing the test on a bad literal. */
   protected def parallelism(value: Int): ApplyParallelism = ApplyParallelism.fromInt(value) match

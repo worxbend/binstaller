@@ -19,6 +19,14 @@ object ConfigModuleTest extends TestSuite:
         Diagnostics.describe(RuntimeException(null, IllegalStateException("inner"))) == "inner"
       )
 
+    test("an uppercase manifest checksum is normalized to lowercase"):
+      // The digest is normalized once, at decode, so the comparison that decides whether a
+      // downloaded binary is trusted is a plain `==` rather than a case-insensitive compare of a
+      // normalized value against an unnormalized one.
+      val upper = "0A745198DE24545D0055CD8414BC8D2BA10363EF5F5D38369EA1B399671CC083"
+      assert(Sha256Digest.fromString(upper).map(_.value) == Right(upper.toLowerCase))
+      assert(Sha256Digest.fromString("not-a-digest").isLeft)
+
     test("config example loads into typed manifest"):
       val profile = exampleProfile
 
@@ -72,22 +80,22 @@ object ConfigModuleTest extends TestSuite:
       assert(checksumFor(profile, "helm") ==
         Some(ChecksumSpec(
           ChecksumAlgorithm.Sha256,
-          "0a745198de24545d0055cd8414bc8d2ba10363ef5f5d38369ea1b399671cc083"
+          digest("0a745198de24545d0055cd8414bc8d2ba10363ef5f5d38369ea1b399671cc083")
         )))
       assert(checksumFor(profile, "kustomize") ==
         Some(ChecksumSpec(
           ChecksumAlgorithm.Sha256,
-          "029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d"
+          digest("029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d")
         )))
       assert(checksumFor(profile, "dotbot") ==
         Some(ChecksumSpec(
           ChecksumAlgorithm.Sha256,
-          "45d49e064d8684926fed97ad051c6ecebbf796a3c709edaa7a4a166b2978633d"
+          digest("45d49e064d8684926fed97ad051c6ecebbf796a3c709edaa7a4a166b2978633d")
         )))
       assert(checksumFor(profile, "nerd-font-installer") ==
         Some(ChecksumSpec(
           ChecksumAlgorithm.Sha256,
-          "25c70bcf327930282823fa6abecc54f14f53fb44b01f988187a07218b711a1a7"
+          digest("25c70bcf327930282823fa6abecc54f14f53fb44b01f988187a07218b711a1a7")
         )))
 
     test("config example installs Helm from archive, not installer script"):
@@ -347,6 +355,11 @@ object ConfigModuleTest extends TestSuite:
   private def errorAt(path: String)(error: ValidationError): Boolean = error.path == path
 
   private def abort(message: String): Nothing = throw java.lang.AssertionError(message)
+
+  /** Parse a hex literal into a digest, failing the test rather than the assertion on a typo. */
+  private def digest(hex: String): Sha256Digest = Sha256Digest.fromString(hex) match
+    case Right(value) => value
+    case Left(error)  => abort(s"invalid test digest: $error")
 
   private def exampleConfigPath: Path = repoRootCandidates
     .map(_.resolve("config.example.yaml"))

@@ -274,12 +274,20 @@ private[config] object ManifestDecoder:
           ChecksumAlgorithm.Sha256,
           _.value
         ))
-        val checksum = acc(optionalString(checksumMap, "value", s"$path.value"))
-        val discover = acc(optionalChecksumDiscovery(checksumMap, s"$path.discover"))
-        acc.report(checksumShapeErrors(path, checksum, discover))
-        acc.report(checksum.toVector.flatMap(value =>
-          checksumValueErrors(algorithm, value, s"$path.value")
-        ))
+        val rawChecksum = acc(optionalString(checksumMap, "value", s"$path.value"))
+        val discover    = acc(optionalChecksumDiscovery(checksumMap, s"$path.discover"))
+        // The raw Option decides the "value or discover" shape rules; parsing happens after, so a
+        // malformed digest is reported as a bad digest rather than as a missing one.
+        acc.report(checksumShapeErrors(path, rawChecksum, discover))
+        val checksum = rawChecksum.flatMap: value =>
+          Sha256Digest.fromString(value) match
+            case Right(digest) => Some(digest)
+            case Left(_)       =>
+              acc.report(Vector(ValidationError(
+                s"$path.value",
+                "sha256 checksum must be 64 hexadecimal characters"
+              )))
+              None
         ChecksumSpec(algorithm, checksum, discover)
 
   private def optionalChecksumDiscovery(
@@ -307,17 +315,6 @@ private[config] object ManifestDecoder:
       Vector(ValidationError(path, "checksum must declare either value or discover, not both"))
     case (None, None) => Vector(ValidationError(path, "checksum must declare value or discover"))
     case _            => Vector.empty
-
-  private def checksumValueErrors(
-      algorithm: ChecksumAlgorithm,
-      value: String,
-      path: String
-  ): Vector[ValidationError] = algorithm match
-    case ChecksumAlgorithm.Sha256 =>
-      // The value is format-checked here so checksum mismatches later mean artifact integrity,
-      // not a malformed manifest value being treated as a runtime comparison target.
-      if value.matches("(?i)^[0-9a-f]{64}$") then Vector.empty
-      else Vector(ValidationError(path, "sha256 checksum must be 64 hexadecimal characters"))
 
   private def optionalArchive(map: YamlMap, path: String): DecodeResult[Option[ArchiveSpec]] =
     optionalBlock(map, "archive", path, Set("type", "extract")): (archiveMap, acc) =>

@@ -1,5 +1,7 @@
 package binstaller.core
 
+import binstaller.config.Sha256Digest
+
 private[core] final case class LockBuildError(toolName: String, message: String)
 
 private[core] object LockFileBuilder:
@@ -44,7 +46,7 @@ private[core] object LockFileBuilder:
       actual: Sha256Digest
   ): Either[LockBuildError, LockFileChecksum] = tool.download.checksum match
     case None => Right(LockFileChecksum.inspected("sha256", actual.value))
-    case Some(configured) if configured.value.equalsIgnoreCase(actual.value) =>
+    case Some(configured) if configured.value == actual =>
       Right(LockFileChecksum.fromResolved(configured))
     case Some(configured) => Left(LockBuildError(
         tool.name,

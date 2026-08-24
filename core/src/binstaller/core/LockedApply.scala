@@ -1,5 +1,7 @@
 package binstaller.core
 
+import binstaller.config.Sha256Digest
+
 import java.nio.file.Path
 
 /** Whether plan or apply should require a compatible lock file. */
@@ -147,24 +149,30 @@ private[core] object LockedApplyValidator:
     case (None, Some(_)) => Some(s"tool '${tool.name}' lock has unexpected version provenance")
     case _               => None
 
+  // Checked for every tool, not only for tools without a manifest checksum as it once was: a
+  // malformed locked digest is a corrupt lock file whichever way the manifest is written, and this
+  // is what lets every later comparison work on parsed digests instead of raw strings.
+  private def lockedChecksumFormatProblem(
+      tool: ResolvedTool,
+      lockedTool: LockFileTool
+  ): Option[String] = lockedTool.checksum.filter: actual =>
+    actual.algorithm != "sha256" || Sha256Digest.fromString(actual.value).isLeft
+  .map(actual => s"tool '${tool.name}' has invalid locked checksum ${render(actual)}")
+
   private def checksumProblem(tool: ResolvedTool, lockedTool: LockFileTool): Option[String] =
     val current = tool.download.checksum.map(lockChecksum)
-    (current, lockedTool.checksum) match
-      case (Some(expected), Some(actual))
-          if expected.algorithm != actual.algorithm ||
-            !expected.value.equalsIgnoreCase(actual.value) =>
-        Some(
-          s"tool '${tool.name}' checksum changed: lock has ${render(actual)}, " +
-            s"manifest has ${render(expected)}"
-        )
-      case (Some(expected), None) =>
-        Some(s"tool '${tool.name}' is missing locked checksum ${render(expected)}")
-      case (None, Some(actual))
-          if actual.algorithm != "sha256" ||
-            !actual.value.matches("(?i)^[0-9a-f]{64}$") =>
-        Some(s"tool '${tool.name}' has invalid locked checksum ${render(actual)}")
-      case (None, Some(_)) => None
-      case _               => None
+    lockedChecksumFormatProblem(tool, lockedTool).orElse:
+      (current, lockedTool.checksum) match
+        case (Some(expected), Some(actual))
+            if expected.algorithm != actual.algorithm ||
+              Sha256Digest.fromString(expected.value) != Sha256Digest.fromString(actual.value) =>
+          Some(
+            s"tool '${tool.name}' checksum changed: lock has ${render(actual)}, " +
+              s"manifest has ${render(expected)}"
+          )
+        case (Some(expected), None) =>
+          Some(s"tool '${tool.name}' is missing locked checksum ${render(expected)}")
+        case _ => None
 
   private def downloadUrlProblem(tool: ResolvedTool, lockedTool: LockFileTool): Option[String] =
     Option.when(lockedTool.downloadProvenance.initialUrl != tool.download.url)(
@@ -209,9 +217,11 @@ private[core] object LockedApplyValidator:
       lockedTool: LockFileTool,
       metadata: BinaryMetadata
   ): Option[String] = (lockedTool.checksum, metadata.sha256) match
-    case (Some(expected), Some(actual)) if !expected.value.equalsIgnoreCase(actual.value) =>
+    case (Some(expected), Some(actual))
+        if Sha256Digest.fromString(expected.value) != Right(actual) =>
       Some(
-        s"tool '${tool.name}' sha256 changed: lock has ${expected.value}, current GET has ${actual.value}"
+        s"tool '${tool.name}' sha256 changed: lock has ${expected.value}, " +
+          s"current GET has ${actual.value}"
       )
     case (Some(_), None) => Some(s"tool '${tool.name}' metadata verification returned no sha256")
     case _               => None

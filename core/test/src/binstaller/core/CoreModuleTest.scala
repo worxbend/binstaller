@@ -5,6 +5,7 @@ import binstaller.config.ConfigModule
 import binstaller.config.ExecutableMode
 import binstaller.config.ArchiveType
 import binstaller.config.PolicyOverride
+import binstaller.config.Sha256Digest
 import binstaller.config.SymlinkPrivilege
 import utest.*
 
@@ -418,7 +419,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         installDir,
         checksum = Some(ResolvedChecksum(
           ChecksumAlgorithm.Sha256,
-          "0" * 64,
+          digest("0" * 64),
           ResolvedChecksumSource.Configured
         ))
       )
@@ -708,14 +709,10 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
     test("sha256sum lookup prefers exact path over basename and resolves it"):
       val content = s"${"a" * 64}  linux/tool\n${"b" * 64}  darwin/tool\n"
-      assert(Sha256SumChecksumFile.find(content, "linux/tool") == Sha256SumChecksumFile.Lookup.Found(
-        "a" * 64
-      ))
-      assert(
-        Sha256SumChecksumFile.find(content, "darwin/tool") == Sha256SumChecksumFile.Lookup.Found(
-          "b" * 64
-        )
-      )
+      assert(Sha256SumChecksumFile.find(content, "linux/tool") ==
+        Sha256SumChecksumFile.Lookup.Found(digest("a" * 64)))
+      assert(Sha256SumChecksumFile.find(content, "darwin/tool") ==
+        Sha256SumChecksumFile.Lookup.Found(digest("b" * 64)))
 
     test("sha256sum lookup reports ambiguity for basename-colliding entries"):
       val content = s"${"a" * 64}  linux/tool\n${"b" * 64}  darwin/tool\n"
@@ -726,9 +723,8 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
     test("sha256sum lookup collapses duplicate identical digests to a single found entry"):
       val content = s"${"c" * 64}  tool\n${"C" * 64} *tool\n"
-      assert(Sha256SumChecksumFile.find(content, "tool") == Sha256SumChecksumFile.Lookup.Found(
-        "c" * 64
-      ))
+      assert(Sha256SumChecksumFile.find(content, "tool") ==
+        Sha256SumChecksumFile.Lookup.Found(digest("c" * 64)))
 
     test("sha256sum lookup reports not found when no entry matches"):
       val content = s"${"a" * 64}  other\n"
@@ -737,7 +733,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
     test("sha256sum lookup unescapes GNU backslash-prefixed filenames"):
       val content = s"\\${"a" * 64}  weird\\\\name\n"
       assert(Sha256SumChecksumFile.find(content, "weird\\name") ==
-        Sha256SumChecksumFile.Lookup.Found("a" * 64))
+        Sha256SumChecksumFile.Lookup.Found(digest("a" * 64)))
 
     test("versions output flags unavailable GitHub release metadata without failing"):
       val tempRoot = Files.createTempDirectory("binstaller-core-github-unavailable")
@@ -1022,6 +1018,32 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(result.lines.exists(_.contains("manifest fingerprint changed")))
       assert(!Files.exists(tempRoot.resolve("apps/alpha")))
       assert(!Files.exists(tempRoot.resolve("lock.state.json")))
+
+    test("locked apply rejects a malformed locked checksum even when the manifest pins one"):
+      // The format check used to run only for tools with no manifest checksum, so a corrupt digest
+      // on a pinned tool fell through to a comparison against an unvalidated string.
+      val tempRoot = Files.createTempDirectory("binstaller-core-locked-bad-digest")
+      val config   = writeConfig(tempRoot, lockYaml(tempRoot))
+      val lockPath = tempRoot.resolve("binstaller.lock.json")
+      val current  = currentLockFile(config, dynamicSize = Some(33L))
+      val corrupted = current.copy(tools = current.tools.map: tool =>
+        if tool.name == "alpha" then
+          tool.copy(checksum = tool.checksum.map(_.copy(value = "not-a-valid-sha256")))
+        else tool
+      )
+      writeLock(lockPath, corrupted)
+      val service = lockedApplyService(tempRoot, dynamicSize = Some(33L))
+
+      val result = service.apply(
+        applyOptions(config).copy(
+          lockPath = lockPath.toString,
+          lockedApply = LockedApplyMode.Enabled
+        )
+      )
+
+      assert(result.status == InstallerRunStatus.Failed)
+      assert(result.lines.exists(_.contains("invalid locked checksum")))
+      assert(!Files.exists(tempRoot.resolve("apps/alpha")))
 
     test("locked apply rejects download provenance drift before install"):
       val tempRoot  = Files.createTempDirectory("binstaller-core-locked-url-drift")
@@ -1629,7 +1651,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
             filename = "alpha",
             checksum = Some(ResolvedChecksum(
               ChecksumAlgorithm.Sha256,
-              "0" * 64,
+              digest("0" * 64),
               ResolvedChecksumSource.Discovered(
                 s"https://example.invalid/$secret/SHA256SUMS",
                 "alpha",

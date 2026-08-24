@@ -103,7 +103,7 @@ private[core] object ManifestFingerprint:
     append(builder, s"$base.filename", download.filename)
     download.checksum.foreach: checksum =>
       append(builder, s"$base.checksum.algorithm", checksum.algorithm.value)
-      checksum.value.foreach(value => append(builder, s"$base.checksum.value", value))
+      checksum.value.foreach(value => append(builder, s"$base.checksum.value", value.value))
       checksum.discover.foreach: discovery =>
         append(builder, s"$base.checksum.discover.type", discovery.kind.value)
         append(builder, s"$base.checksum.discover.url", discovery.url)

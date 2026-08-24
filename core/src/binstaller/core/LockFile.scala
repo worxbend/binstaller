@@ -97,7 +97,7 @@ object LockFileChecksum:
   /** Convert resolved checksum provenance into lock-file metadata. */
   def fromResolved(checksum: ResolvedChecksum): LockFileChecksum = LockFileChecksum(
     checksum.algorithm.value,
-    checksum.value,
+    checksum.value.value,
     checksum.source match
       case ResolvedChecksumSource.Configured => LockedChecksumSource.Configured
       case ResolvedChecksumSource.Discovered(url, file, provenance) =>
