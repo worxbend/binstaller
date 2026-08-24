@@ -49,11 +49,43 @@ private[core] final class LockHttpTextClient(text: String, provenance: UrlProven
     if url == provenance.initialUrl then Right(HttpTextResponse(text, provenance))
     else Left(HttpTextError(url, s"unexpected URL $url"))
 
-private[core] final class FakeBinaryDownloadClient(result: Either[BinaryDownloadError, Array[Byte]])
-    extends BinaryDownloadClient:
+/** Base for byte-based download fakes.
+ *
+ *  `BinaryDownloadClient` deals in artifact files because the install pipeline streams, but a test
+ *  fake almost always has its payload as a literal byte array. This writes that array to a temp
+ *  file once, here, so each fake states only what it is actually about — which URLs it answers,
+ *  what progress it emits, what concurrency it observes.
+ */
+private[core] abstract class BytesBinaryDownloadClient extends BinaryDownloadClient:
 
-  def download(url: String): Either[BinaryDownloadError, Array[Byte]] =
-    result.left.map(error => error.copy(url = url))
+  protected def bytesFor(
+      url: String,
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[BinaryDownloadError, BinaryDownloadResult]
+
+  final def downloadArtifactWithProvenance(
+      url: String,
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[BinaryDownloadError, BinaryDownloadArtifact] =
+    bytesFor(url, progressObserver).map: result =>
+      val path = Files.createTempFile("binstaller-test-download-", ".artifact")
+      Files.write(path, result.bytes)
+      BinaryDownloadArtifact(
+        path,
+        result.provenance,
+        Sha256Digest.trusted(Sha256.digest(result.bytes)),
+        result.bytes.length.toLong
+      )
+
+private[core] final class FakeBinaryDownloadClient(result: Either[BinaryDownloadError, Array[Byte]])
+    extends BytesBinaryDownloadClient:
+
+  protected def bytesFor(
+      url: String,
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[BinaryDownloadError, BinaryDownloadResult] = result
+    .left.map(error => error.copy(url = url))
+    .map(bytes => BinaryDownloadResult(bytes, UrlProvenance.direct(url)))
 
 private object FakeBinaryDownloadClient:
 
@@ -63,28 +95,23 @@ private object FakeBinaryDownloadClient:
     FakeBinaryDownloadClient(Left(BinaryDownloadError("", message)))
 
 private[core] final class ProgressingBinaryDownloadClient(bytes: Array[Byte])
-    extends BinaryDownloadClient:
+    extends BytesBinaryDownloadClient:
 
-  def download(url: String): Either[BinaryDownloadError, Array[Byte]] = Right(bytes)
-
-  override def download(
+  protected def bytesFor(
       url: String,
       progressObserver: BinaryDownloadProgressObserver
-  ): Either[BinaryDownloadError, Array[Byte]] =
+  ): Either[BinaryDownloadError, BinaryDownloadResult] =
     val halfway = bytes.length.toLong / 2L
     val total   = Some(bytes.length.toLong)
     progressObserver.onProgress(BinaryDownloadProgress.Started(url, total))
     progressObserver.onProgress(BinaryDownloadProgress.Advanced(url, halfway, total))
     progressObserver.onProgress(BinaryDownloadProgress.Finished(url, bytes.length.toLong, total))
-    Right(bytes)
+    Right(BinaryDownloadResult(bytes, UrlProvenance.direct(url)))
 
 private[core] final class RedirectingBinaryDownloadClient(provenance: UrlProvenance)
-    extends BinaryDownloadClient:
+    extends BytesBinaryDownloadClient:
 
-  def download(url: String): Either[BinaryDownloadError, Array[Byte]] =
-    Right("alpha".getBytes(StandardCharsets.UTF_8))
-
-  override def downloadWithProvenance(
+  protected def bytesFor(
       url: String,
       progressObserver: BinaryDownloadProgressObserver
   ): Either[BinaryDownloadError, BinaryDownloadResult] =
@@ -109,12 +136,15 @@ private[core] final class RecordingBinaryDownloadProgressObserver
 
 private[core] final class RoutingBinaryDownloadClient(
     results: Map[String, Either[String, Array[Byte]]]
-) extends BinaryDownloadClient:
+) extends BytesBinaryDownloadClient:
 
-  def download(url: String): Either[BinaryDownloadError, Array[Byte]] = results
+  protected def bytesFor(
+      url: String,
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[BinaryDownloadError, BinaryDownloadResult] = results
     .getOrElse(url, Left(s"unexpected URL $url"))
-    .left
-    .map(message => BinaryDownloadError(url, message))
+    .left.map(message => BinaryDownloadError(url, message))
+    .map(bytes => BinaryDownloadResult(bytes, UrlProvenance.direct(url)))
 
 private object RoutingBinaryDownloadClient:
 
@@ -124,7 +154,7 @@ private object RoutingBinaryDownloadClient:
   ))
 
 private[core] final class ConcurrentTrackingDownloadClient(urls: Vector[String])
-    extends BinaryDownloadClient:
+    extends BytesBinaryDownloadClient:
 
   private val expectedStarts = CountDownLatch(urls.size)
   private val active         = AtomicInteger(0)
@@ -135,10 +165,7 @@ private[core] final class ConcurrentTrackingDownloadClient(urls: Vector[String])
 
   def maxInFlight: Int = peak.get()
 
-  def download(url: String): Either[BinaryDownloadError, Array[Byte]] =
-    downloadWithProvenance(url).map(_.bytes)
-
-  override def downloadWithProvenance(
+  protected def bytesFor(
       url: String,
       progressObserver: BinaryDownloadProgressObserver
   ): Either[BinaryDownloadError, BinaryDownloadResult] = payloads.get(url) match
@@ -165,7 +192,7 @@ private[core] final class ConcurrentTrackingDownloadClient(urls: Vector[String])
 
   private def fileName(url: String): String = url.split('/').toVector.lastOption.getOrElse(url)
 
-private[core] final class ParallelismProbeDownloadClient extends BinaryDownloadClient:
+private[core] final class ParallelismProbeDownloadClient extends BytesBinaryDownloadClient:
 
   private val active      = AtomicInteger(0)
   private val peak        = AtomicInteger(0)
@@ -173,12 +200,17 @@ private[core] final class ParallelismProbeDownloadClient extends BinaryDownloadC
 
   def maxInFlight: Int = peak.get()
 
-  def download(url: String): Either[BinaryDownloadError, Array[Byte]] =
+  protected def bytesFor(
+      url: String,
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[BinaryDownloadError, BinaryDownloadResult] =
     val current = active.incrementAndGet()
     val _       = peak.updateAndGet(previous => math.max(previous, current))
     bothStarted.countDown()
     val _ = bothStarted.await(150, TimeUnit.MILLISECONDS)
-    try Right(url.split('/').last.getBytes(StandardCharsets.UTF_8))
+    try
+      val bytes = url.split('/').last.getBytes(StandardCharsets.UTF_8)
+      Right(BinaryDownloadResult(bytes, UrlProvenance.direct(url)))
     finally
       val _ = active.decrementAndGet()
 

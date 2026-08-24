@@ -2,6 +2,8 @@ package binstaller.cli
 
 import binstaller.core.BinaryInstallerService
 import binstaller.core.ApplyParallelism
+import binstaller.core.BinaryDownloadArtifact
+import binstaller.core.Sha256Digest
 import binstaller.core.BinaryDownloadClient
 import binstaller.core.BinaryDownloadError
 import binstaller.core.BinaryDownloadProgress
@@ -674,33 +676,45 @@ private final class RedirectingHttpTextClient(text: String, provenance: UrlProve
     if url == provenance.initialUrl then Right(HttpTextResponse(text, provenance))
     else Left(HttpTextError(url, s"unexpected URL $url"))
 
+/** Writes a literal payload to a temp artifact, so a CLI fake states only its progress behaviour.
+ *
+ *  Core has an equivalent base for its own fakes, but that one is `private[core]`.
+ */
+private def testArtifact(url: String, bytes: Array[Byte]): BinaryDownloadArtifact =
+  val path = Files.createTempFile("binstaller-cli-download-", ".artifact")
+  Files.write(path, bytes)
+  val hex = java.security.MessageDigest
+    .getInstance("SHA-256")
+    .digest(bytes)
+    .map(byte => f"${byte & 0xff}%02x")
+    .mkString
+  val digest = Sha256Digest.fromString(hex) match
+    case Right(value) => value
+    case Left(error)  => throw java.lang.AssertionError(s"unexpected test digest: $error")
+  BinaryDownloadArtifact(path, UrlProvenance.direct(url), digest, bytes.length.toLong)
+
 private final class ProgressBinaryDownloadClient(bytes: Array[Byte]) extends BinaryDownloadClient:
 
-  def download(url: String): Either[BinaryDownloadError, Array[Byte]] = Right(bytes)
-
-  override def download(
+  def downloadArtifactWithProvenance(
       url: String,
       progressObserver: BinaryDownloadProgressObserver
-  ): Either[BinaryDownloadError, Array[Byte]] =
+  ): Either[BinaryDownloadError, BinaryDownloadArtifact] =
     val halfway = bytes.length.toLong / 2L
     val total   = Some(bytes.length.toLong)
     progressObserver.onProgress(BinaryDownloadProgress.Started(url, total))
     progressObserver.onProgress(BinaryDownloadProgress.Advanced(url, halfway, total))
     progressObserver.onProgress(BinaryDownloadProgress.Finished(url, bytes.length.toLong, total))
-    Right(bytes)
+    Right(testArtifact(url, bytes))
 
 private final class ConcurrentProgressBinaryDownloadClient(payloads: Map[String, Array[Byte]])
     extends BinaryDownloadClient:
 
   private val starts = CountDownLatch(payloads.size)
 
-  def download(url: String): Either[BinaryDownloadError, Array[Byte]] =
-    payloads.get(url).toRight(BinaryDownloadError(url, s"unexpected URL $url"))
-
-  override def download(
+  def downloadArtifactWithProvenance(
       url: String,
       progressObserver: BinaryDownloadProgressObserver
-  ): Either[BinaryDownloadError, Array[Byte]] = payloads.get(url) match
+  ): Either[BinaryDownloadError, BinaryDownloadArtifact] = payloads.get(url) match
     case None        => Left(BinaryDownloadError(url, s"unexpected URL $url"))
     case Some(bytes) =>
       val total   = Some(bytes.length.toLong)
@@ -710,7 +724,7 @@ private final class ConcurrentProgressBinaryDownloadClient(payloads: Map[String,
       val _ = starts.await(5, TimeUnit.SECONDS)
       progressObserver.onProgress(BinaryDownloadProgress.Advanced(url, halfway, total))
       progressObserver.onProgress(BinaryDownloadProgress.Finished(url, bytes.length.toLong, total))
-      Right(bytes)
+      Right(testArtifact(url, bytes))
 
 private final class RecordingInstallerService extends BinaryInstallerService:
 

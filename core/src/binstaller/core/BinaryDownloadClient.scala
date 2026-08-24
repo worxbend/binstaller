@@ -53,51 +53,24 @@ object BinaryDownloadProgressObserver:
   /** Observer that ignores all progress events. */
   val none: BinaryDownloadProgressObserver = _ => ()
 
-/** Boundary for fetching binary artifact bytes. */
+/** Boundary for fetching a binary artifact.
+ *
+ *  One abstract member on purpose. This used to offer five overlapping entry points — two
+ *  `download` and two `downloadWithProvenance` overloads plus the artifact method — chained
+ *  together by defaults, and one of those defaults was
+ *  `progressObserver match { case _ => download(url) }`, which silently threw the observer away
+ *  with no warning from the compiler. An implementation could satisfy the trait and never report
+ *  progress, and the only way to find out was to watch a download appear to hang.
+ *
+ *  Core only ever needs the artifact, streamed to a file it owns, so that is the whole interface.
+ */
 trait BinaryDownloadClient:
-  /** Download bytes without progress callbacks. */
-  def download(url: String): Either[BinaryDownloadError, Array[Byte]]
-
-  /** Download bytes and optionally emit progress callbacks. */
-  def download(
-      url: String,
-      progressObserver: BinaryDownloadProgressObserver
-  ): Either[BinaryDownloadError, Array[Byte]] = progressObserver match
-    case _ => download(url)
-
-  /** Download bytes and report the initial URL, final URL, and redirect chain. */
-  def downloadWithProvenance(url: String): Either[BinaryDownloadError, BinaryDownloadResult] =
-    downloadWithProvenance(url, BinaryDownloadProgressObserver.none)
-
-  /** Download bytes with progress callbacks and effective URL metadata. */
-  def downloadWithProvenance(
-      url: String,
-      progressObserver: BinaryDownloadProgressObserver
-  ): Either[BinaryDownloadError, BinaryDownloadResult] = download(url, progressObserver).map(
-    bytes => BinaryDownloadResult(bytes, UrlProvenance.direct(url))
-  )
 
   /** Stream an artifact to an owned temporary file. Callers must discard it after staging. */
   def downloadArtifactWithProvenance(
       url: String,
       progressObserver: BinaryDownloadProgressObserver = BinaryDownloadProgressObserver.none
-  ): Either[BinaryDownloadError, BinaryDownloadArtifact] = downloadWithProvenance(
-    url,
-    progressObserver
-  ).flatMap: result =>
-    Try:
-      val path = Files.createTempFile("binstaller-download-", ".artifact")
-      Files.write(path, result.bytes)
-      BinaryDownloadArtifact(
-        path,
-        result.provenance,
-        Sha256Digest.trusted(Sha256.digest(result.bytes)),
-        result.bytes.length.toLong
-      )
-    match
-      case Success(artifact) => Right(artifact)
-      case Failure(error)    =>
-        Left(BinaryDownloadError(url, Diagnostics.describe(error), Some(result.provenance)))
+  ): Either[BinaryDownloadError, BinaryDownloadArtifact]
 
 /** Binary download client constructors. */
 object BinaryDownloadClient:
@@ -122,18 +95,10 @@ private[core] final class JdkBinaryDownloadClient(
     hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved(_)
 ) extends BinaryDownloadClient:
 
-  def download(url: String): Either[BinaryDownloadError, Array[Byte]] =
-    download(url, BinaryDownloadProgressObserver.none)
-
-  override def download(
+  /** Read a downloaded artifact fully into memory. Test-facing: the install pipeline streams. */
+  def downloadWithProvenance(
       url: String,
-      progressObserver: BinaryDownloadProgressObserver
-  ): Either[BinaryDownloadError, Array[Byte]] =
-    downloadWithProvenance(url, progressObserver).map(_.bytes)
-
-  override def downloadWithProvenance(
-      url: String,
-      progressObserver: BinaryDownloadProgressObserver
+      progressObserver: BinaryDownloadProgressObserver = BinaryDownloadProgressObserver.none
   ): Either[BinaryDownloadError, BinaryDownloadResult] = downloadArtifactWithProvenance(
     url,
     progressObserver
