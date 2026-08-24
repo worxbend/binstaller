@@ -63,7 +63,6 @@ private[config] object ManifestDecoder:
           "allowSudoSymlinks",
           "allowDynamicLatestUrls",
           "allowMissingChecksums",
-          "allowArchiveCandidateFallback",
           "stateFile"
         )
       ))
@@ -93,11 +92,6 @@ private[config] object ManifestDecoder:
         "allowMissingChecksums",
         "spec.policy.allowMissingChecksums"
       ))
-      val allowArchiveCandidateFallback = acc(optionalPolicyOverride(
-        map,
-        "allowArchiveCandidateFallback",
-        "spec.policy.allowArchiveCandidateFallback"
-      ))
       val stateFile = acc(optionalString(map, "stateFile", "spec.policy.stateFile"))
       InstallPolicy(
         mode = mode,
@@ -106,7 +100,6 @@ private[config] object ManifestDecoder:
         allowSudoSymlinks = allowSudoSymlinks,
         allowDynamicLatestUrls = allowDynamicLatestUrls,
         allowMissingChecksums = allowMissingChecksums,
-        allowArchiveCandidateFallback = allowArchiveCandidateFallback,
         stateFile = stateFile
       )
 

@@ -27,8 +27,7 @@ object ConfigModuleTest extends TestSuite:
       val strict    = ConfigModule.loadString(policyModeYaml(
         """mode: strict
           |    allowDynamicLatestUrls: true
-          |    allowMissingChecksums: false
-          |    allowArchiveCandidateFallback: false""".stripMargin
+          |    allowMissingChecksums: false""".stripMargin
       ))
 
       developer match
@@ -36,16 +35,12 @@ object ConfigModuleTest extends TestSuite:
           assert(profile.spec.policy.mode == PolicyMode.Developer)
           assert(profile.spec.policy.allowDynamicLatestUrls.isEmpty)
           assert(profile.spec.policy.allowMissingChecksums.isEmpty)
-          assert(profile.spec.policy.allowArchiveCandidateFallback.isEmpty)
         case Left(error) => abort(s"expected developer policy config, got $error")
       strict match
         case Right(profile) =>
           assert(profile.spec.policy.mode == PolicyMode.Strict)
           assert(profile.spec.policy.allowDynamicLatestUrls.contains(PolicyOverride.Enabled))
           assert(profile.spec.policy.allowMissingChecksums.contains(PolicyOverride.Disabled))
-          assert(
-            profile.spec.policy.allowArchiveCandidateFallback.contains(PolicyOverride.Disabled)
-          )
         case Left(error) => abort(s"expected strict policy config, got $error")
 
     test("config example locks binary tool order and version sources"):

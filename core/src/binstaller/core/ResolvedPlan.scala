@@ -87,8 +87,7 @@ final case class ResolvedPolicy(
     continueOnError: ContinueOnError,
     mode: PolicyMode = PolicyMode.Developer,
     allowDynamicLatestUrls: PolicyAllowance = PolicyAllowance.Allowed,
-    allowMissingChecksums: PolicyAllowance = PolicyAllowance.Allowed,
-    allowArchiveCandidateFallback: PolicyAllowance = PolicyAllowance.Allowed
+    allowMissingChecksums: PolicyAllowance = PolicyAllowance.Allowed
 )
 
 /** Effective allow/reject decision after applying a manifest policy profile and overrides. */

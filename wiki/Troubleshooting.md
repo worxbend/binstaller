@@ -35,7 +35,6 @@ strict-policy[<code>]: <reason>; suggestion[<code>]: <suggestion>
 | Dynamic `latest-url` version, or a download URL containing `/latest` | Pin the version, or set `policy.allowDynamicLatestUrls: true` after review. |
 | Missing `download.checksum` | Add a checksum, use `checksum.discover`, or set `policy.allowMissingChecksums: true`. |
 | `sudo: true` symlink | Drop it, or set `policy.allowSudoSymlinks: true`. |
-| Archive candidate fallback | Set `policy.allowArchiveCandidateFallback: true`. |
 
 Prefer fixing the profile over adding the opt-in. The opt-ins exist so exceptions are **explicit
 and reviewable**, not so they become the default.

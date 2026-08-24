@@ -294,7 +294,6 @@ policy:
   allowDynamicLatestUrls: true
   allowMissingChecksums: true
   allowSudoSymlinks: true
-  allowArchiveCandidateFallback: true
 ```
 
 ---

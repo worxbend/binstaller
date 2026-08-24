@@ -104,10 +104,6 @@ private[core] final class ResolutionBuilder(
         ManifestPolicy.allowance(
           profile.spec.policy.mode,
           profile.spec.policy.allowMissingChecksums
-        ),
-        ManifestPolicy.allowance(
-          profile.spec.policy.mode,
-          profile.spec.policy.allowArchiveCandidateFallback
         )
       ),
       appsDir.errors ++ stateFile.errors ++ stateFilePathErrors

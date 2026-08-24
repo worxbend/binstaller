@@ -97,8 +97,6 @@ explicitly opts in:
   contain `/latest`.
 - Missing SHA-256 checksums.
 - Sudo symlinks, unless `policy.allowSudoSymlinks: true`.
-- Archive candidate fallback, if candidate discovery is added later, unless
-  `policy.allowArchiveCandidateFallback: true`.
 
 Strict-policy failures render as validation-style messages with stable
 `strict-policy[...]` codes and matching `suggestion[...]` hints.

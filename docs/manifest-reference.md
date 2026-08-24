@@ -27,7 +27,6 @@ spec:
     mode: developer
     appsDir: "${HOME}/.apps"
     continueOnError: false
-    requireConfirmation: true
     allowSudoSymlinks: true
     stateFile: developer-binaries.state.json
   vars:
@@ -50,13 +49,20 @@ the default render and apply order.
 - `appsDir`: root directory that resolved install directories must stay under.
 - `continueOnError`: when `true`, apply continues after a failed tool and still
   exits nonzero if any tool failed.
-- `requireConfirmation`: accepted for profile compatibility. CLI apply is
-  confirmed by default.
 - `allowSudoSymlinks`: must be `true` before any plan entry may declare
   `sudo: true` symlinks.
+- `allowDynamicLatestUrls`: in `strict` mode, set to `true` to permit
+  `dynamic.latest-url` version sources and download URLs containing `/latest`.
+  Ignored in `developer` mode, where they are allowed already.
+- `allowMissingChecksums`: in `strict` mode, set to `true` to permit plan
+  entries with no `download.checksum`. Ignored in `developer` mode.
 - `stateFile`: optional current-directory filename used by apply resume.
-- `cleanInstall` is decoded for compatibility with the profile shape and is not
-  a command control.
+
+`spec.policy` accepts only these keys: `mode`, `continueOnError`, `appsDir`,
+`allowSudoSymlinks`, `allowDynamicLatestUrls`, `allowMissingChecksums`, and
+`stateFile`. Any other key is a validation error reported as
+`spec.policy.<key>: unknown field '<key>'`. There are no keys that are accepted
+but ignored for compatibility.
 
 Developer mode preserves the historical behavior for local tooling profiles:
 dynamic latest URLs and missing checksums are allowed by default. Sudo symlinks
@@ -67,7 +73,6 @@ Strict mode rejects production-sensitive risks by default:
 - `dynamic.latest-url` version sources and download URLs containing `/latest`.
 - Missing `download.checksum` values.
 - `sudo: true` symlinks unless `allowSudoSymlinks: true`.
-- Archive candidate fallback, if a later extractor adds candidate discovery.
 
 Strict profiles can opt into reviewed exceptions with explicit booleans:
 
@@ -77,7 +82,6 @@ policy:
   allowDynamicLatestUrls: true
   allowMissingChecksums: true
   allowSudoSymlinks: true
-  allowArchiveCandidateFallback: true
 ```
 
 State files are not written by `plan`. Apply rejects absolute, nested, or empty
