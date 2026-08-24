@@ -1898,7 +1898,8 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         "alpha",
         "/usr/local/bin/alpha",
         installDir.toAbsolutePath.normalize().resolve("bin/alpha").toString,
-        s"create sudo symlink ${installDir.toAbsolutePath.normalize().resolve("bin/alpha")} -> /usr/local/bin/alpha"
+        s"create sudo symlink /usr/local/bin/alpha -> " +
+          installDir.toAbsolutePath.normalize().resolve("bin/alpha").toString
       )))
       assert(commandExecutor.commands.map(_.argv) == Vector(
         Vector("sudo", "-n", "true"),
@@ -2168,6 +2169,18 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         case _: TerminalToolResult.Completed => ToolResultStatus.Completed
         case _: TerminalToolResult.Failed    => ToolResultStatus.Failed
       )
+
+    test("apply failures end with an actionable suggestion line"):
+      // Plan-time strict-policy errors always carry a suggestion; apply-time errors carried one in
+      // exactly one of eleven cases, so the failures a user is most likely to hit were the least
+      // actionable.
+      val rendered = ToolInstallError.render(
+        ToolInstallError.MissingExecutable("alpha", "bin/alpha"),
+        SensitiveValueRedactions.empty
+      )
+
+      assert(rendered.contains("verify executable: missing bin/alpha"))
+      assert(rendered.contains("suggestion: check spec.plan[].spec.executables[].path"))
 
     test("apply state status remains serialized as a stable string"):
       val state = ApplyState.empty("profile", "fingerprint").copy(tools =

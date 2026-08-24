@@ -164,7 +164,7 @@ final class DirectBinaryInstaller(
       redactions: SensitiveValueRedactions
   ): TerminalToolResult = result.fold(
     error => TerminalToolResult.Failed(
-      ToolInstallError.toolName(error),
+      error.toolName,
       ToolInstallError.render(error, redactions)
     ),
     identity

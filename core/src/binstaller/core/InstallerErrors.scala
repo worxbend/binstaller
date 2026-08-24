@@ -12,43 +12,39 @@ object ApplyPreflightError:
     case ApplyPreflightError.SudoSymlinkNotAllowed(toolName) =>
       s"failed $toolName: sudo symlinks are not allowed by policy.allowSudoSymlinks"
 
-/** Expected failure while installing one tool. */
-enum ToolInstallError:
+/** Expected failure while installing one tool.
+ *
+ *  Every case names the tool it failed for, so that is declared once on the enum rather than
+ *  recovered afterwards by a match with one arm per case. The parameter is `name` rather than
+ *  `toolName` because an enum case parameter becomes a val and would clash with the inherited one.
+ */
+enum ToolInstallError(val toolName: String):
 
   case DownloadFailed(
-      toolName: String,
+      name: String,
       url: String,
       message: String,
       provenance: Option[UrlProvenance] = None
-  )
+  ) extends ToolInstallError(name)
 
-  case ChecksumMismatch(toolName: String, expected: String, actual: String, source: String)
-  case StagingFailed(toolName: String, message: String)
-  case ModeApplicationFailed(toolName: String, path: String, mode: String, message: String)
-  case ReplacementFailed(toolName: String, message: String)
-  case ArchiveExtractionFailed(toolName: String, message: String)
-  case MissingExecutable(toolName: String, path: String)
-  case SymlinkFailed(toolName: String, path: String, target: String, message: String)
-  case SudoSymlinkNotAllowed(toolName: String)
-  case SudoCredentialCanceled(toolName: String, path: String, target: String)
-  case SudoCredentialsUnavailable(toolName: String, path: String, target: String, message: String)
+  case ChecksumMismatch(name: String, expected: String, actual: String, source: String)
+      extends ToolInstallError(name)
+  case StagingFailed(name: String, message: String) extends ToolInstallError(name)
+  case ModeApplicationFailed(name: String, path: String, mode: String, message: String)
+      extends ToolInstallError(name)
+  case ReplacementFailed(name: String, message: String)      extends ToolInstallError(name)
+  case ArchiveExtractionFailed(name: String, message: String) extends ToolInstallError(name)
+  case MissingExecutable(name: String, path: String)          extends ToolInstallError(name)
+  case SymlinkFailed(name: String, path: String, target: String, message: String)
+      extends ToolInstallError(name)
+  case SudoSymlinkNotAllowed(name: String) extends ToolInstallError(name)
+  case SudoCredentialCanceled(name: String, path: String, target: String)
+      extends ToolInstallError(name)
+  case SudoCredentialsUnavailable(name: String, path: String, target: String, message: String)
+      extends ToolInstallError(name)
 
 /** Rendering and inspection helpers for install failures. */
 object ToolInstallError:
-
-  /** Extract the tool name associated with an install failure. */
-  def toolName(error: ToolInstallError): String = error match
-    case ToolInstallError.DownloadFailed(toolName, _, _, _)             => toolName
-    case ToolInstallError.ChecksumMismatch(toolName, _, _, _)           => toolName
-    case ToolInstallError.StagingFailed(toolName, _)                    => toolName
-    case ToolInstallError.ModeApplicationFailed(toolName, _, _, _)      => toolName
-    case ToolInstallError.ReplacementFailed(toolName, _)                => toolName
-    case ToolInstallError.ArchiveExtractionFailed(toolName, _)          => toolName
-    case ToolInstallError.MissingExecutable(toolName, _)                => toolName
-    case ToolInstallError.SymlinkFailed(toolName, _, _, _)              => toolName
-    case ToolInstallError.SudoSymlinkNotAllowed(toolName)               => toolName
-    case ToolInstallError.SudoCredentialCanceled(toolName, _, _)        => toolName
-    case ToolInstallError.SudoCredentialsUnavailable(toolName, _, _, _) => toolName
 
   /** Render an install failure with terminal safety and redaction applied. */
   def render(
@@ -58,7 +54,9 @@ object ToolInstallError:
     case ToolInstallError.DownloadFailed(toolName, url, message, provenance) => detailBlock(
         s"download: $url: $message",
         Vector("tool" -> toolName, "url" -> url, "message" -> message) ++
-          redirectDetailPairs("download", provenance),
+          redirectDetailPairs("download", provenance) ++
+          Vector("suggestion" -> ("check the URL resolves and the release asset exists; " +
+            "run `binstaller plan` to see the resolved URL")),
         redactions
       )
     case ToolInstallError.ChecksumMismatch(toolName, expected, actual, source) => detailBlock(
@@ -74,54 +72,88 @@ object ToolInstallError:
       )
     case ToolInstallError.StagingFailed(toolName, message) => detailBlock(
         s"staging: $message",
-        Vector("tool" -> toolName, "message" -> message),
+        Vector(
+          "tool"    -> toolName,
+          "message" -> message,
+          "suggestion" -> "check free space and write permissions on the appsDir parent directory"
+        ),
         redactions
       )
     case ToolInstallError.ModeApplicationFailed(toolName, path, mode, message) => detailBlock(
         s"mode: $mode for $path: $message",
-        Vector("tool" -> toolName, "path" -> path, "mode" -> mode, "message" -> message),
+        Vector(
+          "tool"    -> toolName,
+          "path"    -> path,
+          "mode"    -> mode,
+          "message" -> message,
+          "suggestion" -> "check the mode is a four-digit octal string and the staged file exists"
+        ),
         redactions
       )
     case ToolInstallError.ReplacementFailed(toolName, message) => detailBlock(
         s"replacement: $message",
-        Vector("tool" -> toolName, "message" -> message),
+        Vector(
+          "tool"    -> toolName,
+          "message" -> message,
+          "suggestion" -> "check free space and write permissions on the appsDir parent directory"
+        ),
         redactions
       )
     case ToolInstallError.ArchiveExtractionFailed(toolName, message) => detailBlock(
         s"archive extraction: $message",
-        Vector("tool" -> toolName, "message" -> message),
+        Vector(
+          "tool"    -> toolName,
+          "message" -> message,
+          "suggestion" -> ("check spec.plan[].spec.download.archive.type matches the artifact " +
+            "and that its file and directory mappings exist inside it")
+        ),
         redactions
       )
     case ToolInstallError.MissingExecutable(toolName, path) => detailBlock(
         s"verify executable: missing $path",
-        Vector("tool" -> toolName, "expected path" -> path),
+        Vector(
+          "tool"          -> toolName,
+          "expected path" -> path,
+          "suggestion" -> ("check spec.plan[].spec.executables[].path matches the layout inside " +
+            "the downloaded artifact")
+        ),
         redactions
       )
     case ToolInstallError.SymlinkFailed(toolName, path, target, message) => detailBlock(
-        s"symlink: $target -> $path: $message",
-        Vector("tool" -> toolName, "path" -> path, "target" -> target, "message" -> message),
+        s"symlink: $path -> $target: $message",
+        Vector(
+          "tool"    -> toolName,
+          "path"    -> path,
+          "target"  -> target,
+          "message" -> message,
+          "suggestion" -> ("check the symlink destination directory exists and is writable, " +
+            "or set sudo: true with spec.policy.allowSudoSymlinks: true")
+        ),
         redactions
       )
     case ToolInstallError.SudoSymlinkNotAllowed(_) =>
       "sudo symlinks are not allowed by policy.allowSudoSymlinks"
     case ToolInstallError.SudoCredentialCanceled(toolName, path, target) => detailBlock(
-        s"sudo credentials canceled for $target -> $path",
+        s"sudo credentials canceled for $path -> $target",
         Vector(
           "tool"       -> toolName,
           "path"       -> path,
           "target"     -> target,
-          "credential" -> "canceled"
+          "credential" -> "canceled",
+          "suggestion" -> "re-run in an interactive terminal and enter the sudo password"
         ),
         redactions
       )
     case ToolInstallError.SudoCredentialsUnavailable(toolName, path, target, message) =>
       detailBlock(
-        s"sudo credentials unavailable for $target -> $path",
+        s"sudo credentials unavailable for $path -> $target",
         Vector(
           "tool"       -> toolName,
           "path"       -> path,
           "target"     -> target,
-          "credential" -> message
+          "credential" -> message,
+          "suggestion" -> ("re-run from an interactive terminal, or pre-authorize sudo before " +
+            "running binstaller")
         ),
         redactions
       )

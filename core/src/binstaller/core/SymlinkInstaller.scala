@@ -97,7 +97,7 @@ private[core] object SymlinkInstaller:
           // Defense-in-depth: path/target are already control-char-free (ResolvedPathValidator
           // rejects them post-interpolation), but scrub at the terminal boundary too so this prompt
           // can never be spoofed via escape sequences should an upstream check ever regress.
-          RenderSafety.terminalLine(s"create sudo symlink $target -> $path")
+          RenderSafety.terminalLine(s"create sudo symlink $path -> $target")
         )
         sudoCredentials.requestSudoPassword(request) match
           case Right(password) =>

@@ -101,6 +101,9 @@ explicitly opts in:
 Strict-policy failures render as validation-style messages with stable
 `strict-policy[...]` codes and matching `suggestion[...]` hints.
 
+Apply-time failures render as a summary line followed by indented detail pairs,
+the last of which is always a `suggestion:` line naming what to check or change.
+
 ## Sudo Policy
 
 Sudo is available only for symlink creation. It requires all of the following:

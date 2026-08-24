@@ -5,6 +5,10 @@ Error messages, decoded. Each row is what `binstaller` actually prints, what it 
 > 💡 First move for almost anything: run `binstaller plan` (writes nothing) and add `--verbose`.
 > The plan header alone answers most "why did it do that?" questions.
 
+Every apply-time failure prints a summary line followed by indented detail pairs,
+ending with a `suggestion:` line that names what to check or change — read that
+line first.
+
 ---
 
 ## 📄 Manifest won't load
@@ -118,8 +122,8 @@ Use `--reset-state` when you want a clean run.
 | Message | Fix |
 |---|---|
 | `sudo symlinks are not allowed by policy.allowSudoSymlinks` | Set `policy.allowSudoSymlinks: true`, or remove `sudo: true`. |
-| `sudo credentials unavailable for <target> -> <path>` | The run is non-interactive and there's no cached sudo credential. Run `sudo -v` first, or run interactively — binstaller **fails closed** rather than guessing. |
-| `sudo credentials canceled for <target> -> <path>` | You cancelled the prompt. That symlink fails; `continueOnError` decides whether the rest proceeds. |
+| `sudo credentials unavailable for <link> -> <target>` | The run is non-interactive and there's no cached sudo credential. Run `sudo -v` first, or run interactively — binstaller **fails closed** rather than guessing. |
+| `sudo credentials canceled for <link> -> <target>` | You cancelled the prompt. That symlink fails; `continueOnError` decides whether the rest proceeds. |
 
 ---
 
