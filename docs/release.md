@@ -60,7 +60,7 @@ Before tagging, run:
 ./mill app.run --help
 ./mill app.run plan --config config.example.yaml
 ./mill app.run versions --config config.example.yaml
-./mill app.run lock --config config.example.yaml --output /tmp/binstaller.lock.json
+./mill app.run lock --config config.example.yaml --lock-file /tmp/binstaller.lock.json
 ./mill mill.scalalib.scalafmt/checkFormatAll
 git diff --check
 ```
@@ -75,7 +75,7 @@ native_path="$(find out/app/nativeImage.dest -maxdepth 1 -type f -name native-ex
 "$native_path" --help
 "$native_path" plan --config config.example.yaml
 "$native_path" versions --config config.example.yaml
-"$native_path" lock --config config.example.yaml --output /tmp/binstaller.lock.json
+"$native_path" lock --config config.example.yaml --lock-file /tmp/binstaller.lock.json
 ```
 
 If local native image is blocked, record `command -v native-image` and

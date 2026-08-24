@@ -74,7 +74,7 @@ Repair formatting:
 ./mill app.run plan     --config config.example.yaml
 ./mill app.run apply    --config config.example.yaml
 ./mill app.run versions --config config.example.yaml
-./mill app.run lock     --config config.example.yaml --output /tmp/binstaller.lock.json
+./mill app.run lock     --config config.example.yaml --lock-file /tmp/binstaller.lock.json
 ```
 
 ---

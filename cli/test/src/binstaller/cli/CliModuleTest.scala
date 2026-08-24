@@ -212,14 +212,14 @@ object CliModuleTest extends TestSuite:
       assert(service.planOptions.exists(_.lockedApply == LockedApplyMode.Enabled))
       assert(service.planOptions.exists(_.lockPath == "custom.lock.json"))
 
-    test("lock forwards output path and selection"):
+    test("lock forwards lock file path and selection"):
       val service = RecordingInstallerService()
       val result  = runCli(
         Vector(
           "lock",
           "--config",
           "profile.yaml",
-          "--output",
+          "--lock-file",
           "custom.lock.json",
           "--only",
           "alpha"

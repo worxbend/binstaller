@@ -30,7 +30,7 @@ App smokes:
 ./mill app.run --help
 ./mill app.run plan --config config.example.yaml
 ./mill app.run versions --config config.example.yaml
-./mill app.run lock --config config.example.yaml --output /tmp/binstaller.lock.json
+./mill app.run lock --config config.example.yaml --lock-file /tmp/binstaller.lock.json
 ```
 
 Use `./mill mill.scalalib.scalafmt/reformatAll` to repair formatting.

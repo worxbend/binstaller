@@ -219,14 +219,15 @@ private[cli] abstract class SelectableCommand(
 
   protected def selection: ToolSelection = ToolSelection(onlyTools, skippedTools)
 
-@Command(
-  name = "plan",
-  mixinStandardHelpOptions = true,
-  description = Array("Render the binary installer plan without changing files.")
-)
-private[cli] final class PlanCommand(
+/** A selectable command that can also be pinned to a lock file.
+ *
+ *  `plan` and `apply` both accept `--locked` and `--lock-file`, and previously declared the same
+ *  two fields, two annotations and two setters each. Picocli picks up annotated setters from a
+ *  superclass -- which is how `--only`/`--skip` already reach both -- so the flags are declared
+ *  once here instead of drifting between two copies.
+ */
+private[cli] abstract class LockAwareCommand(
     root: BinstallerCommand,
-    service: BinaryInstallerService,
     out: PrintWriter
 ) extends SelectableCommand(root, out):
   private var lockedApply: LockedApplyMode = LockedApplyMode.Disabled
@@ -234,7 +235,7 @@ private[cli] final class PlanCommand(
 
   @CliOption(
     names = Array("--locked"),
-    description = Array("Require a compatible JSON lock file before rendering.")
+    description = Array("Require a compatible JSON lock file before running.")
   )
   def setLockedApply(value: Boolean): Unit = lockedApply = LockedApplyMode.fromFlag(value)
 
@@ -245,14 +246,22 @@ private[cli] final class PlanCommand(
   )
   def setLockPath(value: String): Unit = lockPath = value
 
-  override def call(): Integer = executeWithOptions(
-    _.copy(
-      selection = selection,
-      lockPath = lockPath,
-      lockedApply = lockedApply
-    ),
-    service.plan
-  )
+  protected def amendLock(options: InstallerOptions): InstallerOptions =
+    options.copy(lockPath = lockPath, lockedApply = lockedApply)
+
+@Command(
+  name = "plan",
+  mixinStandardHelpOptions = true,
+  description = Array("Render the binary installer plan without changing files.")
+)
+private[cli] final class PlanCommand(
+    root: BinstallerCommand,
+    service: BinaryInstallerService,
+    out: PrintWriter
+) extends LockAwareCommand(root, out):
+
+  override def call(): Integer =
+    executeWithOptions(options => amendLock(options).copy(selection = selection), service.plan)
 
 @Command(
   name = "apply",
@@ -264,27 +273,12 @@ private[cli] final class ApplyCommand(
     service: BinaryInstallerService,
     out: PrintWriter,
     outputStyle: CliOutputStyle
-) extends SelectableCommand(root, out):
-  private var lockedApply: LockedApplyMode = LockedApplyMode.Disabled
-  private var lockPath: String             = LockOptions.defaultOutputPath
+) extends LockAwareCommand(root, out):
   // Stored raw and validated in call(): validating in the setter would require throwing, and the
   // @Spec-based ParameterException route needs field reflection that the native-image build does
   // not register (it would NPE in the shipped binary), reintroducing the raw stack trace this
   // guards against.
   private var parallelismValue: Int = ApplyParallelism.default.value
-
-  @CliOption(
-    names = Array("--locked"),
-    description = Array("Require a compatible JSON lock file before applying.")
-  )
-  def setLockedApply(value: Boolean): Unit = lockedApply = LockedApplyMode.fromFlag(value)
-
-  @CliOption(
-    names = Array("--lock-file"),
-    paramLabel = "FILE",
-    description = Array("Path to the JSON lock file used by --locked.")
-  )
-  def setLockPath(value: String): Unit = lockPath = value
 
   @CliOption(
     names = Array("--parallelism"),
@@ -298,12 +292,7 @@ private[cli] final class ApplyCommand(
       out.println(message)
       Integer.valueOf(CommandLine.ExitCode.USAGE)
     case Right(parallelism) => executeWithOptions(
-        _.copy(
-          selection = selection,
-          lockPath = lockPath,
-          lockedApply = lockedApply,
-          applyParallelism = parallelism
-        ),
+        options => amendLock(options).copy(selection = selection, applyParallelism = parallelism),
         options =>
           val eventRenderer = CliApplyEventRenderer(out, outputStyle)
           val result        = service.applyWithEvents(options, eventRenderer)
@@ -346,7 +335,7 @@ private[cli] final class LockCommand(
   private var outputPath: String = LockOptions.defaultOutputPath
 
   @CliOption(
-    names = Array("--output"),
+    names = Array("--lock-file"),
     paramLabel = "FILE",
     description = Array("Path to the JSON lock file to write.")
   )

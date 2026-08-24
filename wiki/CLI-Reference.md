@@ -64,7 +64,7 @@ binstaller plan --locked --lock-file binstaller.lock.json
 
 | Flag | Meaning |
 |---|---|
-| `--locked` | Require a compatible JSON lock file before rendering. |
+| `--locked` | Require a compatible JSON lock file before running. |
 | `--lock-file FILE` | Path to the lock file used by `--locked`. |
 
 Read the header first:
@@ -94,7 +94,7 @@ binstaller apply --parallelism 1
 
 | Flag | Meaning |
 |---|---|
-| `--locked` | Require a compatible JSON lock file before applying. |
+| `--locked` | Require a compatible JSON lock file before running. |
 | `--lock-file FILE` | Path to the lock file used by `--locked`. |
 | `--parallelism N` | Number of tools downloaded and staged concurrently. Default `4`. Must be at least `1`. Lower it to reduce network and disk pressure; `--parallelism 1` makes the run fully sequential. |
 
@@ -143,13 +143,13 @@ release tag is queried and compared.
 
 ```bash
 binstaller lock
-binstaller lock --output /tmp/binstaller.lock.json
+binstaller lock --lock-file /tmp/binstaller.lock.json
 binstaller lock --only helm --only kubectl
 ```
 
 | Flag | Meaning |
 |---|---|
-| `--output FILE` | Lock file to write. Default: `binstaller.lock.json`. |
+| `--lock-file FILE` | Lock file to write. Default: `binstaller.lock.json`. |
 
 Resolves versions, URLs and digests and writes them as JSON. Installs nothing.
 See 🧊 [Lock Files & Reproducibility](Lock-Files-and-Reproducibility).
@@ -183,5 +183,5 @@ binstaller apply --only kubectl
 ./mill app.run plan    --config config.example.yaml
 ./mill app.run apply   --config config.example.yaml
 ./mill app.run versions --config config.example.yaml
-./mill app.run lock    --config config.example.yaml --output /tmp/binstaller.lock.json
+./mill app.run lock    --config config.example.yaml --lock-file /tmp/binstaller.lock.json
 ```

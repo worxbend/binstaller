@@ -9,7 +9,7 @@ URLs, redirect chains, sizes and digests — so a later apply either reproduces 
 
 ```bash
 binstaller lock
-binstaller lock --output /tmp/binstaller.lock.json
+binstaller lock --lock-file /tmp/binstaller.lock.json
 binstaller lock --only helm --only kubectl
 ```
 

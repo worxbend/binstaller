@@ -122,7 +122,7 @@ binstaller apply --skip neovim
 **Pin everything to a lock file:**
 
 ```bash
-binstaller lock --output binstaller.lock.json
+binstaller lock --lock-file binstaller.lock.json
 binstaller apply --locked --lock-file binstaller.lock.json
 ```
 
@@ -172,7 +172,7 @@ binstaller apply --locked --lock-file binstaller.lock.json
 
 | Flag | Meaning |
 |---|---|
-| `--locked` | Require a compatible JSON lock file before rendering or applying. |
+| `--locked` | Require a compatible JSON lock file before running. |
 | `--lock-file FILE` | Path to the JSON lock file used by `--locked`. |
 
 **`apply` also accepts**
@@ -185,7 +185,7 @@ binstaller apply --locked --lock-file binstaller.lock.json
 
 | Flag | Meaning |
 |---|---|
-| `--output FILE` | Lock file to write. Default `binstaller.lock.json`. |
+| `--lock-file FILE` | Lock file to write. Default `binstaller.lock.json`. |
 
 **Exit codes**
 
