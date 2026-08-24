@@ -51,16 +51,14 @@ object ConfigLoader:
 
   private def loadParsedYaml(value: Any): Either[ConfigLoadError, BinaryDistributionProfile] =
     val decoded = ManifestDecoder.decode(value)
-    // Decode always yields sentinel fallbacks (""/empty) on failure, so ProfileValidator would
-    // otherwise re-flag fields that already failed to decode (e.g. an empty tool name reported as
-    // both "must not be empty" by decode and by the ToolName check). A wholesale
-    // `if decoded.errors.nonEmpty then skip validate` is rejected: it would DROP the validator's
-    // only errors for fields that decode accepts, such as traversal/control-character tool names
-    // whose sole diagnostics come from ProfileValidator. Instead we run the validator and drop
-    // only validator errors whose exact path already carries a decode error — the sole case where
-    // the validator message is genuinely redundant. Paths the validator alone covers survive.
-    // (An empty tool name may still legitimately surface via decode's "must not be empty"; only the
-    // duplicate validator entry at that same path is suppressed.)
+    // Decode always yields sentinel fallbacks on failure, so ProfileValidator would otherwise
+    // re-flag fields that already failed to decode -- reporting one mistake as two errors at the
+    // same path. A wholesale `if decoded.errors.nonEmpty then skip validate` is rejected: it would
+    // DROP the validator's only errors for fields that decode accepts, such as an unknown
+    // `versionRef` or a sudo symlink that policy forbids, whose sole diagnostics come from
+    // ProfileValidator. Instead we run the validator and drop only validator errors whose exact
+    // path already carries a decode error -- the sole case where the validator message is
+    // genuinely redundant. Paths the validator alone covers survive.
     val decodedPaths     = decoded.errors.map(_.path).toSet
     val validationErrors = ProfileValidator.validate(decoded.value)
       .filterNot(error => decodedPaths.contains(error.path))

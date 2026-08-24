@@ -1,5 +1,7 @@
 package binstaller.cli
 
+import binstaller.config.ToolName
+
 import binstaller.core.DownloadProgressStatus
 import binstaller.core.InstallerEvent
 import binstaller.core.InstallerEventObserver
@@ -16,12 +18,12 @@ private[cli] final class CliApplyEventRenderer(
     outputStyle: CliOutputStyle = CliOutputStyle.Ansi
 ) extends InstallerEventObserver:
   private val width                                   = 30
-  private var lastBuckets: Map[String, Int]           = Map.empty
-  private var activeTools: Set[String]                = Set.empty
-  private var downloadOrder: Vector[String]           = Vector.empty
-  private var downloads: Map[String, DownloadRow]     = Map.empty
+  private var lastBuckets: Map[ToolName, Int]           = Map.empty
+  private var activeTools: Set[ToolName]                = Set.empty
+  private var downloadOrder: Vector[ToolName]           = Vector.empty
+  private var downloads: Map[ToolName, DownloadRow]     = Map.empty
   private var concurrentLineMode: Boolean             = false
-  private var progressBlockTools: Vector[String]      = Vector.empty
+  private var progressBlockTools: Vector[ToolName]      = Vector.empty
   private var progressBlockHeight: Int                = 0
   private var activeLineLength: Int                   = 0
   private var summary: Option[InstallerEvent.Summary] = None
@@ -96,7 +98,7 @@ private[cli] final class CliApplyEventRenderer(
     progressBlockTools = activeRows.map(_.toolName)
     redrawProgressBlock()
 
-  private def addToProgressBlock(toolName: String): Unit =
+  private def addToProgressBlock(toolName: ToolName): Unit =
     if !progressBlockTools.contains(toolName) then
       progressBlockTools = progressBlockTools :+ toolName
 
@@ -233,8 +235,8 @@ private[cli] final class CliApplyEventRenderer(
     else if bytes >= kib then f"${bytes / kib}%.1f KiB"
     else s"$bytes B"
 
-  private def downloadLabel(toolName: String, url: String): String =
-    val safeToolName = RenderSafety.terminalLine(toolName)
+  private def downloadLabel(toolName: ToolName, url: String): String =
+    val safeToolName = RenderSafety.terminalLine(toolName.value)
     val safeFileName = fileName(url)
     if safeFileName == safeToolName then safeToolName else s"$safeToolName $safeFileName"
 
@@ -248,7 +250,7 @@ private[cli] final class CliApplyEventRenderer(
       .getOrElse(fallback)
 
 private[cli] final case class DownloadRow(
-    toolName: String,
+    toolName: ToolName,
     url: String,
     downloadedBytes: Long,
     totalBytes: Option[Long],

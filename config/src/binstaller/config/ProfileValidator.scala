@@ -3,7 +3,7 @@ package binstaller.config
 private[config] object ProfileValidator:
 
   def validate(profile: BinaryDistributionProfile): Vector[ValidationError] =
-    metadataNameErrors(profile) ++ toolNameErrors(profile) ++ duplicateToolNameErrors(profile) ++
+    metadataNameErrors(profile) ++ duplicateToolNameErrors(profile) ++
       unknownVersionRefErrors(profile) ++
       sudoSymlinkErrors(profile)
 
@@ -12,11 +12,8 @@ private[config] object ProfileValidator:
       .map(message => ValidationError("metadata.name", message))
       .toVector
 
-  private def toolNameErrors(profile: BinaryDistributionProfile): Vector[ValidationError] =
-    profile.spec.plan.zipWithIndex.flatMap:
-      case (entry, index) => unsafeToolNameMessage(entry.name).map: message =>
-          ValidationError(s"spec.plan[$index].name", message)
-
+  // Tool names are validated by the decoder now. `metadata.name` is still a String and this is
+  // its only check, so the helper stays.
   private def unsafeToolNameMessage(value: String): Option[String] =
     ToolName.fromString(value).left.toOption
 
@@ -26,7 +23,7 @@ private[config] object ProfileValidator:
     .groupBy(_.name)
     .toVector
     .collect:
-      case (name, entries) if name.nonEmpty && entries.size > 1 =>
+      case (name, entries) if entries.size > 1 =>
         ValidationError("spec.plan", s"duplicate tool name '$name'")
 
   private def unknownVersionRefErrors(
@@ -54,7 +51,7 @@ private[config] object ProfileValidator:
 
   private def sudoSymlinkPolicyMessage(
       profile: BinaryDistributionProfile,
-      toolName: String
+      toolName: ToolName
   ): String = profile.spec.policy.mode match
     case PolicyMode.Strict =>
       s"strict-policy[sudo-symlink]: tool '$toolName' uses a sudo symlink; " +

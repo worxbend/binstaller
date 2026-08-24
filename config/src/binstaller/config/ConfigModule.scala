@@ -101,7 +101,7 @@ enum VersionResolverKind(val value: String):
 
 /** One ordered item in `spec.plan`. */
 final case class PlanEntry(
-    name: String,
+    name: ToolName,
     kind: PlanKind,
     description: Option[String],
     when: Option[WhenClause],

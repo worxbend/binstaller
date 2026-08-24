@@ -166,7 +166,7 @@ private[core] final class ResolvingBinaryInstallerService(
     val statuses = GitHubReleaseVersions.versionStatusByTool(prepared.plan, httpTextClient)
     val rows     = prepared.plan.tools.map: tool =>
       VersionSummaryRow(
-        packageName = tool.name,
+        packageName = tool.name.value,
         version = ResolvedVersion.render(tool.version),
         newer = statuses.get(tool.name) match
           case Some(GitHubReleaseVersions.LatestReleaseStatus.Newer(tag)) =>

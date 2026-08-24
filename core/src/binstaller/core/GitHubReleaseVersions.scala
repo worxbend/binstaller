@@ -1,6 +1,7 @@
 package binstaller.core
 
 import binstaller.config.Diagnostics
+import binstaller.config.ToolName
 
 import java.net.URI
 import scala.util.Failure
@@ -19,7 +20,7 @@ private[core] object GitHubReleaseVersions:
   def versionStatusByTool(
       plan: ResolvedPlan,
       httpTextClient: HttpTextClient
-  ): Map[String, LatestReleaseStatus] = candidates(plan)
+  ): Map[ToolName, LatestReleaseStatus] = candidates(plan)
     .view
     .map(candidate => candidate.toolName -> latestStatus(candidate, httpTextClient))
     .toMap
@@ -61,7 +62,7 @@ private[core] object GitHubReleaseVersions:
       case Failure(error) => Left(s"invalid GitHub release JSON: ${Diagnostics.describe(error)}")
 
 private[core] final case class GitHubReleaseCandidate(
-    toolName: String,
+    toolName: ToolName,
     repo: GitHubRepo,
     current: String
 )

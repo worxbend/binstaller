@@ -21,10 +21,16 @@ happens.
 
 ## Module Responsibilities
 
-- `config`: owns the shared validated value types — notably `Sha256Digest`,
-  which normalizes to lowercase at construction so every digest comparison is a
-  plain `==` and the `^[0-9a-f]{64}$` rule exists in exactly one place. It also
-  reads YAML with SnakeYAML Engine, decodes typed manifest models,
+- `config`: owns the shared validated value types — `ToolName` and
+  `Sha256Digest` in particular. A tool name is an identity, not a label: it keys
+  apply-state rows, lock-file rows, event correlation and `--only`/`--skip`
+  selection, so it is parsed once at decode and carried as a type from there.
+  `--only`/`--skip` input stays raw text, because that is what the user typed
+  and what the "unknown tool" message echoes back.
+  `Sha256Digest` normalizes to lowercase at construction, so every digest
+  comparison is a plain `==` and the `^[0-9a-f]{64}$` rule exists in exactly one
+  place.
+- `config` also reads YAML with SnakeYAML Engine, decodes typed manifest models,
   validates supported enum values, rejects unsupported installer scripts, checks
   duplicate tool names, checks unknown `versionRef` values, validates SHA-256
   value shape, and gates sudo symlink declarations through

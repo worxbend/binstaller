@@ -71,7 +71,7 @@ private[core] object ManifestFingerprint:
     plan.zipWithIndex.foreach:
       case (entry, index) =>
         val base = s"spec.plan[$index]"
-        append(builder, s"$base.name", entry.name)
+        append(builder, s"$base.name", entry.name.value)
         append(builder, s"$base.kind", entry.kind.value)
         append(builder, s"$base.description", entry.description.getOrElse(""))
         append(

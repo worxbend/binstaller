@@ -6,6 +6,7 @@ import binstaller.config.ArchiveSpec
 import binstaller.config.ArchiveType
 import binstaller.config.ExtractMapping
 import binstaller.config.Sha256Digest
+import binstaller.config.ToolName
 import binstaller.config.ValidationError
 import binstaller.config.SymlinkPrivilege
 import utest.*
@@ -68,7 +69,7 @@ private[core] trait CoreTestSupport:
       installDir: String
   ): Unit = result match
     case Right(success) =>
-      assert(success.toolName == "alpha")
+      assert(success.toolName.value == "alpha")
       assert(success.installDir == installDir)
     case Left(error) => abort(s"expected install success, got $error")
 
@@ -94,6 +95,15 @@ private[core] trait CoreTestSupport:
     else abort(s"event not found in ${events.mkString(", ")}")
 
   protected def abort(message: String): Nothing = throw java.lang.AssertionError(message)
+
+  /** Parse a tool name literal, failing the test rather than the assertion on a typo. */
+  protected def toolName(value: String): ToolName = ToolName.fromString(value) match
+    case Right(name)  => name
+    case Left(error)  => abort(s"invalid test tool name: $error")
+
+  /** Matches a [[ToolName]] against its literal text, for pattern positions in event assertions. */
+  protected object named:
+    def unapply(name: ToolName): Some[String] = Some(name.value)
 
   /** Parse a hex literal into a digest, failing the test rather than the assertion on a typo. */
   protected def digest(hex: String): Sha256Digest = Sha256Digest.fromString(hex) match
@@ -149,7 +159,7 @@ private[core] trait CoreTestSupport:
       ManifestFingerprint.profile(profile),
       Vector(
         LockFileTool(
-          name = "alpha",
+          name = toolName("alpha"),
           resolvedVersion = Some("1.0.0"),
           versionProvenance = None,
           downloadProvenance = UrlProvenance.direct("https://example.invalid/alpha-1.0.0"),
@@ -158,7 +168,7 @@ private[core] trait CoreTestSupport:
           dynamicSource = false
         ),
         LockFileTool(
-          name = "beta",
+          name = toolName("beta"),
           resolvedVersion = Some("2.0.0"),
           versionProvenance = Some(betaVersionProvenance),
           downloadProvenance = betaDownloadProvenance,
@@ -167,7 +177,7 @@ private[core] trait CoreTestSupport:
           dynamicSource = false
         ),
         LockFileTool(
-          name = "gamma",
+          name = toolName("gamma"),
           resolvedVersion = None,
           versionProvenance = None,
           downloadProvenance = UrlProvenance.direct("https://example.invalid/latest/gamma"),
@@ -269,7 +279,7 @@ private[core] trait CoreTestSupport:
       executables: Vector[ResolvedExecutable] = Vector(ResolvedExecutable("bin/alpha", None)),
       symlinks: Vector[ResolvedSymlink] = Vector.empty
   ): ResolvedTool = ResolvedTool(
-    name = "alpha",
+    name = toolName("alpha"),
     description = None,
     version = ResolvedVersion.Concrete("1.0.0"),
     installDir = installDir.toString,
@@ -333,7 +343,7 @@ private[core] trait CoreTestSupport:
       directories: Vector[(String, String)] = Vector.empty,
       executable: String = "bin/alpha"
   ): ResolvedTool = ResolvedTool(
-    name = "alpha",
+    name = toolName("alpha"),
     description = None,
     version = ResolvedVersion.Concrete("1.0.0"),
     installDir = installDir.toString,

@@ -184,7 +184,7 @@ private[config] object ManifestDecoder:
     DecodeResult.accumulate: acc =>
       val map = acc(input)
       acc.report(unknownKeyErrors(map, path, Set("name", "kind", "description", "when", "spec")))
-      val name = acc(requiredString(map, s"$path.name"))
+      val name = acc(requiredToolName(map, s"$path.name"))
       val kind = acc(enumValue(
         requiredString(map, s"$path.kind"),
         s"$path.kind",
@@ -445,6 +445,20 @@ private[config] object ManifestDecoder:
           val item     = acc(asMap(value, itemPath))
           acc.report(unknownKeyErrors(item, itemPath, allowed))
           decodeItem(item, itemPath, acc)
+
+  /** Decode a tool name, rejecting an unsafe one here rather than downstream.
+   *
+   *  Producing the sentinel on failure keeps decoding total, so the rest of the manifest's errors
+   *  are still accumulated and reported in the same pass.
+   */
+  private def requiredToolName(map: YamlMap, path: String): DecodeResult[ToolName] =
+    DecodeResult.accumulate: acc =>
+      val raw = acc(requiredString(map, path))
+      ToolName.fromString(raw) match
+        case Right(name) => name
+        case Left(message) =>
+          acc.report(Vector(ValidationError(path, message)))
+          ToolName.invalidSentinel
 
   private def unknownKeyErrors(
       map: YamlMap,

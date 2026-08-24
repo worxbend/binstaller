@@ -1,6 +1,7 @@
 package binstaller.core
 
 import binstaller.config.Diagnostics
+import binstaller.config.ToolName
 
 import java.nio.file.Files
 import java.nio.file.Path
@@ -11,6 +12,8 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 import upickle.default.*
+
+import binstaller.core.ToolNameCodec.given
 
 /** Expected lock-file write failure. */
 enum LockFileError:
@@ -48,7 +51,7 @@ final case class LockFile(
 
 /** Serialized lock metadata for one resolved tool. */
 final case class LockFileTool(
-    name: String,
+    name: ToolName,
     resolvedVersion: Option[String],
     versionProvenance: Option[UrlProvenance],
     downloadProvenance: UrlProvenance,

@@ -1,5 +1,7 @@
 package binstaller.core
 
+import binstaller.config.ToolName
+
 import java.time.Duration
 import ox.Ox
 import ox.channels.Actor
@@ -36,16 +38,16 @@ enum InstallerEvent:
   case ResolvingStarted(configPath: String, elapsedTime: Duration)
 
   case PlanReady(
-      toolNames: Vector[String],
+      toolNames: Vector[ToolName],
       stateFilePath: Option[String],
       elapsedTime: Duration
   )
 
-  case ToolStarted(toolName: String, phase: InstallerPhase, elapsedTime: Duration)
-  case ToolPhaseChanged(toolName: String, phase: InstallerPhase, elapsedTime: Duration)
+  case ToolStarted(toolName: ToolName, phase: InstallerPhase, elapsedTime: Duration)
+  case ToolPhaseChanged(toolName: ToolName, phase: InstallerPhase, elapsedTime: Duration)
 
   case DownloadProgress(
-      toolName: String,
+      toolName: ToolName,
       url: String,
       downloadedBytes: Long,
       totalBytes: Option[Long],
@@ -53,10 +55,10 @@ enum InstallerEvent:
       elapsedTime: Duration
   )
 
-  case LogLine(toolName: Option[String], line: String, elapsedTime: Duration)
+  case LogLine(toolName: Option[ToolName], line: String, elapsedTime: Duration)
 
   case ToolResult(
-      toolName: String,
+      toolName: ToolName,
       status: ToolResultStatus,
       installDir: Option[String],
       failureSummary: Option[String],
@@ -64,7 +66,7 @@ enum InstallerEvent:
   )
 
   case ToolSkipped(
-      toolName: String,
+      toolName: ToolName,
       reason: String,
       stateFilePath: Option[String],
       elapsedTime: Duration
@@ -132,8 +134,8 @@ private[core] final class SerializedInstallerEventSink(observer: InstallerEventO
 
 /** Terminal result emitted for state persistence and renderer summaries. */
 enum TerminalToolResult:
-  case Completed(toolName: String, installDir: String, download: Option[UrlProvenance] = None)
-  case Failed(toolName: String, message: String)
+  case Completed(toolName: ToolName, installDir: String, download: Option[UrlProvenance] = None)
+  case Failed(toolName: ToolName, message: String)
 
 /** A rendered apply line paired with what it reports, so a renderer never has to read the text.
  *

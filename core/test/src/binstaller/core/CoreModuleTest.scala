@@ -113,8 +113,8 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         lines = Vector("wording can change freely"),
         status = InstallerRunStatus.Failed,
         terminalResults = Vector(
-          TerminalToolResult.Completed("alpha", "/apps/alpha"),
-          TerminalToolResult.Failed("beta", "boom")
+          TerminalToolResult.Completed(toolName("alpha"), "/apps/alpha"),
+          TerminalToolResult.Failed(toolName("beta"), "boom")
         ),
         skippedTools = 3
       ))
@@ -156,7 +156,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         case Right(value) => value
         case Left(error)  => abort(s"expected resolved plan, got $error")
 
-      assert(plan.tools.map(_.name) == Vector("linux-tool"))
+      assert(plan.tools.map(_.name.value) == Vector("linux-tool"))
       assert(requestedUrls.asScala.toVector == Vector("https://example.invalid/linux-version"))
 
     test("manifest fingerprint includes every supported host selector field"):
@@ -392,7 +392,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       val plan = resolveExampleConfig(FakeHttpTextClient("v1.33.0"))
 
       assert(plan.policy.appsDir == "/home/test/.apps")
-      assert(plan.tools.map(tool => tool.name -> tool.installDir) ==
+      assert(plan.tools.map(tool => tool.name.value -> tool.installDir) ==
         exampleToolNames.map(name => name -> s"/home/test/.apps/$name"))
       assert(plan.tools.forall(_.installDir.startsWith(s"${plan.policy.appsDir}/")))
 
@@ -471,7 +471,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(result ==
         Left(
           ToolInstallError.DownloadFailed(
-            "alpha",
+            toolName("alpha"),
             "https://example.invalid/alpha",
             "network unavailable"
           )
@@ -581,7 +581,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = installer.installTool(directTool(installDir))
 
-      assert(result == Left(ToolInstallError.StagingFailed("alpha", "disk full")))
+      assert(result == Left(ToolInstallError.StagingFailed(toolName("alpha"), "disk full")))
       assert(fileSystem.replaceCalls == 0)
       assert(Files.readString(existingFile) == "existing")
 
@@ -602,7 +602,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(result ==
         Left(
           ToolInstallError.ModeApplicationFailed(
-            "alpha",
+            toolName("alpha"),
             "bin/alpha",
             "0755",
             "permission denied"
@@ -814,24 +814,28 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(lock.schemaVersion == LockFile.schemaVersion)
       assert(lock.profileName == "lock-profile")
       assert(lock.manifestFingerprint.nonEmpty)
-      assert(lock.tools.map(_.name) == Vector("alpha", "beta", "gamma"))
-      assert(tools("alpha").resolvedVersion.contains("1.0.0"))
-      assert(tools("alpha").versionProvenance.isEmpty)
-      assert(tools("alpha").downloadProvenance.finalUrl == "https://example.invalid/alpha-1.0.0")
-      assert(tools("alpha").sizeBytes.contains(11L))
-      assert(tools("alpha").checksum.contains(LockFileChecksum("sha256", "a" * 64)))
-      assert(!tools("alpha").dynamicSource)
-      assert(tools("beta").resolvedVersion.contains("2.0.0"))
-      assert(tools("beta").versionProvenance.exists(_.finalUrl ==
+      assert(lock.tools.map(_.name.value) == Vector("alpha", "beta", "gamma"))
+      assert(tools(toolName("alpha")).resolvedVersion.contains("1.0.0"))
+      assert(tools(toolName("alpha")).versionProvenance.isEmpty)
+      assert(
+        tools(toolName("alpha")).downloadProvenance.finalUrl == "https://example.invalid/alpha-1.0.0"
+      )
+      assert(tools(toolName("alpha")).sizeBytes.contains(11L))
+      assert(tools(toolName("alpha")).checksum.contains(LockFileChecksum("sha256", "a" * 64)))
+      assert(!tools(toolName("alpha")).dynamicSource)
+      assert(tools(toolName("beta")).resolvedVersion.contains("2.0.0"))
+      assert(tools(toolName("beta")).versionProvenance.exists(_.finalUrl ==
         "https://cdn.example.invalid/beta-version"))
-      assert(tools("beta").downloadProvenance.finalUrl == "https://cdn.example.invalid/beta-2.0.0")
-      assert(tools("beta").sizeBytes.contains(22L))
-      assert(!tools("beta").dynamicSource)
-      assert(tools("gamma").resolvedVersion.isEmpty)
-      assert(tools("gamma").versionProvenance.isEmpty)
-      assert(tools("gamma").sizeBytes.isEmpty)
-      assert(tools("gamma").checksum.exists(_.value == "c" * 64))
-      assert(tools("gamma").dynamicSource)
+      assert(
+        tools(toolName("beta")).downloadProvenance.finalUrl == "https://cdn.example.invalid/beta-2.0.0"
+      )
+      assert(tools(toolName("beta")).sizeBytes.contains(22L))
+      assert(!tools(toolName("beta")).dynamicSource)
+      assert(tools(toolName("gamma")).resolvedVersion.isEmpty)
+      assert(tools(toolName("gamma")).versionProvenance.isEmpty)
+      assert(tools(toolName("gamma")).sizeBytes.isEmpty)
+      assert(tools(toolName("gamma")).checksum.exists(_.value == "c" * 64))
+      assert(tools(toolName("gamma")).dynamicSource)
       assert(!Files.exists(tempRoot.resolve("lock.state.json")))
       assert(!Files.exists(tempRoot.resolve("apps")))
 
@@ -1027,7 +1031,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       val lockPath = tempRoot.resolve("binstaller.lock.json")
       val current  = currentLockFile(config, dynamicSize = Some(33L))
       val corrupted = current.copy(tools = current.tools.map: tool =>
-        if tool.name == "alpha" then
+        if tool.name.value == "alpha" then
           tool.copy(checksum = tool.checksum.map(_.copy(value = "not-a-valid-sha256")))
         else tool
       )
@@ -1050,7 +1054,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       val config    = writeConfig(tempRoot, lockYaml(tempRoot))
       val lockPath  = tempRoot.resolve("binstaller.lock.json")
       val staleBeta = currentLockFile(config, dynamicSize = Some(33L)).tools.map:
-        case tool if tool.name == "beta" =>
+        case tool if tool.name.value == "beta" =>
           tool.copy(downloadProvenance =
             UrlProvenance(
               "https://example.invalid/beta-2.0.0",
@@ -1134,7 +1138,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
           profile.metadata.name,
           ManifestFingerprint.profile(profile),
           Vector(LockFileTool(
-            "alpha",
+            toolName("alpha"),
             Some("1.0.0"),
             None,
             UrlProvenance.direct(url),
@@ -1790,7 +1794,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         )
       ))
 
-      assert(result == Left(ToolInstallError.MissingExecutable("alpha", "bin/missing")))
+      assert(result == Left(ToolInstallError.MissingExecutable(toolName("alpha"), "bin/missing")))
       assert(!hasStagedInstall(tempRoot, "alpha"))
 
     test("local symlinks are created under installDir with targets resolved from installDir"):
@@ -1891,7 +1895,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       assert(result.status == InstallerRunStatus.Succeeded)
       assert(credentials.requests == Vector(SudoCredentialRequest(
-        "alpha",
+        toolName("alpha"),
         "/usr/local/bin/alpha",
         installDir.toAbsolutePath.normalize().resolve("bin/alpha").toString,
         s"create sudo symlink /usr/local/bin/alpha -> " +
@@ -1928,7 +1932,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         commandExecutor,
         credentials
       )
-      val beta = directTool(betaInstall).copy(name = "beta")
+      val beta = directTool(betaInstall).copy(name = toolName("beta"))
       val plan = ResolvedPlan(
         ResolvedPolicy.restricted(tempRoot.toString)
           .copy(allowSudoSymlinks = PolicyOverride.Enabled, continueOnError = PolicyOverride.Enabled),
@@ -1940,7 +1944,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(result.status == InstallerRunStatus.Failed)
       assert(result.lines.exists(_.contains("sudo credentials canceled")))
       assert(result.lines.exists(_.contains("installed beta")))
-      assert(credentials.requests.map(_.toolName) == Vector("alpha"))
+      assert(credentials.requests.map(_.toolName.value) == Vector("alpha"))
 
     test("sudo command failure rendering redacts password from diagnostics"):
       val tempRoot        = Files.createTempDirectory("binstaller-core-sudo-redaction")
@@ -2034,7 +2038,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(retryResult.lines.exists(_.contains("skipped alpha")))
       assert(retryResult.lines.exists(_.contains("installed beta")))
       assert(Files.isRegularFile(tempRoot.resolve("apps/beta/bin/beta")))
-      assert(state.tools.map(tool => tool.name -> tool.status) ==
+      assert(state.tools.map(tool => tool.name.value -> tool.status) ==
         Vector(
           "alpha" -> ApplyStateToolStatus.Completed,
           "beta"  -> ApplyStateToolStatus.Completed
@@ -2132,7 +2136,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       assert(result.status == InstallerRunStatus.Succeeded)
       assert(store.savedStates.size == 2)
-      assert(store.savedStates.map(_.tools.map(tool => tool.name -> tool.status)) ==
+      assert(store.savedStates.map(_.tools.map(tool => tool.name.value -> tool.status)) ==
         Vector(
           Vector("alpha" -> ApplyStateToolStatus.Completed),
           Vector(
@@ -2163,17 +2167,47 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       // exactly one of eleven cases, so the failures a user is most likely to hit were the least
       // actionable.
       val rendered = ToolInstallError.render(
-        ToolInstallError.MissingExecutable("alpha", "bin/alpha"),
+        ToolInstallError.MissingExecutable(toolName("alpha"), "bin/alpha"),
         SensitiveValueRedactions.empty
       )
 
       assert(rendered.contains("verify executable: missing bin/alpha"))
       assert(rendered.contains("suggestion: check spec.plan[].spec.executables[].path"))
 
+    test("a hand-edited state file with an unsafe tool name fails to decode"):
+      // Tool name keys the state row and is used as a path segment. Reading it back through the
+      // same validation the manifest goes through means a hand-edited file cannot smuggle one in.
+      val tempRoot  = Files.createTempDirectory("binstaller-core-state-toolname")
+      val stateFile = tempRoot.resolve("evil.state.json")
+      Files.writeString(
+        stateFile,
+        """
+          |{
+          |  "schemaVersion": 1,
+          |  "profileName": "profile",
+          |  "manifestFingerprint": "fingerprint",
+          |  "tools": [
+          |    {
+          |      "name": "../evil",
+          |      "status": "completed",
+          |      "installDir": null,
+          |      "message": null,
+          |      "download": null
+          |    }
+          |  ]
+          |}
+          |""".stripMargin
+      )
+
+      ApplyStateStore.nio(tempRoot).load(stateFile) match
+        case Left(ApplyStateError.DecodeFailed(_, message)) =>
+          assert(message.contains("invalid tool name"))
+        case other => abort(s"expected a decode failure, got $other")
+
     test("apply state status remains serialized as a stable string"):
       val state = ApplyState.empty("profile", "fingerprint").copy(tools =
         Vector(ApplyStateTool(
-          "alpha",
+          toolName("alpha"),
           ApplyStateToolStatus.Completed,
           Some("/tmp/apps/alpha"),
           None
@@ -2256,13 +2290,15 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         eventIndex(
           observer.events,
           {
-            case InstallerEvent.PlanReady(Vector("alpha", "beta"), Some(_), _) => true
+            case InstallerEvent.PlanReady(names, Some(_), _)
+              if names.map(_.value) == Vector("alpha", "beta") => true
           }
         ))
       assert(eventIndex(
         observer.events,
         {
-          case InstallerEvent.PlanReady(Vector("alpha", "beta"), Some(_), _) => true
+          case InstallerEvent.PlanReady(names, Some(_), _)
+              if names.map(_.value) == Vector("alpha", "beta") => true
         }
       ) <
         eventIndex(
@@ -2292,13 +2328,13 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(eventIndex(
         observer.events,
         {
-          case InstallerEvent.ToolStarted("alpha", InstallerPhase.Downloading, _) => true
+          case InstallerEvent.ToolStarted(named("alpha"), InstallerPhase.Downloading, _) => true
         }
       ) < eventIndex(
         observer.events,
         {
           case InstallerEvent.DownloadProgress(
-                "alpha",
+                named("alpha"),
                 "https://example.invalid/alpha",
                 _,
                 Some(_),
@@ -2316,14 +2352,26 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       ) < eventIndex(
         observer.events,
         {
-          case InstallerEvent.ToolResult("alpha", ToolResultStatus.Completed, Some(_), None, _) =>
+          case InstallerEvent.ToolResult(
+                named("alpha"),
+                ToolResultStatus.Completed,
+                Some(_),
+                None,
+                _
+              ) =>
             true
         }
       ))
       assert(eventIndex(
         observer.events,
         {
-          case InstallerEvent.ToolResult("alpha", ToolResultStatus.Completed, Some(_), None, _) =>
+          case InstallerEvent.ToolResult(
+                named("alpha"),
+                ToolResultStatus.Completed,
+                Some(_),
+                None,
+                _
+              ) =>
             true
         }
       ) < eventIndex(
@@ -2344,7 +2392,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(result.status == InstallerRunStatus.Failed)
       assert(observer.events.exists:
         case InstallerEvent.ToolResult(
-              "alpha",
+              named("alpha"),
               ToolResultStatus.Failed,
               None,
               Some(summary),
@@ -2378,7 +2426,12 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       val skipIndex = eventIndex(
         observer.events,
         {
-          case InstallerEvent.ToolSkipped("alpha", "already completed in state", Some(path), _) =>
+          case InstallerEvent.ToolSkipped(
+                named("alpha"),
+                "already completed in state",
+                Some(path),
+                _
+              ) =>
             path.endsWith("resume.state.json")
         }
       )
@@ -2411,19 +2464,37 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(eventIndex(
         observer.events,
         {
-          case InstallerEvent.ToolResult("alpha", ToolResultStatus.Failed, None, Some(_), _) => true
+          case InstallerEvent.ToolResult(
+                named("alpha"),
+                ToolResultStatus.Failed,
+                None,
+                Some(_),
+                _
+              ) => true
         }
       ) < eventIndex(
         observer.events,
         {
-          case InstallerEvent.ToolResult("beta", ToolResultStatus.Completed, Some(_), None, _) =>
+          case InstallerEvent.ToolResult(
+                named("beta"),
+                ToolResultStatus.Completed,
+                Some(_),
+                None,
+                _
+              ) =>
             true
         }
       ))
       assert(eventIndex(
         observer.events,
         {
-          case InstallerEvent.ToolResult("beta", ToolResultStatus.Completed, Some(_), None, _) =>
+          case InstallerEvent.ToolResult(
+                named("beta"),
+                ToolResultStatus.Completed,
+                Some(_),
+                None,
+                _
+              ) =>
             true
         }
       ) < eventIndex(

@@ -1,8 +1,10 @@
 package binstaller.core
 
+import binstaller.config.ToolName
+
 /** Context shown to a user before requesting credentials for a sudo operation. */
 final case class SudoCredentialRequest(
-    toolName: String,
+    toolName: ToolName,
     destinationPath: String,
     targetPath: String,
     operation: String

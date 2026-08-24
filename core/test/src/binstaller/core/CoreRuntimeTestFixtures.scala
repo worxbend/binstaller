@@ -404,7 +404,7 @@ private[core] final class ConcurrentTrackingSudoCredentialProvider extends SudoC
   def requestSudoPassword(
       request: SudoCredentialRequest
   ): Either[SudoCredentialError, SudoPassword] =
-    val _       = requests.add(request.toolName)
+    val _       = requests.add(request.toolName.value)
     val current = active.incrementAndGet()
     val _       = peak.updateAndGet(previous => math.max(previous, current))
     try

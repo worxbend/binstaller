@@ -1,8 +1,14 @@
 package binstaller.core
 
+import binstaller.config.ToolName
+
 import java.nio.file.Path
 
 private[core] object StatefulApplyRunner:
+
+  // Loading the state file is not a tool, but the phase event is keyed by tool name. This label
+  // stands in for it rather than the event contract growing a second shape for one case.
+  private val stateLoadingLabel: ToolName = ToolName.unsafe("state")
 
   def run(
       options: InstallerOptions,
@@ -25,7 +31,7 @@ private[core] object StatefulApplyRunner:
         RenderSafety.display(s"state file: $path", prepared.plan.redactions),
         _
       ))
-      eventContext.emit(InstallerEvent.ToolPhaseChanged("state", InstallerPhase.LoadingState, _))
+      eventContext.emit(InstallerEvent.ToolPhaseChanged(StatefulApplyRunner.stateLoadingLabel, InstallerPhase.LoadingState, _))
       loadInitialState(path, options.resetState, prepared, stateStore) match
         case Left(error) => InstallerResult(
             Vector(RenderSafety.display(
@@ -199,7 +205,7 @@ private[core] object StatefulApplyRunner:
         ApplyStateTool(toolName, ApplyStateToolStatus.Failed, None, Some(message))
     state.copy(tools = replaceTool(state.tools, updatedTool))
 
-  private def toolName(result: TerminalToolResult): String = result match
+  private def toolName(result: TerminalToolResult): ToolName = result match
     case TerminalToolResult.Completed(toolName, _, _) => toolName
     case TerminalToolResult.Failed(toolName, _)       => toolName
 

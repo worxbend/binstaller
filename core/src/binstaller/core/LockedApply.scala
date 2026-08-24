@@ -1,6 +1,7 @@
 package binstaller.core
 
 import binstaller.config.Sha256Digest
+import binstaller.config.ToolName
 
 import java.nio.file.Path
 
@@ -14,7 +15,7 @@ object LockedApplyMode:
   def fromFlag(value: Boolean): LockedApplyMode = if value then Enabled else Disabled
 
 /** Validated lock metadata visible to plan renderers. */
-final case class LockedApplyProvenance(path: Path, tools: Map[String, LockFileTool])
+final case class LockedApplyProvenance(path: Path, tools: Map[ToolName, LockFileTool])
 
 /** Expected locked-apply gate failure. */
 enum LockedApplyError:
@@ -87,7 +88,8 @@ private[core] object LockedApplyValidator:
   private def duplicateToolProblem(lockFile: LockFile): Option[String] =
     val duplicates = lockFile.tools.groupBy(_.name).collect:
       case (name, values) if values.size > 1 => name
-    duplicates.toVector.sorted.headOption.map(name => s"duplicate lock entry for tool '$name'")
+    duplicates.toVector.map(_.value).sorted.headOption
+      .map(name => s"duplicate lock entry for tool '$name'")
 
   private def toolProblem(
       tools: Vector[ResolvedTool],

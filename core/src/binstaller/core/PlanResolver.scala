@@ -196,7 +196,7 @@ private[core] final class ResolutionBuilder(
     val spec              = entry.spec
     val version           = versions.getOrElse(spec.versionRef, ResolvedVersion.Concrete(""))
     val versionVars       = concreteVersionVars(version)
-    val vars              = baseVars ++ versionVars + ("tool" -> entry.name)
+    val vars              = baseVars ++ versionVars + ("tool" -> entry.name.value)
     val specPath          = s"spec.plan[$index].spec"
     val installDir        = resolveTemplate(spec.installDir, s"$specPath.installDir", vars, version)
     val localVars         = vars + ("installDir"              -> installDir.value)

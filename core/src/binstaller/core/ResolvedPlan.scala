@@ -8,6 +8,7 @@ import binstaller.config.InstallPolicy
 import binstaller.config.PolicyMode
 import binstaller.config.PolicyOverride
 import binstaller.config.Sha256Digest
+import binstaller.config.ToolName
 import binstaller.config.SymlinkPrivilege
 import binstaller.config.ValidationError
 
@@ -150,7 +151,7 @@ enum PolicyAllowance:
 
 /** One resolved binary tool ready for rendering or execution. */
 final case class ResolvedTool(
-    name: String,
+    name: ToolName,
     description: Option[String],
     version: ResolvedVersion,
     installDir: String,

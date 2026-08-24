@@ -5,6 +5,7 @@ import binstaller.config.ChecksumAlgorithm
 import binstaller.config.Diagnostics
 import binstaller.config.Sha256Digest
 import binstaller.config.SymlinkPrivilege
+import binstaller.config.ToolName
 
 import java.nio.file.Path
 import java.time.Duration
@@ -28,7 +29,7 @@ private[core] enum PreparedToolResult:
   )
 
   case Failed(
-      toolName: String,
+      toolName: ToolName,
       error: ToolInstallError,
       verboseLines: Vector[String]
   )

@@ -6,7 +6,10 @@ private[core] object ToolSelector:
       plan: ResolvedPlan,
       selection: ToolSelection
   ): Either[ResolvePlanError.SelectionFailed, ResolvedPlan] =
-    val toolNames = plan.tools.map(_.name).toSet
+    // Selection input comes from the command line as raw text, so it stays untyped here and is
+    // compared against the tool's name value. That keeps the "unknown tool '<raw>'" message
+    // echoing exactly what the user typed.
+    val toolNames = plan.tools.map(_.name.value).toSet
     val unknown   = (selection.only ++ selection.skip)
       .distinct
       .filterNot(toolNames.contains)
@@ -23,6 +26,6 @@ private[core] object ToolSelector:
     val skipNames = selection.skip.toSet
     val included  =
       if onlyNames.isEmpty then tools
-      else tools.filter(tool => onlyNames(tool.name))
+      else tools.filter(tool => onlyNames(tool.name.value))
 
-    included.filterNot(tool => skipNames(tool.name))
+    included.filterNot(tool => skipNames(tool.name.value))

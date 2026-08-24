@@ -62,7 +62,7 @@ object ConfigModuleTest extends TestSuite:
     test("config example locks binary tool order and version sources"):
       val profile = exampleProfile
 
-      assert(profile.spec.plan.map(_.name) == exampleToolNames)
+      assert(profile.spec.plan.map(_.name.value) == exampleToolNames)
       assert(profile.spec.versions.keySet == exampleToolNames.toSet)
       assert(pinnedVersions(profile) == expectedPinnedVersions)
       assert(dynamicLatestUrlNames(profile) == expectedDynamicLatestUrlNames)
@@ -75,7 +75,7 @@ object ConfigModuleTest extends TestSuite:
     test("config example keeps install directories under appsDir and records checksums"):
       val profile = exampleProfile
 
-      assert(profile.spec.plan.map(entry => entry.name -> entry.spec.installDir) ==
+      assert(profile.spec.plan.map(entry => entry.name.value -> entry.spec.installDir) ==
         exampleToolNames.map(name => name -> s"$${appsDir}/$name"))
       assert(checksumFor(profile, "helm") ==
         Some(ChecksumSpec(
@@ -341,7 +341,7 @@ object ConfigModuleTest extends TestSuite:
   ): Option[ChecksumSpec] = toolNamed(profile, toolName).spec.download.checksum
 
   private def toolNamed(profile: BinaryDistributionProfile, name: String): PlanEntry =
-    profile.spec.plan.find(_.name == name).getOrElse(abort(s"missing tool $name"))
+    profile.spec.plan.find(_.name.value == name).getOrElse(abort(s"missing tool $name"))
 
   private def exampleWithSudoPolicy(
       allowSudoSymlinks: Boolean

@@ -1,6 +1,7 @@
 package binstaller.core
 
 import binstaller.config.Diagnostics
+import binstaller.config.ToolName
 
 import java.nio.file.Files
 import java.nio.file.Path
@@ -11,6 +12,8 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 import upickle.default.*
+
+import binstaller.core.ToolNameCodec.given
 
 /** Expected state-file failures during apply resume. */
 enum ApplyStateError:
@@ -83,7 +86,7 @@ object ApplyStateToolStatus:
 
 /** Serialized status for a single tool in the apply state file. */
 final case class ApplyStateTool(
-    name: String,
+    name: ToolName,
     status: ApplyStateToolStatus,
     installDir: Option[String],
     message: Option[String],

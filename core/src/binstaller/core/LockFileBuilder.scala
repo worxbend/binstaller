@@ -1,8 +1,9 @@
 package binstaller.core
 
 import binstaller.config.Sha256Digest
+import binstaller.config.ToolName
 
-private[core] final case class LockBuildError(toolName: String, message: String)
+private[core] final case class LockBuildError(toolName: ToolName, message: String)
 
 private[core] object LockFileBuilder:
 
