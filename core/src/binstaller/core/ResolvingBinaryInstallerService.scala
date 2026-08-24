@@ -3,12 +3,6 @@ package binstaller.core
 
 import java.nio.file.Path
 
-private[core] final case class VersionSummaryRow(
-    packageName: String,
-    version: String,
-    newerVersion: String
-)
-
 private[core] final case class InstallerRunStatistics(installed: Int, failed: Int, skipped: Int)
 
 private[core] object InstallerRunStatistics:
@@ -172,26 +166,43 @@ private[core] final class ResolvingBinaryInstallerService(
       VersionSummaryRow(
         packageName = tool.name,
         version = ResolvedVersion.render(tool.version),
-        newerVersion = statuses.get(tool.name) match
-          case Some(GitHubReleaseVersions.LatestReleaseStatus.Newer(tag)) => tag
-          case Some(GitHubReleaseVersions.LatestReleaseStatus.Unknown)    => "?"
-          case _                                                          => "-"
+        newer = statuses.get(tool.name) match
+          case Some(GitHubReleaseVersions.LatestReleaseStatus.Newer(tag)) =>
+            NewerVersionStatus.Available(tag)
+          case Some(GitHubReleaseVersions.LatestReleaseStatus.Unknown) =>
+            NewerVersionStatus.Unknown
+          case _ => NewerVersionStatus.UpToDate
       )
-    val lines = renderVersionSummaryTable(rows)
+    // Redact once here, before the rows leave core, so a renderer consuming `versionRows` gets the
+    // same protection as one reading `lines`.
+    val safeRows = rows.map: row =>
+      row.copy(
+        packageName = RenderSafety.display(row.packageName, prepared.plan.redactions),
+        version = RenderSafety.display(row.version, prepared.plan.redactions),
+        newer = row.newer match
+          case NewerVersionStatus.Available(tag) =>
+            NewerVersionStatus.Available(RenderSafety.display(tag, prepared.plan.redactions))
+          case other => other
+      )
     InstallerResult(
-      RenderSafety.displayLines("binstaller versions" +: lines, prepared.plan.redactions),
-      InstallerRunStatus.Succeeded
+      RenderSafety.displayLines(
+        "binstaller versions" +: renderVersionSummaryTable(rows),
+        prepared.plan.redactions
+      ),
+      InstallerRunStatus.Succeeded,
+      versionRows = safeRows
     )
 
   private def renderVersionSummaryTable(rows: Vector[VersionSummaryRow]): Vector[String] =
-    val headers      = VersionSummaryRow("package", "version", "newer version")
+    val headers =
+      VersionSummaryRow("package", "version", NewerVersionStatus.Available("newer version"))
     val displayRows  = headers +: rows
     val packageWidth = displayRows.map(_.packageName.length).max
     val versionWidth = displayRows.map(_.version.length).max
     displayRows.map: row =>
       s"${row.packageName.padTo(packageWidth, ' ')}  " +
         s"${row.version.padTo(versionWidth, ' ')}  " +
-        row.newerVersion
+        NewerVersionStatus.render(row.newer)
 
   private def renderError(error: ResolvePlanError): InstallerResult =
     InstallerResult(ResolvePlanError.renderLines(error), InstallerRunStatus.Failed)

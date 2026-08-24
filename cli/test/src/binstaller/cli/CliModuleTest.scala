@@ -15,7 +15,9 @@ import binstaller.core.InstallFileSystem
 import binstaller.core.InstallerEventObserver
 import binstaller.core.InstallerOptions
 import binstaller.core.InstallerResult
+import binstaller.core.NewerVersionStatus
 import binstaller.core.InstallerRunStatus
+import binstaller.core.VersionSummaryRow
 import binstaller.core.LockedApplyMode
 import binstaller.core.LockOptions
 import binstaller.core.ResetState
@@ -302,6 +304,24 @@ object CliModuleTest extends TestSuite:
       assert(!plainOutput.contains("https://dl.k8s.io/release/stable.txt"))
       assert(!plainOutput.contains("https://cdn.example.invalid/kubernetes/stable.txt"))
       assert(!plainOutput.contains("final url"))
+
+    test("a version containing two consecutive spaces keeps its own column"):
+      // The old renderer recovered columns by splitting core's padded output on runs of two or
+      // more spaces, so a value containing two spaces silently split into the wrong columns. The
+      // rows now cross the boundary as data, so the value survives intact.
+      val awkward = VersionSummaryRow("alpha", "1.0  beta", NewerVersionStatus.UpToDate)
+      val result  = InstallerResult(
+        Vector("binstaller versions", "package  version    newer version"),
+        InstallerRunStatus.Succeeded,
+        versionRows = Vector(awkward)
+      )
+
+      val plain = stripAnsi(
+        CliVersionsOutput.colorLines(result, CliOutputStyle.Plain).mkString("\n")
+      )
+
+      assert(plain.contains("1.0  beta"))
+      assert(plain.linesIterator.exists(line => line.startsWith("alpha") && line.endsWith("-")))
 
     test("versions honours --only and reports an unknown tool"):
       // `versions` used to resolve the whole manifest and ignore the selection flags, so a caller

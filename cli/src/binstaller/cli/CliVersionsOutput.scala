@@ -1,78 +1,78 @@
 package binstaller.cli
 
+import binstaller.core.InstallerResult
+import binstaller.core.NewerVersionStatus
+import binstaller.core.VersionSummaryRow
+
+/** Colours the `versions` table.
+ *
+ *  Built from the structured rows core returns, not from core's rendered text. Recovering columns
+ *  by splitting the padded lines on runs of two-or-more spaces — which is what this did before —
+ *  mis-parses any package name or version containing two consecutive spaces, and cannot tell the
+ *  `-` / `?` sentinels from a release tag spelled the same way.
+ */
 private[cli] object CliVersionsOutput:
 
   def colorLines(
-      lines: Vector[String],
+      result: InstallerResult,
       outputStyle: CliOutputStyle = CliOutputStyle.Ansi
-  ): Vector[String] = lines match
-    case title +: tableLines => boldColor(title, fansi.Color.Magenta, outputStyle) +:
-        colorTable(tableLines, outputStyle)
-    case empty => empty
+  ): Vector[String] = result.lines match
+    case title +: _ if result.versionRows.nonEmpty =>
+      boldColor(title, fansi.Color.Magenta, outputStyle) +:
+        colorTable(result.versionRows, outputStyle)
+    case title +: _ => boldColor(title, fansi.Color.Magenta, outputStyle) +: result.lines.drop(1)
+    case empty      => empty
 
-  private def colorTable(lines: Vector[String], outputStyle: CliOutputStyle): Vector[String] =
-    val rows   = lines.map(VersionOutputRow.parse)
-    val layout = VersionOutputLayout.fromRows(rows)
-    rows.zipWithIndex.map:
-      case (row, 0)     => colorHeader(row, layout, outputStyle)
-      case (row, index) => colorToolRow(row, layout, index, outputStyle)
+  private def colorTable(
+      rows: Vector[VersionSummaryRow],
+      outputStyle: CliOutputStyle
+  ): Vector[String] =
+    val header =
+      VersionSummaryRow("package", "version", NewerVersionStatus.Available("newer version"))
+    // The header participates in the width computation exactly as it does in core, so the two
+    // tables line up column for column.
+    val layout = layoutFor(header +: rows)
+    colorHeader(header, layout, outputStyle) +: rows.zipWithIndex.map: (row, index) =>
+      colorToolRow(row, layout, index, outputStyle)
+
+  private final case class Layout(packageWidth: Int, versionWidth: Int)
+
+  private def layoutFor(rows: Vector[VersionSummaryRow]): Layout = Layout(
+    rows.map(_.packageName.length).maxOption.getOrElse(0),
+    rows.map(_.version.length).maxOption.getOrElse(0)
+  )
 
   private def colorHeader(
-      row: VersionOutputRow,
-      layout: VersionOutputLayout,
+      row: VersionSummaryRow,
+      layout: Layout,
       outputStyle: CliOutputStyle
-  ): String = s"${boldColor(row.paddedPackage(layout), fansi.Color.Cyan, outputStyle)}  " +
-    s"${boldColor(row.paddedVersion(layout), fansi.Color.Cyan, outputStyle)}  " +
-    boldColor(row.newerVersion, fansi.Color.Cyan, outputStyle)
+  ): String =
+    val packageCell = row.packageName.padTo(layout.packageWidth, ' ')
+    val versionCell = row.version.padTo(layout.versionWidth, ' ')
+    s"${boldColor(packageCell, fansi.Color.Cyan, outputStyle)}  " +
+      s"${boldColor(versionCell, fansi.Color.Cyan, outputStyle)}  " +
+      boldColor(NewerVersionStatus.render(row.newer), fansi.Color.Cyan, outputStyle)
 
   private def colorToolRow(
-      row: VersionOutputRow,
-      layout: VersionOutputLayout,
+      row: VersionSummaryRow,
+      layout: Layout,
       index: Int,
       outputStyle: CliOutputStyle
   ): String =
     val packageColor = if index % 2 == 0 then fansi.Color.Blue else fansi.Color.Cyan
-    s"${outputStyle.color(row.paddedPackage(layout))(packageColor)}  " +
-      s"${outputStyle.color(row.paddedVersion(layout))(fansi.Color.Yellow)}  " +
-      colorNewerVersion(row.newerVersion, outputStyle)
+    s"${outputStyle.color(row.packageName.padTo(layout.packageWidth, ' '))(packageColor)}  " +
+      s"${outputStyle.color(row.version.padTo(layout.versionWidth, ' '))(fansi.Color.Yellow)}  " +
+      colorNewerVersion(row.newer, outputStyle)
 
-  private def colorNewerVersion(value: String, outputStyle: CliOutputStyle): String =
-    if value == "-" then outputStyle.color(value)(fansi.Color.Blue)
-    else if value == "?" then outputStyle.color(value)(fansi.Color.Yellow)
-    else outputStyle.color(value)(fansi.Color.Green)
+  private def colorNewerVersion(status: NewerVersionStatus, outputStyle: CliOutputStyle): String =
+    val text = NewerVersionStatus.render(status)
+    status match
+      case NewerVersionStatus.UpToDate     => outputStyle.color(text)(fansi.Color.Blue)
+      case NewerVersionStatus.Unknown      => outputStyle.color(text)(fansi.Color.Yellow)
+      case NewerVersionStatus.Available(_) => outputStyle.color(text)(fansi.Color.Green)
 
   private def boldColor(
       value: String,
       color: fansi.Attrs,
       outputStyle: CliOutputStyle
   ): String = if outputStyle.supportsAnsi then fansi.Bold.On(color(value)).toString else value
-
-private[cli] final case class VersionOutputRow(
-    packageName: String,
-    version: String,
-    newerVersion: String
-):
-
-  def paddedPackage(layout: VersionOutputLayout): String =
-    packageName.padTo(layout.packageWidth, ' ')
-
-  def paddedVersion(layout: VersionOutputLayout): String = version.padTo(layout.versionWidth, ' ')
-
-private[cli] object VersionOutputRow:
-
-  def parse(line: String): VersionOutputRow = line.split(" {2,}", 3).toVector match
-    case Vector(packageName, version, newerVersion) => VersionOutputRow(
-        packageName,
-        version,
-        newerVersion
-      )
-    case _ => VersionOutputRow(line, "", "")
-
-private[cli] final case class VersionOutputLayout(packageWidth: Int, versionWidth: Int)
-
-private[cli] object VersionOutputLayout:
-
-  def fromRows(rows: Vector[VersionOutputRow]): VersionOutputLayout = VersionOutputLayout(
-    rows.map(_.packageName.length).maxOption.getOrElse(0),
-    rows.map(_.version.length).maxOption.getOrElse(0)
-  )

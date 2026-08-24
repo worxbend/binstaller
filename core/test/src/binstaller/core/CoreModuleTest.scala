@@ -669,6 +669,15 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(versionSummaryRowExists(result.lines, "yazi", "v26.5.6", "?"))
       assert(versionSummaryRowExists(result.lines, "helm", "v3.21.2", "-"))
       assert(versionSummaryRowExists(result.lines, "kustomize", "v5.8.1", "?"))
+
+      // The same facts also cross the boundary as data, so a renderer never has to split the
+      // padded text back into columns to recover them.
+      assert(result.versionRows.contains(
+        VersionSummaryRow("helm", "v3.21.2", NewerVersionStatus.UpToDate)
+      ))
+      assert(result.versionRows.contains(
+        VersionSummaryRow("yazi", "v26.5.6", NewerVersionStatus.Unknown)
+      ))
       assert(versionSummaryRowExists(result.lines, "kubectl", "v1.34.0", "-"))
       assert(versionSummaryRowExists(result.lines, "minikube", "dynamic latest-url", "-"))
       assert(!result.lines.exists(_.contains("https://")))

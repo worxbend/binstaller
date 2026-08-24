@@ -317,7 +317,7 @@ private[cli] final class VersionsCommand(
     service.versions,
     result =>
       if result.status == InstallerRunStatus.Succeeded then
-        result.copy(lines = CliVersionsOutput.colorLines(result.lines, outputStyle))
+        result.copy(lines = CliVersionsOutput.colorLines(result, outputStyle))
       else result
   )
 

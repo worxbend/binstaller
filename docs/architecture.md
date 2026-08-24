@@ -103,6 +103,9 @@ Current phases are `Resolving`, `Planning`, `LoadingState`, `Downloading`,
 - Manifest installer scripts are unsupported and rejected during config loading.
 - Display surfaces use render safety and redaction at renderer boundaries while
   preserving raw values for filesystem and network operations.
+- CLI renderers never parse core's rendered text. `versions` returns structured
+  `VersionSummaryRow` values alongside the script-friendly lines, and the CLI
+  colours those rows rather than splitting the padded table back apart.
 - CLI renderers never parse core's wording. Rendered apply lines cross the
   boundary as `RenderedTerminalLine`, each paired with a typed
   `ToolResultStatus`, so colour is chosen by status rather than by testing a
