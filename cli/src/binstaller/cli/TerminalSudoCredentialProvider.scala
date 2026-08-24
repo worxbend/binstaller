@@ -1,5 +1,6 @@
 package binstaller.cli
 
+import binstaller.config.Diagnostics
 import binstaller.core.SudoCredentialError
 import binstaller.core.SudoCredentialProvider
 import binstaller.core.SudoCredentialRequest
@@ -41,8 +42,9 @@ private[cli] final class TerminalSudoCredentialProvider(err: PrintWriter)
           finally output.close()
         finally input.close()
       catch
-        case _: Exception => Left(SudoCredentialError.Unavailable(
-            "sudo credentials required, but terminal password input is unavailable"
+        case error: Exception => Left(SudoCredentialError.Unavailable(
+            "sudo credentials required, but terminal password input is unavailable " +
+              s"(${Diagnostics.describe(error)})"
           ))
 
   private def readPasswordFromDevTty(
@@ -50,40 +52,41 @@ private[cli] final class TerminalSudoCredentialProvider(err: PrintWriter)
       input: FileInputStream,
       output: FileOutputStream
   ): Either[SudoCredentialError, SudoPassword] =
-    if !setDevTtyEcho(enabled = false) then
-      Left(SudoCredentialError.Unavailable(
-        "sudo credentials required, but terminal password input is unavailable"
-      ))
-    else
-      val restoreHook = Thread(
-        () => { val _ = setDevTtyEcho(enabled = true) },
-        "restore-tty-echo"
-      )
-      try
-        // Register the hook inside the try so a shutdown-in-progress IllegalStateException cannot
-        // skip the finally that re-enables echo and leaves the terminal wedged.
-        try Runtime.getRuntime.addShutdownHook(restoreHook)
-        catch case _: IllegalStateException => ()
-        output.write(
-          s"sudo password required for $operation\nsudo password: ".getBytes(StandardCharsets.UTF_8)
+    setDevTtyEcho(enabled = false) match
+      case Left(reason) => Left(SudoCredentialError.Unavailable(
+          s"sudo credentials required, but terminal password input is unavailable ($reason)"
+        ))
+      case Right(()) =>
+        val restoreHook = Thread(
+          () => { val _ = setDevTtyEcho(enabled = true) },
+          "restore-tty-echo"
         )
-        output.flush()
-        // Caller-owned fixed buffer, zeroed unconditionally, so no password bytes linger on the
-        // heap (unlike a growable stream whose reallocated backing arrays are never cleared).
-        val buffer = Array.ofDim[Byte](TerminalSudoCredentialProvider.maxPasswordBytes)
         try
-          readPasswordBytes(input, buffer) match
-            case Left(error) => Left(error)
-            case Right(length) =>
-              output.write('\n')
-              output.flush()
-              passwordFromBytes(buffer, length)
-        finally java.util.Arrays.fill(buffer, 0.toByte)
-      finally
-        val _ = setDevTtyEcho(enabled = true)
-        try
-          val _ = Runtime.getRuntime.removeShutdownHook(restoreHook)
-        catch case _: IllegalStateException => ()
+          // Register the hook inside the try so a shutdown-in-progress IllegalStateException cannot
+          // skip the finally that re-enables echo and leaves the terminal wedged.
+          try Runtime.getRuntime.addShutdownHook(restoreHook)
+          catch case _: IllegalStateException => ()
+          output.write(
+            s"sudo password required for $operation\nsudo password: "
+              .getBytes(StandardCharsets.UTF_8)
+          )
+          output.flush()
+          // Caller-owned fixed buffer, zeroed unconditionally, so no password bytes linger on the
+          // heap (unlike a growable stream whose reallocated backing arrays are never cleared).
+          val buffer = Array.ofDim[Byte](TerminalSudoCredentialProvider.maxPasswordBytes)
+          try
+            readPasswordBytes(input, buffer) match
+              case Left(error) => Left(error)
+              case Right(length) =>
+                output.write('\n')
+                output.flush()
+                passwordFromBytes(buffer, length)
+          finally java.util.Arrays.fill(buffer, 0.toByte)
+        finally
+          val _ = setDevTtyEcho(enabled = true)
+          try
+            val _ = Runtime.getRuntime.removeShutdownHook(restoreHook)
+          catch case _: IllegalStateException => ()
 
   private def readPasswordBytes(
       input: FileInputStream,
@@ -114,7 +117,8 @@ private[cli] final class TerminalSudoCredentialProvider(err: PrintWriter)
       bytes: Array[Byte],
       length: Int
   ): Either[SudoCredentialError, SudoPassword] =
-    // REPLACE actions so malformed UTF-8 cannot throw across this boundary and leak via a stack trace.
+    // REPLACE actions so malformed UTF-8 cannot throw across this boundary and leak via a stack
+    // trace.
     val decoder = StandardCharsets.UTF_8.newDecoder()
       .onMalformedInput(java.nio.charset.CodingErrorAction.REPLACE)
       .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPLACE)
@@ -124,16 +128,24 @@ private[cli] final class TerminalSudoCredentialProvider(err: PrintWriter)
     if charBuffer.hasArray then java.util.Arrays.fill(charBuffer.array(), ' ')
     TerminalSudoCredentialProvider.passwordFromChars(Some(chars))
 
-  private def setDevTtyEcho(enabled: Boolean): Boolean =
+  /** Turn terminal echo on or off, reporting why it failed rather than only that it did.
+   *
+   *  Turning echo *off* is a precondition for reading a password, so its failure reason reaches the
+   *  user. Turning it back *on* is best-effort cleanup and its result is deliberately discarded —
+   *  there is nothing useful to do about a failure there, and throwing would mask the real error.
+   */
+  private def setDevTtyEcho(enabled: Boolean): Either[String, Unit] =
     val mode = if enabled then "echo" else "-echo"
     try
       val process = ProcessBuilder("sh", "-c", s"stty $mode < /dev/tty")
         .redirectOutput(ProcessBuilder.Redirect.DISCARD)
         .redirectError(ProcessBuilder.Redirect.DISCARD)
         .start()
-      process.waitFor() == 0
+      process.waitFor() match
+        case 0    => Right(())
+        case code => Left(s"stty $mode exited with status $code")
     catch
-      case _: Exception => false
+      case error: Exception => Left(s"stty $mode failed (${Diagnostics.describe(error)})")
 
 private[cli] object TerminalSudoCredentialProvider:
 
