@@ -30,8 +30,14 @@ final case class InstallerOptions(
     applyParallelism: ApplyParallelism = ApplyParallelism.default
 )
 
-/** Bounded parallelism for apply-time artifact download and staging. */
-final case class ApplyParallelism(value: Int)
+/** Bounded parallelism for apply-time artifact download and staging.
+ *
+ *  The constructor is private so `value` is guaranteed to be at least 1. Without that guarantee
+ *  the consumer has to defend against a zero or negative value it was promised could not exist,
+ *  which is how a type that is supposed to make illegal states unrepresentable turns into a type
+ *  that documents an intention nobody can rely on.
+ */
+final case class ApplyParallelism private (value: Int)
 
 /** Constructors and validation for apply parallelism. */
 object ApplyParallelism:
@@ -39,9 +45,24 @@ object ApplyParallelism:
   val default: ApplyParallelism = ApplyParallelism(4)
 
   /** Build a positive parallelism value from CLI or embedded caller input. */
-  def fromInt(value: Int): Either[String, ApplyParallelism] =
+  def fromInt(value: Int): Either[ApplyParallelismError, ApplyParallelism] =
     if value >= 1 then Right(ApplyParallelism(value))
-    else Left("parallelism must be at least 1")
+    else Left(ApplyParallelismError.NotPositive(value))
+
+/** Expected failure while building an apply parallelism value. */
+enum ApplyParallelismError:
+  case NotPositive(value: Int)
+
+/** Rendering helpers for apply parallelism failures. */
+object ApplyParallelismError:
+
+  /** Render a parallelism failure into a concise user-facing line.
+   *
+   *  Deliberately without a flag name: `core` does not know how a command line spells this, and
+   *  embedding "--parallelism" here would be wrong for every caller that is not the CLI.
+   */
+  def render(error: ApplyParallelismError): String = error match
+    case ApplyParallelismError.NotPositive(value) => s"must be at least 1, got $value"
 
 /** Rendered command lines plus the outcome of the run.
  *

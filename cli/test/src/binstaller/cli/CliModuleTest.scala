@@ -164,14 +164,17 @@ object CliModuleTest extends TestSuite:
       )
 
       assert(result.exitCode == 0)
-      assert(service.applyOptions.exists(_.applyParallelism == ApplyParallelism(8)))
+      assert(service.applyOptions.exists(_.applyParallelism.value == 8))
 
     test("apply rejects a non-positive parallelism with a usage error, not a stack trace"):
       val service = RecordingInstallerService()
       val result  = runCli(Vector("apply", "--parallelism", "0"), service)
 
       assert(result.exitCode == 2)
-      assert(result.out.contains("parallelism must be at least 1"))
+      // The complaint belongs on stderr: apply's stdout is meant to be pipeable, and a usage
+      // message mixed into that stream corrupts whatever is consuming it.
+      assert(result.err.contains("--parallelism must be at least 1, got 0"))
+      assert(!result.out.contains("must be at least 1"))
       assert(service.applyOptions.isEmpty)
 
     test("output style honors NO_COLOR, TERM=dumb, and force-color escape hatches"):

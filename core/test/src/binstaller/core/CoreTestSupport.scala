@@ -94,6 +94,11 @@ private[core] trait CoreTestSupport:
 
   protected def abort(message: String): Nothing = throw java.lang.AssertionError(message)
 
+  /** Build a parallelism value through the smart constructor, failing the test on a bad literal. */
+  protected def parallelism(value: Int): ApplyParallelism = ApplyParallelism.fromInt(value) match
+    case Right(result) => result
+    case Left(error)   => abort(s"invalid test parallelism: ${ApplyParallelismError.render(error)}")
+
   protected def statefulService(
       cwd: Path,
       downloadClient: BinaryDownloadClient

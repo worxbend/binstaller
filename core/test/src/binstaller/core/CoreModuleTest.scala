@@ -309,6 +309,11 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(result.status == InstallerRunStatus.Succeeded)
       assert(result.lines.exists(_.contains("alpha")))
 
+    test("apply parallelism cannot be constructed below 1"):
+      assert(ApplyParallelism.fromInt(0) == Left(ApplyParallelismError.NotPositive(0)))
+      assert(ApplyParallelism.fromInt(-3) == Left(ApplyParallelismError.NotPositive(-3)))
+      assert(ApplyParallelism.fromInt(1).map(_.value) == Right(1))
+
     test("shell command substitution is text and is never executed"):
       val plan = resolve(shellSyntaxYaml)
 
@@ -1193,7 +1198,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         ApplyStateStore.nio(tempRoot)
       )
 
-      val result = service.apply(applyOptions(config).copy(applyParallelism = ApplyParallelism(2)))
+      val result = service.apply(applyOptions(config).copy(applyParallelism = parallelism(2)))
 
       assert(result.status == InstallerRunStatus.Succeeded)
       assert(client.maxInFlight >= 2)
@@ -1210,7 +1215,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         ApplyStateStore.nio(tempRoot)
       )
 
-      val result = service.apply(applyOptions(config).copy(applyParallelism = ApplyParallelism(1)))
+      val result = service.apply(applyOptions(config).copy(applyParallelism = parallelism(1)))
 
       assert(result.status == InstallerRunStatus.Succeeded)
       assert(client.maxInFlight == 1)
@@ -1233,7 +1238,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         ApplyStateStore.nio(tempRoot)
       )
 
-      val result = service.apply(applyOptions(config).copy(applyParallelism = ApplyParallelism(2)))
+      val result = service.apply(applyOptions(config).copy(applyParallelism = parallelism(2)))
 
       assert(result.status == InstallerRunStatus.Succeeded)
       assert(client.maxInFlight >= 2)

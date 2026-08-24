@@ -2,6 +2,7 @@ package binstaller.cli
 
 import binstaller.core.BinaryInstallerService
 import binstaller.core.ApplyParallelism
+import binstaller.core.ApplyParallelismError
 import binstaller.core.HttpTextClient
 import binstaller.core.InstallerOptions
 import binstaller.core.InstallerResult
@@ -64,7 +65,7 @@ object CliModule:
     )
     commandLine.addSubcommand(
       "apply",
-      subcommandLine(ApplyCommand(root, service, out, outputStyle), out, err)
+      subcommandLine(ApplyCommand(root, service, out, err, outputStyle), out, err)
     )
     commandLine.addSubcommand(
       "versions",
@@ -264,6 +265,7 @@ private[cli] final class ApplyCommand(
     root: BinstallerCommand,
     service: BinaryInstallerService,
     out: PrintWriter,
+    err: PrintWriter,
     outputStyle: CliOutputStyle
 ) extends LockAwareCommand(root, out):
   // Stored raw and validated in call(): validating in the setter would require throwing, and the
@@ -280,8 +282,11 @@ private[cli] final class ApplyCommand(
   def setParallelism(value: Int): Unit = parallelismValue = value
 
   override def call(): Integer = ApplyParallelism.fromInt(parallelismValue) match
-    case Left(message) =>
-      out.println(message)
+    case Left(error) =>
+      // stderr, not stdout: `apply` output is meant to be pipeable, and a usage complaint that
+      // lands in the piped stream corrupts it. The flag name is added here because only the CLI
+      // knows how this option is spelled.
+      err.println(s"--parallelism ${ApplyParallelismError.render(error)}")
       Integer.valueOf(CommandLine.ExitCode.USAGE)
     case Right(parallelism) => executeWithOptions(
         options => amendLock(options).copy(selection = selection, applyParallelism = parallelism),

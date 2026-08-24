@@ -107,12 +107,11 @@ final class DirectBinaryInstaller(
     if tools.isEmpty then ObservedInstallResults(Vector.empty, Vector.empty, None)
     else
       supervised:
-        val effectiveParallelism = math.max(1, applyParallelism.value)
-        given BufferCapacity     = BufferCapacity(effectiveParallelism)
+        given BufferCapacity = BufferCapacity(applyParallelism.value)
         val serializedEvents     = eventContext.serialized
         val preparedResults      = Flow
           .fromIterable(tools)
-          .mapPar(effectiveParallelism): tool =>
+          .mapPar(applyParallelism.value): tool =>
             prepareTool(tool, redactions, verboseOutput, serializedEvents)
           .runToList()
           .toVector
