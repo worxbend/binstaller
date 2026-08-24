@@ -81,7 +81,7 @@ private[core] final class ResolvingBinaryInstallerService(
       case Right(prepared) => LockFileBuilder.build(prepared, metadataClient) match
           case Left(error) => InstallerResult(
               Vector(s"lock inspection failed for tool '${error.toolName}': ${error.message}"),
-              1
+              InstallerRunStatus.Failed
             )
           case Right(lockFile) =>
             val path = Path.of(lockOptions.outputPath)
@@ -94,9 +94,10 @@ private[core] final class ResolvingBinaryInstallerService(
                     s"tools: ${lockFile.tools.size}",
                     s"checksums: ${LockFileChecksum.summary(lockFile.tools)}"
                   ),
-                  0
+                  InstallerRunStatus.Succeeded
                 )
-              case Left(error) => InstallerResult(Vector(LockFileError.render(error)), 1)
+              case Left(error) =>
+                InstallerResult(Vector(LockFileError.render(error)), InstallerRunStatus.Failed)
 
   private def renderSelectedPlanWithEvents(
       options: InstallerOptions,
@@ -151,16 +152,12 @@ private[core] final class ResolvingBinaryInstallerService(
       stateFilePath: Option[String],
       eventContext: InstallerEventContext
   ): Unit =
-    val status =
-      if result.exitCode == 0 then InstallerRunStatus.Succeeded
-      else InstallerRunStatus.Failed
     val statistics = InstallerRunStatistics.fromResult(result)
     eventContext.emit(InstallerEvent.Summary(
-      status,
+      result.status,
       installed = statistics.installed,
       failed = statistics.failed,
       skipped = statistics.skipped,
-      exitCode = result.exitCode,
       stateFilePath = stateFilePath,
       _
     ))
@@ -179,7 +176,7 @@ private[core] final class ResolvingBinaryInstallerService(
     val lines = renderVersionSummaryTable(rows)
     InstallerResult(
       RenderSafety.displayLines("binstaller versions" +: lines, prepared.plan.redactions),
-      0
+      InstallerRunStatus.Succeeded
     )
 
   private def renderVersionSummaryTable(rows: Vector[VersionSummaryRow]): Vector[String] =
@@ -193,7 +190,7 @@ private[core] final class ResolvingBinaryInstallerService(
         row.newerVersion
 
   private def renderError(error: ResolvePlanError): InstallerResult =
-    InstallerResult(ResolvePlanError.renderLines(error), 1)
+    InstallerResult(ResolvePlanError.renderLines(error), InstallerRunStatus.Failed)
 
   private def validateLockIfRequested(
       options: InstallerOptions,
@@ -205,7 +202,7 @@ private[core] final class ResolvingBinaryInstallerService(
         .map(Some(_))
 
   private def renderLockedApplyError(error: LockedApplyError): InstallerResult =
-    InstallerResult(LockedApplyError.renderLines(error), 1)
+    InstallerResult(LockedApplyError.renderLines(error), InstallerRunStatus.Failed)
 
   private def applyLockedChecksums(
       prepared: PreparedPlan,

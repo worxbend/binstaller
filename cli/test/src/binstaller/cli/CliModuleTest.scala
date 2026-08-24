@@ -15,6 +15,7 @@ import binstaller.core.InstallFileSystem
 import binstaller.core.InstallerEventObserver
 import binstaller.core.InstallerOptions
 import binstaller.core.InstallerResult
+import binstaller.core.InstallerRunStatus
 import binstaller.core.LockedApplyMode
 import binstaller.core.LockOptions
 import binstaller.core.ResetState
@@ -663,20 +664,20 @@ private final class RecordingInstallerService extends BinaryInstallerService:
       eventObserver: InstallerEventObserver
   ): InstallerResult =
     recordedPlanOptions = Some(options)
-    InstallerResult(Vector("plan"), 0)
+    InstallerResult(Vector("plan"), InstallerRunStatus.Succeeded)
 
   def applyWithEvents(
       options: InstallerOptions,
       eventObserver: InstallerEventObserver
   ): InstallerResult =
     recordedApplyOptions = Some(options)
-    InstallerResult(Vector("apply"), 0)
+    InstallerResult(Vector("apply"), InstallerRunStatus.Succeeded)
 
   def versions(options: InstallerOptions): InstallerResult =
     recordedVersionsOptions = Some(options)
-    InstallerResult(Vector("versions"), 0)
+    InstallerResult(Vector("versions"), InstallerRunStatus.Succeeded)
 
   def lock(options: InstallerOptions, lockOptions: LockOptions): InstallerResult =
     recordedLockInstaller = Some(options)
     recordedLockOptions = Some(lockOptions)
-    InstallerResult(Vector("lock"), 0)
+    InstallerResult(Vector("lock"), InstallerRunStatus.Succeeded)

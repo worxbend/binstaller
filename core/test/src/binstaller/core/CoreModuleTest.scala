@@ -110,7 +110,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
     test("run statistics use structured results rather than rendered wording"):
       val statistics = InstallerRunStatistics.fromResult(InstallerResult(
         lines = Vector("wording can change freely"),
-        exitCode = 1,
+        status = InstallerRunStatus.Failed,
         terminalResults = Vector(
           TerminalToolResult.Completed("alpha", "/apps/alpha"),
           TerminalToolResult.Failed("beta", "boom")
@@ -611,7 +611,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         )
       )
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(result.lines.exists(_.contains("failed alpha: download:")))
       assert(result.lines.exists(_.contains("network unavailable")))
       assert(!result.lines.exists(_.contains("Exception")))
@@ -624,7 +624,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.plan(applyOptions(config))
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(result.lines.exists(_.startsWith("apiVersion: unsupported value")))
       assert(result.lines.exists(_.startsWith("kind: unsupported value")))
       assert(
@@ -640,7 +640,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       )
       val result  = service.versions(applyOptions(exampleConfigPath))
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       assert(result.lines.exists(line =>
         line.startsWith("package") && line.endsWith("newer version")
       ))
@@ -668,7 +668,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.versions(applyOptions(config))
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       assert(versionSummaryRowExists(result.lines, "jujutsu", "0.40.0", "v0.41.0"))
       assert(!result.lines.exists(_.contains("github:")))
 
@@ -725,7 +725,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.versions(applyOptions(config))
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       // A failed latest-release fetch renders "?" so it is distinguishable from a genuine "-".
       assert(versionSummaryRowExists(result.lines, "jujutsu", "0.40.0", "?"))
       assert(!result.lines.exists(_.contains("HTTP 403")))
@@ -784,7 +784,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       val lock   = read[LockFile](Files.readString(lockPath))
       val tools  = lock.tools.map(tool => tool.name -> tool).toMap
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       assert(result.lines.exists(_.contains("wrote lock file")))
       assert(lock.schemaVersion == LockFile.schemaVersion)
       assert(lock.profileName == "lock-profile")
@@ -847,15 +847,15 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       val lockResult     = service.lock(applyOptions(config), LockOptions(lockPath.toString))
       val lock           = read[LockFile](Files.readString(lockPath))
 
-      assert(planResult.exitCode == 0)
+      assert(planResult.status == InstallerRunStatus.Succeeded)
       assert(planResult.lines.exists(_.contains(s"checksum: sha256 $artifactHash (discovered")))
       assert(planResult.lines.exists(_.contains(checksumFileUrl)))
-      assert(versionsResult.exitCode == 0)
+      assert(versionsResult.status == InstallerRunStatus.Succeeded)
       assert(versionSummaryRowExists(versionsResult.lines, "alpha", "1.0.0", "-"))
       assert(!versionsResult.lines.exists(_.contains("checksums:")))
-      assert(applyResult.exitCode == 0)
+      assert(applyResult.status == InstallerRunStatus.Succeeded)
       assert(Files.readString(tempRoot.resolve("apps/alpha/bin/alpha")) == "alpha-binary")
-      assert(lockResult.exitCode == 0)
+      assert(lockResult.status == InstallerRunStatus.Succeeded)
       assert(lockResult.lines.exists(_.contains(
         "checksums: configured 0, discovered 1, inspected 0, missing 0"
       )))
@@ -880,7 +880,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.plan(applyOptions(config))
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(result.lines.exists(_.contains(
         "checksum discovery found multiple sha256sum entries matching 'alpha-1.0.0.tar.gz'"
       )))
@@ -900,7 +900,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.plan(applyOptions(config))
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(result.lines.exists(_.contains("checksum discovery failed: HTTP 404")))
       assert(result.lines.exists(_.contains("spec.plan[0].spec.download.checksum.discover.url")))
 
@@ -931,7 +931,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       val result = service.apply(applyOptions(config))
       val output = result.lines.mkString("\n")
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(output.contains("checksum: sha256 expected"))
       assert(output.contains("checksum source: discovered"))
       assert(output.contains(checksumFileUrl))
@@ -958,7 +958,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         )
       )
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       assert(result.lines.exists(_.startsWith("lock file: ")))
       assert(result.lines.exists(_.contains("(validated)")))
       assert(result.lines.exists(
@@ -987,7 +987,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         )
       )
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(result.lines.exists(_.contains("manifest fingerprint changed")))
       assert(!Files.exists(tempRoot.resolve("apps/alpha")))
       assert(!Files.exists(tempRoot.resolve("lock.state.json")))
@@ -1020,7 +1020,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         )
       )
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(result.lines.exists(_.contains("download provenance changed")))
       assert(!Files.exists(tempRoot.resolve("apps/beta")))
       assert(!Files.exists(tempRoot.resolve("lock.state.json")))
@@ -1039,7 +1039,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         )
       )
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(result.lines.exists(_.contains("no locked sha256 digest")))
       assert(!Files.exists(tempRoot.resolve("apps")))
       assert(!Files.exists(tempRoot.resolve("lock.state.json")))
@@ -1058,7 +1058,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         )
       )
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(result.lines.exists(_.contains("is missing")))
       assert(!Files.exists(installDir))
 
@@ -1111,7 +1111,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         lockedApply = LockedApplyMode.Enabled
       ))
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(result.lines.exists(_.contains("checksum: sha256 expected")))
       assert(!Files.exists(installDir))
 
@@ -1123,7 +1123,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.apply(applyOptions(config))
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       assert(Files.exists(installDir.resolve("bin/alpha")))
 
     test("continueOnError false stops apply after the first failed tool"):
@@ -1139,7 +1139,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.apply(applyOptions(config))
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(result.lines.exists(_.startsWith("failed alpha: download:")))
       assert(!result.lines.exists(_.contains("installed beta")))
       assert(!Files.exists(tempRoot.resolve("apps/beta")))
@@ -1161,7 +1161,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.apply(applyOptions(config))
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(result.lines.exists(_.startsWith("failed alpha: download:")))
       assert(result.lines.exists(_.contains("installed beta")))
       assert(Files.isRegularFile(tempRoot.resolve("apps/beta/bin/beta")))
@@ -1180,7 +1180,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.apply(applyOptions(config).copy(applyParallelism = ApplyParallelism(2)))
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       assert(client.maxInFlight >= 2)
       assert(Files.isRegularFile(tempRoot.resolve("apps/alpha/bin/alpha")))
       assert(Files.isRegularFile(tempRoot.resolve("apps/beta/bin/beta")))
@@ -1197,7 +1197,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.apply(applyOptions(config).copy(applyParallelism = ApplyParallelism(1)))
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       assert(client.maxInFlight == 1)
 
     test("sudo password requests stay serialized after parallel downloads"):
@@ -1220,7 +1220,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.apply(applyOptions(config).copy(applyParallelism = ApplyParallelism(2)))
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       assert(client.maxInFlight >= 2)
       assert(credentials.maxInFlight == 1)
       assert(credentials.toolNames == Vector("alpha", "beta"))
@@ -1588,7 +1588,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       val result = installer.installPlan(plan)
       val output = result.lines.mkString("\n")
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(!output.contains(secret))
       assert(!output.contains("\u001b"))
       assert(output.contains("<redacted>"))
@@ -1628,7 +1628,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       val result = installer.installPlan(plan)
       val output = result.lines.mkString("\n")
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(output.contains(
         "checksum source: discovered from https://example.invalid/<redacted>/SHA256SUMS"
       ))
@@ -1655,7 +1655,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.apply(applyOptions(config).copy(statePath = Some("redirect.state.json")))
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       assert(!result.lines.exists(_.startsWith("download initial url:")))
       assert(!result.lines.exists(_.startsWith("download final url:")))
       assert(!result.lines.exists(_.startsWith("download redirects:")))
@@ -1690,7 +1690,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       val result = installer.installPlan(plan)
       val output = result.lines.mkString("\n")
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       assert(!output.contains(secret))
       assert(!output.contains("download final url:"))
       assert(!output.contains("download redirects:"))
@@ -1795,7 +1795,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = installer.installPlan(plan)
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(result.lines.exists(_.contains("policy.allowSudoSymlinks")))
       assert(commandExecutor.commands.isEmpty)
       assert(!Files.exists(installDir))
@@ -1824,7 +1824,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = installer.installPlan(plan)
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       assert(credentials.requests.isEmpty)
       assert(commandExecutor.commands.map(_.argv) == Vector(
         Vector("sudo", "-n", "true"),
@@ -1864,7 +1864,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = installer.installPlan(plan)
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       assert(credentials.requests == Vector(SudoCredentialRequest(
         "alpha",
         "/usr/local/bin/alpha",
@@ -1915,7 +1915,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = installer.installPlan(plan)
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(result.lines.exists(_.contains("sudo credentials canceled")))
       assert(result.lines.exists(_.contains("installed beta")))
       assert(credentials.requests.map(_.toolName) == Vector("alpha"))
@@ -1944,7 +1944,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = installer.installPlan(plan)
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(result.lines.mkString("\n").contains("<redacted>"))
       assert(!result.lines.mkString("\n").contains(password))
       assert(!commandExecutor.commands.exists(_.argv.contains(password)))
@@ -1978,7 +1978,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
           observer.events.map(_.toString) ++
           state.tools.flatMap(_.message)).mkString("\n")
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(rendered.contains("<redacted>"))
       assert(!rendered.contains(password))
       assert(!commandExecutor.commands.exists(_.argv.contains(password)))
@@ -1996,7 +1996,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val firstResult = firstService.apply(applyOptions(config))
 
-      assert(firstResult.exitCode == 1)
+      assert(firstResult.status == InstallerRunStatus.Failed)
       assert(Files.isRegularFile(tempRoot.resolve("apps/alpha/bin/alpha")))
       assert(!Files.exists(tempRoot.resolve("apps/beta")))
 
@@ -2005,14 +2005,14 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         applyOptions(config).copy(selection = ToolSelection(Vector.empty, Vector("beta")))
       )
 
-      assert(skippedResult.exitCode == 0)
+      assert(skippedResult.status == InstallerRunStatus.Succeeded)
       assert(skippedResult.lines == Vector("skipped alpha: already completed in state"))
       assert(!Files.exists(tempRoot.resolve("apps/beta")))
 
       val retryResult = secondService.apply(applyOptions(config))
       val state       = loadState(tempRoot, "resume.state.json")
 
-      assert(retryResult.exitCode == 0)
+      assert(retryResult.status == InstallerRunStatus.Succeeded)
       assert(retryResult.lines.exists(_.contains("skipped alpha")))
       assert(retryResult.lines.exists(_.contains("installed beta")))
       assert(Files.isRegularFile(tempRoot.resolve("apps/beta/bin/beta")))
@@ -2039,10 +2039,10 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       val mismatchResult = service.apply(applyOptions(config))
       val resetResult    = service.apply(applyOptions(config).copy(resetState = ResetState.Enabled))
 
-      assert(mismatchResult.exitCode == 1)
+      assert(mismatchResult.status == InstallerRunStatus.Failed)
       assert(mismatchResult.lines.exists(_.contains("does not match this manifest")))
       assert(mismatchResult.lines.exists(_.contains("--reset-state")))
-      assert(resetResult.exitCode == 0)
+      assert(resetResult.status == InstallerRunStatus.Succeeded)
       assert(loadState(tempRoot, "mismatch.state.json").profileName == "resume-profile")
 
     test("state schema version is validated before resume"):
@@ -2050,7 +2050,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       val stateFile = "schema.state.json"
       val config    = writeConfig(tempRoot, twoToolYaml(tempRoot, stateFile))
       val service   = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
-      assert(service.apply(applyOptions(config)).exitCode == 0)
+      assert(service.apply(applyOptions(config)).status == InstallerRunStatus.Succeeded)
       val store        = ApplyStateStore.nio(tempRoot)
       val incompatible = loadState(tempRoot, stateFile).copy(schemaVersion = 999)
       store.save(tempRoot.resolve(stateFile), incompatible) match
@@ -2059,7 +2059,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.apply(applyOptions(config))
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(result.lines.exists(_.contains("schema version 999")))
       assert(result.lines.exists(_.contains("expected 1")))
 
@@ -2068,7 +2068,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       val stateFile = "drift.state.json"
       val config    = writeConfig(tempRoot, twoToolYaml(tempRoot, stateFile))
       val service   = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
-      assert(service.apply(applyOptions(config)).exitCode == 0)
+      assert(service.apply(applyOptions(config)).status == InstallerRunStatus.Succeeded)
       val alpha = tempRoot.resolve("apps/alpha/bin/alpha")
       Files.delete(alpha)
 
@@ -2076,7 +2076,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         applyOptions(config).copy(selection = ToolSelection(Vector("alpha"), Vector.empty))
       )
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       assert(result.lines.exists(_.contains("installed alpha")))
       assert(Files.isRegularFile(alpha))
 
@@ -2094,9 +2094,9 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         applyOptions(config).copy(statePath = Some("nested/state.json"))
       )
 
-      assert(absoluteResult.exitCode == 1)
+      assert(absoluteResult.status == InstallerRunStatus.Failed)
       assert(absoluteResult.lines.exists(_.contains("absolute state paths are not allowed")))
-      assert(nestedResult.exitCode == 1)
+      assert(nestedResult.status == InstallerRunStatus.Failed)
       assert(nestedResult.lines.exists(_.contains("current working directory")))
       assert(!Files.exists(tempRoot.resolve("apps")))
 
@@ -2112,7 +2112,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.apply(applyOptions(config))
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       assert(store.savedStates.size == 2)
       assert(store.savedStates.map(_.tools.map(tool => tool.name -> tool.status)) ==
         Vector(
@@ -2204,7 +2204,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.planWithEvents(applyOptions(config), observer)
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       assert(eventIndex(observer.events, { case InstallerEvent.ResolvingStarted(_, _) => true }) <
         eventIndex(
           observer.events,
@@ -2221,7 +2221,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         eventIndex(
           observer.events,
           {
-            case InstallerEvent.Summary(InstallerRunStatus.Succeeded, 0, 0, 0, 0, Some(_), _) =>
+            case InstallerEvent.Summary(InstallerRunStatus.Succeeded, 0, 0, 0, Some(_), _) =>
               true
           }
         ))
@@ -2241,7 +2241,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.applyWithEvents(applyOptions(config), observer)
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       assert(eventIndex(
         observer.events,
         {
@@ -2282,7 +2282,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       ) < eventIndex(
         observer.events,
         {
-          case InstallerEvent.Summary(InstallerRunStatus.Succeeded, 1, 0, 0, 0, None, _) => true
+          case InstallerEvent.Summary(InstallerRunStatus.Succeeded, 1, 0, 0, None, _) => true
         }
       ))
 
@@ -2294,7 +2294,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.applyWithEvents(applyOptions(config), observer)
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(observer.events.exists:
         case InstallerEvent.ToolResult(
               "alpha",
@@ -2305,7 +2305,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
             ) => summary.contains("download:") && summary.contains("network down")
         case _ => false)
       assert(observer.events.exists:
-        case InstallerEvent.Summary(InstallerRunStatus.Failed, 0, 1, 0, 1, None, _) => true
+        case InstallerEvent.Summary(InstallerRunStatus.Failed, 0, 1, 0, None, _) => true
         case _                                                                      => false)
 
     test("completed state entries emit skipped events with state file path"):
@@ -2327,7 +2327,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         observer
       )
 
-      assert(result.exitCode == 0)
+      assert(result.status == InstallerRunStatus.Succeeded)
       val skipIndex = eventIndex(
         observer.events,
         {
@@ -2338,7 +2338,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       val summaryIndex = eventIndex(
         observer.events,
         {
-          case InstallerEvent.Summary(InstallerRunStatus.Succeeded, 0, 0, 1, 0, Some(_), _) => true
+          case InstallerEvent.Summary(InstallerRunStatus.Succeeded, 0, 0, 1, Some(_), _) => true
         }
       )
       assert(skipIndex < summaryIndex)
@@ -2360,7 +2360,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       val result = service.applyWithEvents(applyOptions(config), observer)
 
-      assert(result.exitCode == 1)
+      assert(result.status == InstallerRunStatus.Failed)
       assert(eventIndex(
         observer.events,
         {
@@ -2382,7 +2382,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       ) < eventIndex(
         observer.events,
         {
-          case InstallerEvent.Summary(InstallerRunStatus.Failed, 1, 1, 0, 1, Some(_), _) => true
+          case InstallerEvent.Summary(InstallerRunStatus.Failed, 1, 1, 0, Some(_), _) => true
         }
       ))
 
@@ -2398,6 +2398,6 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         verboseOutput = VerboseOutput.Disabled
       ))
 
-      assert(planResult.exitCode == 1)
+      assert(planResult.status == InstallerRunStatus.Failed)
       assert(planResult.lines.exists(_.contains("strict-policy[missing-checksum]")))
       assert(planResult.lines.exists(_.contains("suggestion[missing-checksum]")))

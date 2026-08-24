@@ -5,6 +5,7 @@ import binstaller.core.ApplyParallelism
 import binstaller.core.HttpTextClient
 import binstaller.core.InstallerOptions
 import binstaller.core.InstallerResult
+import binstaller.core.InstallerRunStatus
 import binstaller.core.LockedApplyMode
 import binstaller.core.LockOptions
 import binstaller.core.ResetState
@@ -192,7 +193,7 @@ private[cli] abstract class ConfiguredCommand(
 
   private def render(result: InstallerResult): Integer =
     result.lines.foreach(out.println)
-    Integer.valueOf(result.exitCode)
+    Integer.valueOf(CliExitCode.of(result.status))
 
 private[cli] abstract class SelectableCommand(
     root: BinstallerCommand,
@@ -327,7 +328,7 @@ private[cli] final class VersionsCommand(
   override def call(): Integer = executeRendered(
     service.versions,
     result =>
-      if result.exitCode == 0 then
+      if result.status == InstallerRunStatus.Succeeded then
         result.copy(lines = CliVersionsOutput.colorLines(result.lines, outputStyle))
       else result
   )

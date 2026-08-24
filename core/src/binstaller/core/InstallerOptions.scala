@@ -43,10 +43,16 @@ object ApplyParallelism:
     if value >= 1 then Right(ApplyParallelism(value))
     else Left("parallelism must be at least 1")
 
-/** Rendered command result and process exit code. */
+/** Rendered command lines plus the outcome of the run.
+ *
+ *  Deliberately not a process exit code. A POSIX status is a property of how this program is
+ *  delivered — as a CLI — not of what the installer did, so the translation happens once, in
+ *  `binstaller.cli.CliExitCode`. A caller embedding core in something that is not a process gets
+ *  an answer it can act on rather than an integer it has to decode.
+ */
 final case class InstallerResult(
     lines: Vector[String],
-    exitCode: Int,
+    status: InstallerRunStatus,
     terminalResults: Vector[TerminalToolResult] = Vector.empty,
     skippedTools: Int = 0
 )

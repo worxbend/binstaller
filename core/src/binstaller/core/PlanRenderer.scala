@@ -13,7 +13,7 @@ private[core] object PlanRenderer:
         plan.tools.zipWithIndex.flatMap(renderTool(_, lockedProvenance)),
       plan.redactions
     ),
-    0
+    InstallerRunStatus.Succeeded
   )
 
   private def header(

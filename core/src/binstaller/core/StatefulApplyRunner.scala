@@ -32,7 +32,7 @@ private[core] object StatefulApplyRunner:
               ApplyStateError.render(error),
               prepared.plan.redactions
             )),
-            1
+            InstallerRunStatus.Failed
           )
         case Right((statePath, state)) =>
           runWithState(

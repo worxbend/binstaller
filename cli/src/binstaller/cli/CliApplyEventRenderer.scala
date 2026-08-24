@@ -282,6 +282,6 @@ private[cli] object CliApplyOutput:
       s"  ${outputStyle.color(s"✅ installed: ${event.installed}")(fansi.Color.Green)}",
       s"  ${outputStyle.color(s"❌ failed: ${event.failed}")(fansi.Color.Red)}",
       s"  ${outputStyle.color(s"⏭ skipped: ${event.skipped}")(fansi.Color.Yellow)}",
-      s"  ${outputStyle.color(s"🚦 exit code: ${event.exitCode}")(fansi.Color.Cyan)}",
+      s"  ${outputStyle.color(s"🚦 exit code: ${CliExitCode.of(event.status)}")(fansi.Color.Cyan)}",
       s"  $status"
     )

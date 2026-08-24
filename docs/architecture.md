@@ -14,6 +14,11 @@ core -> config
 `core` does not import CLI code. Business rules live below the command layer,
 and command output consumes resolved plans or renderer-agnostic events.
 
+Core reports the outcome of a run as an `InstallerRunStatus`, never as a process
+exit code: a POSIX status is a property of shipping as a CLI, not of installing
+anything. `binstaller.cli.CliExitCode.of` is the only place that translation
+happens.
+
 ## Module Responsibilities
 
 - `config`: reads YAML with SnakeYAML Engine, decodes typed manifest models,
@@ -73,7 +78,7 @@ Core emits the following renderer-agnostic events:
 - `LogLine(toolName, line, elapsedTime)`
 - `ToolResult(toolName, status, installDir, failureSummary, elapsedTime)`
 - `ToolSkipped(toolName, reason, stateFilePath, elapsedTime)`
-- `Summary(status, installed, failed, skipped, exitCode, stateFilePath, elapsedTime)`
+- `Summary(status, installed, failed, skipped, stateFilePath, elapsedTime)`
 
 Current phases are `Resolving`, `Planning`, `LoadingState`, `Downloading`,
 `VerifyingChecksum`, `Staging`, `ApplyingModes`, `ReplacingInstall`,

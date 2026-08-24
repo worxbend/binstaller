@@ -75,7 +75,6 @@ enum InstallerEvent:
       installed: Int,
       failed: Int,
       skipped: Int,
-      exitCode: Int,
       stateFilePath: Option[String],
       elapsedTime: Duration
   )

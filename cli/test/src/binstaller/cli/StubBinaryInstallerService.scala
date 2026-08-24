@@ -5,6 +5,7 @@ import binstaller.core.{
   InstallerEventObserver,
   InstallerOptions,
   InstallerResult,
+  InstallerRunStatus,
   LockOptions
 }
 
@@ -36,4 +37,4 @@ private[cli] object StubBinaryInstallerService extends BinaryInstallerService:
     stubResult("lock", options)
 
   private def stubResult(command: String, options: InstallerOptions): InstallerResult =
-    InstallerResult(Vector(s"binstaller $command placeholder for ${options.configPath}"), 0)
+    InstallerResult(Vector(s"binstaller $command placeholder for ${options.configPath}"), InstallerRunStatus.Succeeded)

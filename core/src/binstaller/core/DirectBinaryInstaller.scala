@@ -65,7 +65,8 @@ final class DirectBinaryInstaller(
       eventContext: InstallerEventContext,
       applyParallelism: ApplyParallelism = ApplyParallelism.default
   ): InstallerResult = preflight(plan) match
-    case Some(error) => InstallerResult(Vector(ApplyPreflightError.render(error)), 1)
+    case Some(error) =>
+      InstallerResult(Vector(ApplyPreflightError.render(error)), InstallerRunStatus.Failed)
     case None        =>
       val observed = installTools(
         plan.policy,
@@ -78,13 +79,13 @@ final class DirectBinaryInstaller(
       )
       val lines = observed.lines ++
         observed.persistenceError.map(message => s"state write failed: $message").toVector
-      val exitCode =
+      val status =
         if observed.results.exists(_.isInstanceOf[TerminalToolResult.Failed]) ||
           observed.persistenceError.nonEmpty
-        then 1
-        else 0
+        then InstallerRunStatus.Failed
+        else InstallerRunStatus.Succeeded
 
-      InstallerResult(lines, exitCode, terminalResults = observed.results)
+      InstallerResult(lines, status, terminalResults = observed.results)
 
   private def preflight(plan: ResolvedPlan): Option[ApplyPreflightError] = plan.tools
     .find(_.symlinks.exists(_.privilege == SymlinkPrivilege.Sudo))
