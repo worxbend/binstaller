@@ -40,9 +40,6 @@ trait BinaryInstallerService:
 
 /** Constructors for production and test service implementations. */
 object BinaryInstallerService:
-  /** Minimal placeholder used by early wiring tests. */
-  def placeholder: BinaryInstallerService = PlaceholderBinaryInstallerService
-
   /** Create the production resolving service with the default installer and cwd state store. */
   def resolving(httpTextClient: HttpTextClient): BinaryInstallerService =
     resolving(httpTextClient, DirectBinaryInstaller.default)
@@ -83,26 +80,3 @@ object BinaryInstallerService:
     metadataClient,
     lockFileStore
   )
-
-private[core] object PlaceholderBinaryInstallerService extends BinaryInstallerService:
-
-  def planWithEvents(
-      options: InstallerOptions,
-      eventObserver: InstallerEventObserver
-  ): InstallerResult = placeholderResult("plan", options)
-
-  def applyWithEvents(
-      options: InstallerOptions,
-      eventObserver: InstallerEventObserver
-  ): InstallerResult = placeholderResult("apply", options)
-
-  def versions(options: InstallerOptions): InstallerResult = placeholderResult("versions", options)
-
-  def lock(options: InstallerOptions, lockOptions: LockOptions): InstallerResult =
-    InstallerResult(Vector(s"binstaller lock placeholder for ${options.configPath}"), 0)
-
-  private def placeholderResult(command: String, options: InstallerOptions): InstallerResult =
-    InstallerResult(
-      Vector(s"binstaller $command placeholder for ${options.configPath}"),
-      0
-    )

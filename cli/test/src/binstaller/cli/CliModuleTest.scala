@@ -421,7 +421,7 @@ object CliModuleTest extends TestSuite:
 
   private def runCli(
       args: Vector[String],
-      service: BinaryInstallerService = BinaryInstallerService.placeholder,
+      service: BinaryInstallerService = StubBinaryInstallerService,
       outputStyle: CliOutputStyle = CliOutputStyle.Ansi
   ): CliRunResult =
     val outBuffer = StringWriter()
