@@ -389,11 +389,10 @@ private[config] object ManifestDecoder:
 
   private def optionalMode(map: YamlMap, path: String): DecodeResult[Option[ExecutableMode]] =
     map.get("mode") match
-      case None                                              => DecodeResult.valid(None)
-      case Some(value: String) if value.matches("0[0-7]{3}") =>
-        DecodeResult.valid(Some(ExecutableMode(value)))
-      case Some(_: String) =>
-        DecodeResult.invalid(None, path, "mode must be a four-digit octal string")
+      case None                => DecodeResult.valid(None)
+      case Some(value: String) => ExecutableMode.fromString(value) match
+          case Right(mode)   => DecodeResult.valid(Some(mode))
+          case Left(message) => DecodeResult.invalid(None, path, message)
       case Some(_) => DecodeResult.invalid(None, path, "mode must be a string")
 
   private def optionalPolicyOverride(

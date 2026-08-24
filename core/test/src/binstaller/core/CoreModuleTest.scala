@@ -442,7 +442,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       val tool = directTool(
         Path.of("/tmp/alpha"),
         executables = Vector(
-          ResolvedExecutable("bin/alpha", Some(ExecutableMode("0700"))),
+          ResolvedExecutable("bin/alpha", ExecutableMode.fromString("0700").toOption),
           ResolvedExecutable("bin/helper", None)
         )
       )

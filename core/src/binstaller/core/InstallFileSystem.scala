@@ -51,15 +51,20 @@ final case class ExecutableInstallMode(octal: String, numeric: Int):
 /** Executable mode constructors. */
 object ExecutableInstallMode:
   /** Default mode for installed executables. */
-  val default: ExecutableInstallMode = fromOctal("0755")
+  val default: ExecutableInstallMode = unsafeFromOctal("0755")
 
   /** Convert an optional manifest mode into an executable install mode. */
   def fromConfig(mode: Option[ExecutableMode]): ExecutableInstallMode = mode match
-    case Some(value) => fromOctal(value.value)
+    case Some(value) => fromOctal(value)
     case None        => default
 
-  /** Parse a validated four-digit octal mode. */
-  def fromOctal(value: String): ExecutableInstallMode =
+  /** Parse an already-validated manifest mode. */
+  def fromOctal(mode: ExecutableMode): ExecutableInstallMode = unsafeFromOctal(mode.value)
+
+  // Integer.parseInt throws on a non-octal string, so it is confined here and reached only by
+  // ExecutableMode values, whose constructor already enforced the format, and by the literal
+  // default above.
+  private def unsafeFromOctal(value: String): ExecutableInstallMode =
     ExecutableInstallMode(value, Integer.parseInt(value, 8))
 
 /** Request to apply a POSIX mode to an executable inside a staged install. */

@@ -191,7 +191,21 @@ final case class ExtractMapping(from: String, to: String)
 final case class ExecutableSpec(path: String, mode: Option[ExecutableMode])
 
 /** Four-digit octal executable mode accepted from the manifest. */
-final case class ExecutableMode(value: String)
+final case class ExecutableMode private (value: String)
+
+/** Executable mode validation and construction. */
+object ExecutableMode:
+
+  /** Parse a four-digit octal mode such as `0755`.
+   *
+   *  The constructor is private so the "four-digit octal" invariant is guaranteed rather than
+   *  merely documented. `core` parses this value with `Integer.parseInt(value, 8)`, which throws
+   *  `NumberFormatException` on anything else -- an unchecked crash midway through an apply, in a
+   *  codebase that returns `Either` for every other expected failure.
+   */
+  def fromString(value: String): Either[String, ExecutableMode] =
+    if value.matches("0[0-7]{3}") then Right(ExecutableMode(value))
+    else Left("mode must be a four-digit octal string")
 
 /** Whether a symlink is created by the user process or through the sudo boundary. */
 enum SymlinkPrivilege:
