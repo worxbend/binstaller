@@ -51,42 +51,40 @@ private[cli] final class TerminalSudoCredentialProvider(err: PrintWriter)
       operation: String,
       input: FileInputStream,
       output: FileOutputStream
-  ): Either[SudoCredentialError, SudoPassword] =
-    setDevTtyEcho(enabled = false) match
-      case Left(reason) => Left(SudoCredentialError.Unavailable(
-          s"sudo credentials required, but terminal password input is unavailable ($reason)"
-        ))
-      case Right(()) =>
-        val restoreHook = Thread(
-          () => { val _ = setDevTtyEcho(enabled = true) },
-          "restore-tty-echo"
+  ): Either[SudoCredentialError, SudoPassword] = setDevTtyEcho(enabled = false) match
+    case Left(reason) => Left(SudoCredentialError.Unavailable(
+        s"sudo credentials required, but terminal password input is unavailable ($reason)"
+      ))
+    case Right(()) =>
+      val restoreHook = Thread(
+        () => { val _ = setDevTtyEcho(enabled = true) },
+        "restore-tty-echo"
+      )
+      try
+        // Register the hook inside the try so a shutdown-in-progress IllegalStateException cannot
+        // skip the finally that re-enables echo and leaves the terminal wedged.
+        try Runtime.getRuntime.addShutdownHook(restoreHook)
+        catch case _: IllegalStateException => ()
+        output.write(
+          s"sudo password required for $operation\nsudo password: "
+            .getBytes(StandardCharsets.UTF_8)
         )
+        output.flush()
+        // Caller-owned fixed buffer, zeroed unconditionally, so no password bytes linger on the
+        // heap (unlike a growable stream whose reallocated backing arrays are never cleared).
+        val buffer = Array.ofDim[Byte](TerminalSudoCredentialProvider.maxPasswordBytes)
+        try readPasswordBytes(input, buffer) match
+            case Left(error)   => Left(error)
+            case Right(length) =>
+              output.write('\n')
+              output.flush()
+              passwordFromBytes(buffer, length)
+        finally java.util.Arrays.fill(buffer, 0.toByte)
+      finally
+        val _ = setDevTtyEcho(enabled = true)
         try
-          // Register the hook inside the try so a shutdown-in-progress IllegalStateException cannot
-          // skip the finally that re-enables echo and leaves the terminal wedged.
-          try Runtime.getRuntime.addShutdownHook(restoreHook)
-          catch case _: IllegalStateException => ()
-          output.write(
-            s"sudo password required for $operation\nsudo password: "
-              .getBytes(StandardCharsets.UTF_8)
-          )
-          output.flush()
-          // Caller-owned fixed buffer, zeroed unconditionally, so no password bytes linger on the
-          // heap (unlike a growable stream whose reallocated backing arrays are never cleared).
-          val buffer = Array.ofDim[Byte](TerminalSudoCredentialProvider.maxPasswordBytes)
-          try
-            readPasswordBytes(input, buffer) match
-              case Left(error) => Left(error)
-              case Right(length) =>
-                output.write('\n')
-                output.flush()
-                passwordFromBytes(buffer, length)
-          finally java.util.Arrays.fill(buffer, 0.toByte)
-        finally
-          val _ = setDevTtyEcho(enabled = true)
-          try
-            val _ = Runtime.getRuntime.removeShutdownHook(restoreHook)
-          catch case _: IllegalStateException => ()
+          val _ = Runtime.getRuntime.removeShutdownHook(restoreHook)
+        catch case _: IllegalStateException => ()
 
   private def readPasswordBytes(
       input: FileInputStream,
@@ -97,8 +95,8 @@ private[cli] final class TerminalSudoCredentialProvider(err: PrintWriter)
     var overflow = false
     while !done do
       input.read() match
-        case -1          => done = true
-        case '\n' | '\r' => done = true
+        case -1                  => done = true
+        case '\n' | '\r'         => done = true
         case value if value >= 0 =>
           if length >= buffer.length then
             overflow = true
@@ -128,11 +126,12 @@ private[cli] final class TerminalSudoCredentialProvider(err: PrintWriter)
     if charBuffer.hasArray then java.util.Arrays.fill(charBuffer.array(), ' ')
     TerminalSudoCredentialProvider.passwordFromChars(Some(chars))
 
-  /** Turn terminal echo on or off, reporting why it failed rather than only that it did.
+  /**
+   * Turn terminal echo on or off, reporting why it failed rather than only that it did.
    *
-   *  Turning echo *off* is a precondition for reading a password, so its failure reason reaches the
-   *  user. Turning it back *on* is best-effort cleanup and its result is deliberately discarded —
-   *  there is nothing useful to do about a failure there, and throwing would mask the real error.
+   * Turning echo *off* is a precondition for reading a password, so its failure reason reaches the
+   * user. Turning it back *on* is best-effort cleanup and its result is deliberately discarded —
+   * there is nothing useful to do about a failure there, and throwing would mask the real error.
    */
   private def setDevTtyEcho(enabled: Boolean): Either[String, Unit] =
     val mode = if enabled then "echo" else "-echo"

@@ -53,12 +53,10 @@ object CliModuleTest extends TestSuite:
     createdTempDirectories.forEach(deleteRecursively)
     createdTempDirectories.clear()
 
-  private def deleteRecursively(path: java.nio.file.Path): Unit =
-    if Files.exists(path) then
-      scala.util.Using.resource(Files.walk(path)): stream =>
-        stream.iterator().asScala.toVector.sortBy(_.getNameCount).reverse.foreach: child =>
-          val _ = scala.util.Try(Files.deleteIfExists(child))
-
+  private def deleteRecursively(path: java.nio.file.Path): Unit = if Files.exists(path) then
+    scala.util.Using.resource(Files.walk(path)): stream =>
+      stream.iterator().asScala.toVector.sortBy(_.getNameCount).reverse.foreach: child =>
+        val _ = scala.util.Try(Files.deleteIfExists(child))
 
   val tests: Tests = Tests:
     test("terminal password conversion copies and clears the mutable input buffer"):
@@ -210,11 +208,13 @@ object CliModuleTest extends TestSuite:
       assert(CliOutputStyle.forProcessOutput(Map("NO_COLOR" -> ""), interactive = true) == Plain)
       assert(CliOutputStyle.forProcessOutput(Map("TERM" -> "dumb"), interactive = true) == Plain)
       // stdin redirected (non-interactive) but the user forces color:
-      assert(CliOutputStyle.forProcessOutput(Map("FORCE_COLOR" -> "1"), interactive = false) == Ansi)
+      assert(CliOutputStyle.forProcessOutput(Map("FORCE_COLOR" -> "1"), interactive = false) ==
+        Ansi)
       assert(
         CliOutputStyle.forProcessOutput(Map("CLICOLOR_FORCE" -> "1"), interactive = false) == Ansi
       )
-      assert(CliOutputStyle.forProcessOutput(Map("FORCE_COLOR" -> "0"), interactive = false) == Plain)
+      assert(CliOutputStyle.forProcessOutput(Map("FORCE_COLOR" -> "0"), interactive = false) ==
+        Plain)
       // NO_COLOR wins even against a force request:
       assert(
         CliOutputStyle.forProcessOutput(
@@ -648,12 +648,11 @@ object CliModuleTest extends TestSuite:
   private val exampleResolutionOptions: ResolutionOptions =
     ResolutionOptions.fromEnvironment().copy(hostPlatform = HostPlatform("linux", "amd64"))
 
-  private val resolvingService: BinaryInstallerService =
-    BinaryInstallerService.resolving(
-      FakeHttpTextClient("v1.34.0"),
-      DirectBinaryInstaller.default,
-      resolutionOptions = exampleResolutionOptions
-    )
+  private val resolvingService: BinaryInstallerService = BinaryInstallerService.resolving(
+    FakeHttpTextClient("v1.34.0"),
+    DirectBinaryInstaller.default,
+    resolutionOptions = exampleResolutionOptions
+  )
 
   private def resolvingServiceWithStateRoot(stateRoot: Path): BinaryInstallerService =
     BinaryInstallerService.resolving(
@@ -698,9 +697,10 @@ private final class RedirectingHttpTextClient(text: String, provenance: UrlProve
     if url == provenance.initialUrl then Right(HttpTextResponse(text, provenance))
     else Left(HttpTextError(url, s"unexpected URL $url"))
 
-/** Writes a literal payload to a temp artifact, so a CLI fake states only its progress behaviour.
+/**
+ * Writes a literal payload to a temp artifact, so a CLI fake states only its progress behaviour.
  *
- *  Core has an equivalent base for its own fakes, but that one is `private[core]`.
+ * Core has an equivalent base for its own fakes, but that one is `private[core]`.
  */
 private def testArtifact(url: String, bytes: Array[Byte]): BinaryDownloadArtifact =
   val path = Files.createTempFile("binstaller-cli-download-", ".artifact")

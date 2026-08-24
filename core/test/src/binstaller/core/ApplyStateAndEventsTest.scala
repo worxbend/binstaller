@@ -188,8 +188,7 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
       assert(result.renderedTerminalLines.size == result.terminalResults.size)
       assert(result.renderedTerminalLines.map(_.status) == result.terminalResults.map:
         case _: TerminalToolResult.Completed => ToolResultStatus.Completed
-        case _: TerminalToolResult.Failed    => ToolResultStatus.Failed
-      )
+        case _: TerminalToolResult.Failed    => ToolResultStatus.Failed)
 
     test("a hand-edited state file with an unsafe tool name fails to decode"):
       // Tool name keys the state row and is used as a path segment. Reading it back through the
@@ -308,7 +307,7 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
           observer.events,
           {
             case InstallerEvent.PlanReady(names, Some(_), _)
-              if names.map(_.value) == Vector("alpha", "beta") => true
+                if names.map(_.value) == Vector("alpha", "beta") => true
           }
         ))
       assert(eventIndex(
@@ -321,8 +320,7 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
         eventIndex(
           observer.events,
           {
-            case InstallerEvent.Summary(InstallerRunStatus.Succeeded, 0, 0, 0, Some(_), _) =>
-              true
+            case InstallerEvent.Summary(InstallerRunStatus.Succeeded, 0, 0, 0, Some(_), _) => true
           }
         ))
 
@@ -375,8 +373,7 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
                 Some(_),
                 None,
                 _
-              ) =>
-            true
+              ) => true
         }
       ))
       assert(eventIndex(
@@ -388,8 +385,7 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
                 Some(_),
                 None,
                 _
-              ) =>
-            true
+              ) => true
         }
       ) < eventIndex(
         observer.events,
@@ -418,7 +414,7 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
         case _ => false)
       assert(observer.events.exists:
         case InstallerEvent.Summary(InstallerRunStatus.Failed, 0, 1, 0, None, _) => true
-        case _                                                                      => false)
+        case _                                                                   => false)
 
     test("completed state entries emit skipped events with state file path"):
       val tempRoot     = tempDirectory("core-events-skipped")
@@ -448,8 +444,7 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
                 "already completed in state",
                 Some(path),
                 _
-              ) =>
-            path.endsWith("resume.state.json")
+              ) => path.endsWith("resume.state.json")
         }
       )
       val summaryIndex = eventIndex(
@@ -498,8 +493,7 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
                 Some(_),
                 None,
                 _
-              ) =>
-            true
+              ) => true
         }
       ))
       assert(eventIndex(
@@ -511,8 +505,7 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
                 Some(_),
                 None,
                 _
-              ) =>
-            true
+              ) => true
         }
       ) < eventIndex(
         observer.events,

@@ -33,7 +33,6 @@ private[core] trait CoreTestSupport extends TestSuite:
 
   override def utestAfterAll(): Unit = TestTempDirectories.deleteAll()
 
-
   protected def resolve(
       yaml: String,
       httpTextClient: HttpTextClient = FakeHttpTextClient("")
@@ -104,8 +103,8 @@ private[core] trait CoreTestSupport extends TestSuite:
 
   /** Parse a tool name literal, failing the test rather than the assertion on a typo. */
   protected def toolName(value: String): ToolName = ToolName.fromString(value) match
-    case Right(name)  => name
-    case Left(error)  => abort(s"invalid test tool name: $error")
+    case Right(name) => name
+    case Left(error) => abort(s"invalid test tool name: $error")
 
   /** Matches a [[ToolName]] against its literal text, for pattern positions in event assertions. */
   protected object named:
@@ -1163,15 +1162,16 @@ private[core] trait CoreTestSupport extends TestSuite:
       |          - path: bin/gamma
       |""".stripMargin
 
-/** Tracks the temp directories a test run creates so they can be deleted afterwards.
+/**
+ * Tracks the temp directories a test run creates so they can be deleted afterwards.
  *
- *  Nothing in the test tree used to delete one. A full run left dozens behind, several holding
- *  staged installs and written binaries, and they accumulated across runs indefinitely — a
- *  developer's `/tmp` reaches five figures of them. Registering creation in one place means a new
- *  test gets cleanup by using the helper, rather than by remembering to add a teardown.
+ * Nothing in the test tree used to delete one. A full run left dozens behind, several holding
+ * staged installs and written binaries, and they accumulated across runs indefinitely — a
+ * developer's `/tmp` reaches five figures of them. Registering creation in one place means a new
+ * test gets cleanup by using the helper, rather than by remembering to add a teardown.
  *
- *  Test fixtures that create directories outside a suite (staging fakes, for instance) register
- *  here too, which is why this is an object rather than trait state.
+ * Test fixtures that create directories outside a suite (staging fakes, for instance) register here
+ * too, which is why this is an object rather than trait state.
  */
 private[core] object TestTempDirectories:
 

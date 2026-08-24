@@ -12,12 +12,13 @@ import binstaller.config.ToolName
 import binstaller.config.SymlinkPrivilege
 import binstaller.config.ValidationError
 
-/** Variable-resolution inputs and display redaction policy for manifest resolution.
+/**
+ * Variable-resolution inputs and display redaction policy for manifest resolution.
  *
- *  `hostPlatform` has no default on purpose. It decides which `when:` selectors match, so a
- *  defaulted value would let a caller silently bind the JVM's ambient OS and architecture while
- *  appearing to specify its inputs — and a plan that quietly depends on the machine that resolved
- *  it is a plan that behaves differently in CI than on a laptop.
+ * `hostPlatform` has no default on purpose. It decides which `when:` selectors match, so a
+ * defaulted value would let a caller silently bind the JVM's ambient OS and architecture while
+ * appearing to specify its inputs — and a plan that quietly depends on the machine that resolved it
+ * is a plan that behaves differently in CI than on a laptop.
  */
 final case class ResolutionOptions(
     runtimeVariables: Map[String, String],
@@ -95,12 +96,13 @@ final case class ResolvedPlan(
     redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
 )
 
-/** Resolved profile-wide policy used by apply execution.
+/**
+ * Resolved profile-wide policy used by apply execution.
  *
- *  No field has a default. The allowances are *derived* from `mode` plus the manifest's explicit
- *  overrides by [[ManifestPolicy.allowance]], so a default would let a caller assemble a fully
- *  permissive policy without `mode` ever being consulted — an object in a state the derivation
- *  cannot produce. Build one with [[ResolvedPolicy.fromManifest]] or [[ResolvedPolicy.restricted]].
+ * No field has a default. The allowances are *derived* from `mode` plus the manifest's explicit
+ * overrides by [[ManifestPolicy.allowance]], so a default would let a caller assemble a fully
+ * permissive policy without `mode` ever being consulted — an object in a state the derivation
+ * cannot produce. Build one with [[ResolvedPolicy.fromManifest]] or [[ResolvedPolicy.restricted]].
  */
 final case class ResolvedPolicy(
     appsDir: String,
@@ -130,10 +132,11 @@ object ResolvedPolicy:
     ManifestPolicy.allowance(policy.mode, policy.allowMissingChecksums)
   )
 
-  /** The most restrictive policy: strict mode, nothing allowed, no sudo, no continue-on-error.
+  /**
+   * The most restrictive policy: strict mode, nothing allowed, no sudo, no continue-on-error.
    *
-   *  For call sites that install a single already-resolved tool and must not inherit permissions
-   *  from a manifest they never read.
+   * For call sites that install a single already-resolved tool and must not inherit permissions
+   * from a manifest they never read.
    */
   def restricted(installDir: String): ResolvedPolicy = ResolvedPolicy(
     installDir,

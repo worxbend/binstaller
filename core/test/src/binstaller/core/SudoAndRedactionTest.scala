@@ -212,7 +212,10 @@ object SudoAndRedactionTest extends TestSuite with CoreTestSupport:
       val beta = directTool(betaInstall).copy(name = toolName("beta"))
       val plan = ResolvedPlan(
         ResolvedPolicy.restricted(tempRoot.toString)
-          .copy(allowSudoSymlinks = PolicyOverride.Enabled, continueOnError = PolicyOverride.Enabled),
+          .copy(
+            allowSudoSymlinks = PolicyOverride.Enabled,
+            continueOnError = PolicyOverride.Enabled
+          ),
         Vector(sudoSymlinkTool(alphaInstall), beta)
       )
 

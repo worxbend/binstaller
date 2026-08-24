@@ -1,13 +1,14 @@
 package binstaller.core
 
-/** One row of the `versions` table, as data rather than as a padded string.
+/**
+ * One row of the `versions` table, as data rather than as a padded string.
  *
- *  Core also renders these rows into `InstallerResult.lines` so `versions` stays script-friendly,
- *  but a renderer that wants to style the table gets the rows themselves. Recovering them by
- *  splitting the rendered text back apart cannot be done reliably: the column separator is two
- *  spaces, so any package name or version containing two consecutive spaces splits into the wrong
- *  columns, and the `-` / `?` sentinels become indistinguishable from a tag that happens to be
- *  spelled that way.
+ * Core also renders these rows into `InstallerResult.lines` so `versions` stays script-friendly,
+ * but a renderer that wants to style the table gets the rows themselves. Recovering them by
+ * splitting the rendered text back apart cannot be done reliably: the column separator is two
+ * spaces, so any package name or version containing two consecutive spaces splits into the wrong
+ * columns, and the `-` / `?` sentinels become indistinguishable from a tag that happens to be
+ * spelled that way.
  */
 final case class VersionSummaryRow(
     packageName: String,

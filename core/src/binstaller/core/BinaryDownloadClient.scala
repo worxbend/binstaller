@@ -54,16 +54,17 @@ object BinaryDownloadProgressObserver:
   /** Observer that ignores all progress events. */
   val none: BinaryDownloadProgressObserver = _ => ()
 
-/** Boundary for fetching a binary artifact.
+/**
+ * Boundary for fetching a binary artifact.
  *
- *  One abstract member on purpose. This used to offer five overlapping entry points — two
- *  `download` and two `downloadWithProvenance` overloads plus the artifact method — chained
- *  together by defaults, and one of those defaults was
- *  `progressObserver match { case _ => download(url) }`, which silently threw the observer away
- *  with no warning from the compiler. An implementation could satisfy the trait and never report
- *  progress, and the only way to find out was to watch a download appear to hang.
+ * One abstract member on purpose. This used to offer five overlapping entry points — two `download`
+ * and two `downloadWithProvenance` overloads plus the artifact method — chained together by
+ * defaults, and one of those defaults was `progressObserver match { case _ => download(url) }`,
+ * which silently threw the observer away with no warning from the compiler. An implementation could
+ * satisfy the trait and never report progress, and the only way to find out was to watch a download
+ * appear to hang.
  *
- *  Core only ever needs the artifact, streamed to a file it owns, so that is the whole interface.
+ * Core only ever needs the artifact, streamed to a file it owns, so that is the whole interface.
  */
 trait BinaryDownloadClient:
 

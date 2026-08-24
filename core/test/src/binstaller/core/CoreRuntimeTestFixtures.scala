@@ -51,12 +51,13 @@ private[core] final class LockHttpTextClient(text: String, provenance: UrlProven
     if url == provenance.initialUrl then Right(HttpTextResponse(text, provenance))
     else Left(HttpTextError(url, s"unexpected URL $url"))
 
-/** Base for byte-based download fakes.
+/**
+ * Base for byte-based download fakes.
  *
- *  `BinaryDownloadClient` deals in artifact files because the install pipeline streams, but a test
- *  fake almost always has its payload as a literal byte array. This writes that array to a temp
- *  file once, here, so each fake states only what it is actually about — which URLs it answers,
- *  what progress it emits, what concurrency it observes.
+ * `BinaryDownloadClient` deals in artifact files because the install pipeline streams, but a test
+ * fake almost always has its payload as a literal byte array. This writes that array to a temp file
+ * once, here, so each fake states only what it is actually about — which URLs it answers, what
+ * progress it emits, what concurrency it observes.
  */
 private[core] abstract class BytesBinaryDownloadClient extends BinaryDownloadClient:
 

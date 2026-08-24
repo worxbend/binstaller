@@ -35,7 +35,7 @@ private[core] object ArchiveExtractor:
   // stall extraction with millions of tiny members or an unbounded inflation loop. The time budget
   // is generous: the byte/entry budgets are the real bomb guards, so this only catches degenerate
   // stalls and must not trip on a large legitimate archive extracted on a slow machine.
-  private[core] val maxEntries: Int = 65536
+  private[core] val maxEntries: Int            = 65536
   private val extractionTimeBudgetMillis: Long = 300_000L
 
   /** Shared copy/skip/drain buffer size. Not a tuning knob — just one number instead of four. */
@@ -52,33 +52,31 @@ private[core] object ArchiveExtractor:
   private enum ArchiveKind:
     case Zip, Tar
 
-  /** Extract the manifest's selected members from an archive file into a staging directory.
+  /**
+   * Extract the manifest's selected members from an archive file into a staging directory.
    *
-   *  Always streamed from the file: the archive is never held in the JVM heap, so a multi-hundred
-   *  megabyte release artifact costs a buffer rather than its own size.
+   * Always streamed from the file: the archive is never held in the JVM heap, so a multi-hundred
+   * megabyte release artifact costs a buffer rather than its own size.
    */
   def extractFile(
       archive: ResolvedArchive,
       artifact: Path,
       stagingDir: Path
-  ): Either[String, Unit] =
-    archive.original.archiveType match
-      case ArchiveType.Zip =>
-        streamArchive(archive, stagingDir, ArchiveKind.Zip, () => Files.newInputStream(artifact))
-      case ArchiveType.TarGz =>
-        streamArchive(
-          archive,
-          stagingDir,
-          ArchiveKind.Tar,
-          () => GZIPInputStream(Files.newInputStream(artifact))
-        )
-      case ArchiveType.TarXz =>
-        streamArchive(
-          archive,
-          stagingDir,
-          ArchiveKind.Tar,
-          () => XZInputStream(Files.newInputStream(artifact))
-        )
+  ): Either[String, Unit] = archive.original.archiveType match
+    case ArchiveType.Zip =>
+      streamArchive(archive, stagingDir, ArchiveKind.Zip, () => Files.newInputStream(artifact))
+    case ArchiveType.TarGz => streamArchive(
+        archive,
+        stagingDir,
+        ArchiveKind.Tar,
+        () => GZIPInputStream(Files.newInputStream(artifact))
+      )
+    case ArchiveType.TarXz => streamArchive(
+        archive,
+        stagingDir,
+        ArchiveKind.Tar,
+        () => XZInputStream(Files.newInputStream(artifact))
+      )
 
   // A single budgeted pass. The copy plan is derived from the manifest without touching the
   // archive, then the archive is streamed exactly once. Every entry -- planned or not -- passes
@@ -88,19 +86,17 @@ private[core] object ArchiveExtractor:
       stagingDir: Path,
       kind: ArchiveKind,
       openRaw: () => InputStream
-  ): Either[String, Unit] =
-    buildPlan(archive, stagingDir).flatMap: plan =>
-      Try:
-        val run = ExtractionRun(plan, stagingDir)
-        kind match
-          case ArchiveKind.Zip =>
-            Using.resource(ZipInputStream(openRaw()))(zip => streamZipEntries(run, zip))
-          case ArchiveKind.Tar =>
-            Using.resource(openRaw())(input => streamTarEntries(run, input))
-        run.finish()
-      match
-        case Success(_)     => Right(())
-        case Failure(error) => Left(Diagnostics.describe(error))
+  ): Either[String, Unit] = buildPlan(archive, stagingDir).flatMap: plan =>
+    Try:
+      val run = ExtractionRun(plan, stagingDir)
+      kind match
+        case ArchiveKind.Zip =>
+          Using.resource(ZipInputStream(openRaw()))(zip => streamZipEntries(run, zip))
+        case ArchiveKind.Tar => Using.resource(openRaw())(input => streamTarEntries(run, input))
+      run.finish()
+    match
+      case Success(_)     => Right(())
+      case Failure(error) => Left(Diagnostics.describe(error))
 
   private def streamZipEntries(run: ExtractionRun, zip: ZipInputStream): Unit =
     var entry = zip.getNextEntry
@@ -168,13 +164,13 @@ private[core] object ArchiveExtractor:
   // Mutable bookkeeping for one extraction pass. Reproduces the exact invariants and error
   // strings the previous two-pass planner enforced.
   private final class ExtractionRun(plan: CopyPlan, stagingDir: Path):
-    val budget: ExtractedByteBudget      = ExtractedByteBudget()
-    private val deadline: Long           = System.currentTimeMillis() + extractionTimeBudgetMillis
-    private val seenSources              = mutable.HashSet.empty[String]
-    private val usedTargets              = mutable.HashSet.empty[Path]
-    private val matchedFiles             = mutable.HashSet.empty[String]
-    private val matchedDirectories       = mutable.HashSet.empty[String]
-    private var entryCount               = 0
+    val budget: ExtractedByteBudget = ExtractedByteBudget()
+    private val deadline: Long      = System.currentTimeMillis() + extractionTimeBudgetMillis
+    private val seenSources         = mutable.HashSet.empty[String]
+    private val usedTargets         = mutable.HashSet.empty[Path]
+    private val matchedFiles        = mutable.HashSet.empty[String]
+    private val matchedDirectories  = mutable.HashSet.empty[String]
+    private var entryCount          = 0
 
     def beginEntry(): Unit =
       entryCount += 1
@@ -183,8 +179,8 @@ private[core] object ArchiveExtractor:
       if System.currentTimeMillis() > deadline then
         throw IllegalArgumentException("archive extraction exceeded time budget")
 
-    def register(name: String): Unit =
-      if !seenSources.add(name) then throw IllegalArgumentException(s"duplicate archive member: $name")
+    def register(name: String): Unit = if !seenSources.add(name) then
+      throw IllegalArgumentException(s"duplicate archive member: $name")
 
     // Every target a member must be written to: its explicit file mapping (if any) AND one target
     // per directory mapping whose prefix it falls under. A member can be covered by both, matching
@@ -273,7 +269,7 @@ private[core] object ArchiveExtractor:
   // those headers.
   private def tarSize(header: Array[Byte], offset: Int, length: Int): Long =
     val first = header(offset) & 0xff
-    val size =
+    val size  =
       if (first & 0x80) != 0 then decodeBase256(header, offset, length)
       else tarOctal(header, offset, length)
     if size < 0 then throw IllegalArgumentException("tar entry declares a negative size")
@@ -397,10 +393,9 @@ private[core] object ArchiveExtractor:
   // Copy an already-extracted member to any additional targets (a member covered by both a file
   // and a directory mapping). Disk-to-disk, so it does not inflate; the count is bounded by the
   // manifest's mapping count, so it needs no budget charge.
-  private def duplicateTo(source: Path, extras: Vector[Path]): Unit =
-    extras.foreach: target =>
-      ensureParent(target)
-      val _ = Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
+  private def duplicateTo(source: Path, extras: Vector[Path]): Unit = extras.foreach: target =>
+    ensureParent(target)
+    val _ = Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
 
   // Skip a tar member of known length, charging its declared size to the budget up front so a
   // bomb is rejected before it can inflate, and failing loudly if the stream ends early.

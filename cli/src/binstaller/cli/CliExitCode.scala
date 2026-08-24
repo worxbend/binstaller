@@ -4,13 +4,14 @@ import binstaller.core.InstallerRunStatus
 
 import picocli.CommandLine
 
-/** The one place a run outcome becomes a process exit code.
+/**
+ * The one place a run outcome becomes a process exit code.
  *
- *  Core reports what happened as an [[InstallerRunStatus]] and takes no view on POSIX status
- *  numbers, because those are a property of being delivered as a command-line program rather than
- *  of installing anything. Keeping the mapping here means the numbers a script greps for are
- *  defined once, next to the other picocli codes, instead of being chosen at each place in the
- *  installer that happens to know a run failed.
+ * Core reports what happened as an [[InstallerRunStatus]] and takes no view on POSIX status
+ * numbers, because those are a property of being delivered as a command-line program rather than of
+ * installing anything. Keeping the mapping here means the numbers a script greps for are defined
+ * once, next to the other picocli codes, instead of being chosen at each place in the installer
+ * that happens to know a run failed.
  */
 private[cli] object CliExitCode:
 

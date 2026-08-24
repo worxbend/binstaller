@@ -60,24 +60,27 @@ final case class LockFileTool(
     dynamicSource: Boolean
 )
 
-/** Where a locked checksum came from.
+/**
+ * Where a locked checksum came from.
  *
- *  The three fields describing a discovery source can only ever be populated together, so they
- *  belong to that case rather than to the record. Previously the lock file carried `source` as a
- *  free string alongside three nullable siblings, and `summary` counted the states by comparing
- *  string literals — a typo there silently reports zero of a category rather than failing.
+ * The three fields describing a discovery source can only ever be populated together, so they
+ * belong to that case rather than to the record. Previously the lock file carried `source` as a
+ * free string alongside three nullable siblings, and `summary` counted the states by comparing
+ * string literals — a typo there silently reports zero of a category rather than failing.
  */
 enum LockedChecksumSource derives upickle.default.ReadWriter:
 
   /** Pinned by the manifest author. */
-  @upickle.implicits.key("configured") case Configured
+  @upickle.implicits.key("configured")
+  case Configured
 
   /** Fetched from a discovery source published alongside the artifact. */
   @upickle.implicits.key("discovered")
   case Discovered(url: String, file: String, provenance: UrlProvenance)
 
   /** Observed by downloading the artifact while writing the lock file. */
-  @upickle.implicits.key("inspected") case Inspected
+  @upickle.implicits.key("inspected")
+  case Inspected
 
 /** Serialized checksum metadata copied from the manifest or a typed discovery source. */
 final case class LockFileChecksum(

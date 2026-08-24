@@ -156,7 +156,7 @@ private[core] final class NioApplyStateStore(val cwd: Path) extends ApplyStateSt
     if !Files.exists(path) then Right(None)
     else
       Try(read[ApplyState](Files.readString(path))) match
-        case Success(state)              => Right(Some(state))
+        case Success(state)                              => Right(Some(state))
         case Failure(NioApplyStateStore.Decode(message)) =>
           Left(ApplyStateError.DecodeFailed(path, message))
         case Failure(error) => Left(ApplyStateError.ReadFailed(path, Diagnostics.describe(error)))
@@ -187,22 +187,23 @@ private[core] final class NioApplyStateStore(val cwd: Path) extends ApplyStateSt
 
 private[core] object NioApplyStateStore:
 
-  /** Matches the exceptions that mean "the file was read, but its contents are not a valid state".
+  /**
+   * Matches the exceptions that mean "the file was read, but its contents are not a valid state".
    *
-   *  upickle signals a rejected value with `Abort`, but rethrows one raised inside a visitor
-   *  wrapped in `AbortException`, and wraps that again in a `TraceVisitor.TraceException` carrying
-   *  the JSON path. None of the three is a subtype of another, so matching only `Abort` reports a
-   *  corrupt state file as one that could not be read at all — which sends the user to check file
-   *  permissions instead of the line they hand-edited.
+   * upickle signals a rejected value with `Abort`, but rethrows one raised inside a visitor wrapped
+   * in `AbortException`, and wraps that again in a `TraceVisitor.TraceException` carrying the JSON
+   * path. None of the three is a subtype of another, so matching only `Abort` reports a corrupt
+   * state file as one that could not be read at all — which sends the user to check file
+   * permissions instead of the line they hand-edited.
    *
-   *  The extracted message prefers the innermost cause, because that is the one that names the
-   *  actual problem; the wrapper only carries the JSON path, which is appended when present.
+   * The extracted message prefers the innermost cause, because that is the one that names the
+   * actual problem; the wrapper only carries the JSON path, which is appended when present.
    */
   private[core] object Decode:
 
     def unapply(error: Throwable): Option[String] = error match
       case _: (upickle.core.Abort | upickle.core.AbortException |
-          upickle.core.TraceVisitor.TraceException) =>
+            upickle.core.TraceVisitor.TraceException) =>
         val location = Option(error.getMessage).filter(_.nonEmpty)
         val reason   = Diagnostics.describe(rootCause(error))
         Some(location.filter(_ != reason).fold(reason)(at => s"$reason at $at"))

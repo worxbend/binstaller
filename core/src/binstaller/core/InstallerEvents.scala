@@ -137,10 +137,11 @@ enum TerminalToolResult:
   case Completed(toolName: ToolName, installDir: String, download: Option[UrlProvenance] = None)
   case Failed(toolName: ToolName, message: String)
 
-/** A rendered apply line paired with what it reports, so a renderer never has to read the text.
+/**
+ * A rendered apply line paired with what it reports, so a renderer never has to read the text.
  *
- *  A CLI that decides colour by testing `line.startsWith("installed ")` is coupled to core's exact
- *  wording: rewording a message in core silently drops the colour, and no test fails.
+ * A CLI that decides colour by testing `line.startsWith("installed ")` is coupled to core's exact
+ * wording: rewording a message in core silently drops the colour, and no test fails.
  */
 final case class RenderedTerminalLine(text: String, status: ToolResultStatus)
 

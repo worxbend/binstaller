@@ -18,12 +18,12 @@ private[cli] final class CliApplyEventRenderer(
     outputStyle: CliOutputStyle = CliOutputStyle.Ansi
 ) extends InstallerEventObserver:
   private val width                                   = 30
-  private var lastBuckets: Map[ToolName, Int]           = Map.empty
-  private var activeTools: Set[ToolName]                = Set.empty
-  private var downloadOrder: Vector[ToolName]           = Vector.empty
-  private var downloads: Map[ToolName, DownloadRow]     = Map.empty
+  private var lastBuckets: Map[ToolName, Int]         = Map.empty
+  private var activeTools: Set[ToolName]              = Set.empty
+  private var downloadOrder: Vector[ToolName]         = Vector.empty
+  private var downloads: Map[ToolName, DownloadRow]   = Map.empty
   private var concurrentLineMode: Boolean             = false
-  private var progressBlockTools: Vector[ToolName]      = Vector.empty
+  private var progressBlockTools: Vector[ToolName]    = Vector.empty
   private var progressBlockHeight: Int                = 0
   private var activeLineLength: Int                   = 0
   private var summary: Option[InstallerEvent.Summary] = None
@@ -262,12 +262,13 @@ private[cli] final case class ProgressLine(plain: String, styled: String):
 
 private[cli] object CliApplyOutput:
 
-  /** Colour the apply lines that report a tool's outcome, leaving every other line alone.
+  /**
+   * Colour the apply lines that report a tool's outcome, leaving every other line alone.
    *
-   *  Which lines those are is decided by looking them up among the rendered terminal lines core
-   *  hands back, each already paired with its status -- not by testing the text for a prefix. A
-   *  prefix test silently loses its colour the moment core rewords a message, and would colour
-   *  any future line that happens to begin the same way.
+   * Which lines those are is decided by looking them up among the rendered terminal lines core
+   * hands back, each already paired with its status -- not by testing the text for a prefix. A
+   * prefix test silently loses its colour the moment core rewords a message, and would colour any
+   * future line that happens to begin the same way.
    */
   def colorLines(
       lines: Vector[String],

@@ -2,7 +2,6 @@ package binstaller.core
 
 import binstaller.config.Sha256Digest
 
-
 import java.nio.file.Path
 
 private[core] final case class InstallerRunStatistics(installed: Int, failed: Int, skipped: Int)
@@ -171,8 +170,7 @@ private[core] final class ResolvingBinaryInstallerService(
         newer = statuses.get(tool.name) match
           case Some(GitHubReleaseVersions.LatestReleaseStatus.Newer(tag)) =>
             NewerVersionStatus.Available(tag)
-          case Some(GitHubReleaseVersions.LatestReleaseStatus.Unknown) =>
-            NewerVersionStatus.Unknown
+          case Some(GitHubReleaseVersions.LatestReleaseStatus.Unknown) => NewerVersionStatus.Unknown
           case _ => NewerVersionStatus.UpToDate
       )
     // Redact once here, before the rows leave core, so a renderer consuming `versionRows` gets the

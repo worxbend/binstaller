@@ -4,12 +4,13 @@ import binstaller.core.InstallerResult
 import binstaller.core.NewerVersionStatus
 import binstaller.core.VersionSummaryRow
 
-/** Colours the `versions` table.
+/**
+ * Colours the `versions` table.
  *
- *  Built from the structured rows core returns, not from core's rendered text. Recovering columns
- *  by splitting the padded lines on runs of two-or-more spaces — which is what this did before —
- *  mis-parses any package name or version containing two consecutive spaces, and cannot tell the
- *  `-` / `?` sentinels from a release tag spelled the same way.
+ * Built from the structured rows core returns, not from core's rendered text. Recovering columns by
+ * splitting the padded lines on runs of two-or-more spaces — which is what this did before —
+ * mis-parses any package name or version containing two consecutive spaces, and cannot tell the `-`
+ * / `?` sentinels from a release tag spelled the same way.
  */
 private[cli] object CliVersionsOutput:
 

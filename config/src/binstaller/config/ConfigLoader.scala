@@ -37,7 +37,8 @@ object ConfigLoader:
       .setMaxAliasesForCollections(50)
       .setCodePointLimit(2 * 1024 * 1024)
       .build()
-    try convertYaml(Load(settings).loadFromString(yaml), 0)
+    try
+      convertYaml(Load(settings).loadFromString(yaml), 0)
         .left.map(ConfigLoadError.ParseFailed.apply)
     catch
       case error: YamlEngineException =>

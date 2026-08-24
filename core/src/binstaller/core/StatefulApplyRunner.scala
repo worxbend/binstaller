@@ -31,7 +31,11 @@ private[core] object StatefulApplyRunner:
         RenderSafety.display(s"state file: $path", prepared.plan.redactions),
         _
       ))
-      eventContext.emit(InstallerEvent.ToolPhaseChanged(StatefulApplyRunner.stateLoadingLabel, InstallerPhase.LoadingState, _))
+      eventContext.emit(InstallerEvent.ToolPhaseChanged(
+        StatefulApplyRunner.stateLoadingLabel,
+        InstallerPhase.LoadingState,
+        _
+      ))
       loadInitialState(path, options.resetState, prepared, stateStore) match
         case Left(error) => InstallerResult(
             Vector(RenderSafety.display(
@@ -40,8 +44,7 @@ private[core] object StatefulApplyRunner:
             )),
             InstallerRunStatus.Failed
           )
-        case Right((statePath, state)) =>
-          runWithState(
+        case Right((statePath, state)) => runWithState(
             statePath,
             state,
             prepared,
@@ -141,12 +144,13 @@ private[core] object StatefulApplyRunner:
 
     result.copy(lines = skippedLines ++ result.lines, skippedTools = skippedLines.size)
 
-  /** Whether a tool recorded as completed is still actually installed.
+  /**
+   * Whether a tool recorded as completed is still actually installed.
    *
-   *  This is a business rule — "may apply skip this tool?" — so it asks the injected
-   *  [[InstallFileSystem]] rather than `java.nio.file.Files` directly. Probing the real disk here
-   *  meant a test supplying an in-memory filesystem still had its skip decision made by whatever
-   *  happened to exist on the machine running the test.
+   * This is a business rule — "may apply skip this tool?" — so it asks the injected
+   * [[InstallFileSystem]] rather than `java.nio.file.Files` directly. Probing the real disk here
+   * meant a test supplying an in-memory filesystem still had its skip decision made by whatever
+   * happened to exist on the machine running the test.
    */
   private def completedAndPresent(
       state: ApplyState,

@@ -68,7 +68,7 @@ object NetworkGuardTest extends TestSuite with CoreTestSupport:
     test("guarded resolver drops blocked addresses and fails closed when none remain"):
       val privateAddr = InetAddress.getByName("10.0.0.5")
       val publicAddr  = InetAddress.getByName("8.8.8.8")
-      val filtered = GuardedInetAddressResolverProvider
+      val filtered    = GuardedInetAddressResolverProvider
         .guard("mixed.example", java.util.stream.Stream.of(publicAddr, privateAddr))
         .iterator()
         .asScala

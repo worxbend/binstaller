@@ -23,6 +23,7 @@ import java.util.concurrent.Callable
 
 /** Picocli-backed command boundary for the `binstaller` process. */
 object CliModule:
+
   /** Run the CLI with process stdout/stderr. */
   def run(args: Vector[String]): Int = run(
     args,
@@ -212,12 +213,13 @@ private[cli] abstract class SelectableCommand(
 
   protected def selection: ToolSelection = ToolSelection(onlyTools, skippedTools)
 
-/** A selectable command that can also be pinned to a lock file.
+/**
+ * A selectable command that can also be pinned to a lock file.
  *
- *  `plan` and `apply` both accept `--locked` and `--lock-file`, and previously declared the same
- *  two fields, two annotations and two setters each. Picocli picks up annotated setters from a
- *  superclass -- which is how `--only`/`--skip` already reach both -- so the flags are declared
- *  once here instead of drifting between two copies.
+ * `plan` and `apply` both accept `--locked` and `--lock-file`, and previously declared the same two
+ * fields, two annotations and two setters each. Picocli picks up annotated setters from a
+ * superclass -- which is how `--only`/`--skip` already reach both -- so the flags are declared once
+ * here instead of drifting between two copies.
  */
 private[cli] abstract class LockAwareCommand(
     root: BinstallerCommand,

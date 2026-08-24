@@ -179,7 +179,7 @@ object PlanResolutionTest extends TestSuite with CoreTestSupport:
       ))
 
     test("a direct binary tool with multiple executables is rejected at plan time"):
-      val installDir = tempDirectory("multi-exec").resolve("alpha")
+      val installDir    = tempDirectory("multi-exec").resolve("alpha")
       val multiExecYaml = directBinaryYaml(installDir).replace(
         "          - path: bin/alpha",
         "          - path: bin/alpha\n          - path: bin/beta"

@@ -81,7 +81,7 @@ private[core] object PlanRenderer:
 
   private def renderChecksum(checksum: Option[ResolvedChecksum]): String = checksum match
     case Some(value) => s"${value.algorithm.value} ${value.value} (${checksumStatus(value)})"
-    case None => "missing (not configured) - NO integrity verification will be performed"
+    case None        => "missing (not configured) - NO integrity verification will be performed"
 
   private def checksumStatus(checksum: ResolvedChecksum): String = checksum.source match
     case ResolvedChecksumSource.Configured                        => "configured (pinned by author)"

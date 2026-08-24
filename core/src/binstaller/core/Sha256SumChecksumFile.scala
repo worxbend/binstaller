@@ -20,8 +20,7 @@ private[core] object Sha256SumChecksumFile:
     val entries = content.linesIterator.flatMap(parseLine).toVector
     entries.filter((_, candidate) => candidate == file) match
       case Vector((hash, _)) => Lookup.Found(hash)
-      case Vector()          =>
-        entries.filter((_, candidate) => fileName(candidate) == file) match
+      case Vector()          => entries.filter((_, candidate) => fileName(candidate) == file) match
           case Vector((hash, _)) => Lookup.Found(hash)
           case Vector()          => Lookup.NotFound
           case many              => Lookup.Ambiguous(many.map((_, candidate) => candidate))
@@ -55,10 +54,10 @@ private[core] object Sha256SumChecksumFile:
       if index >= value.length then acc.reverse.mkString
       else if value.charAt(index) == '\\' && index + 1 < value.length then
         value.charAt(index + 1) match
-          case '\\'  => loop(index + 2, '\\' :: acc)
-          case 'n'   => loop(index + 2, '\n' :: acc)
-          case 'r'   => loop(index + 2, '\r' :: acc)
-          case _     => loop(index + 1, '\\' :: acc)
+          case '\\' => loop(index + 2, '\\' :: acc)
+          case 'n'  => loop(index + 2, '\n' :: acc)
+          case 'r'  => loop(index + 2, '\r' :: acc)
+          case _    => loop(index + 1, '\\' :: acc)
       else loop(index + 1, value.charAt(index) :: acc)
     loop(0, Nil)
 

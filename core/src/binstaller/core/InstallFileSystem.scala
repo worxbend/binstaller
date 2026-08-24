@@ -81,10 +81,11 @@ enum InstallFileSystemError:
 /** Filesystem boundary for staging artifacts before replacing a final install directory. */
 trait InstallFileSystem:
 
-  /** Stage a downloaded binary into a temporary install tree, streaming it from `artifact`.
+  /**
+   * Stage a downloaded binary into a temporary install tree, streaming it from `artifact`.
    *
-   *  Abstract on purpose. A default that read the artifact into a byte array would let any
-   *  implementation pull a download-cap-sized file into the JVM heap simply by not overriding it.
+   * Abstract on purpose. A default that read the artifact into a byte array would let any
+   * implementation pull a download-cap-sized file into the JVM heap simply by not overriding it.
    */
   def stageDirectBinaryFromFile(
       installDir: Path,
@@ -130,14 +131,15 @@ object InstallFileSystem:
 
 private[core] object NioInstallFileSystem extends InstallFileSystem:
 
-  /** Every staging entry point shares one lifecycle: create a staging directory next to the final
-   *  install, pre-create the requested subdirectories, write the payload, and on ANY failure delete
-   *  the staging directory again.
+  /**
+   * Every staging entry point shares one lifecycle: create a staging directory next to the final
+   * install, pre-create the requested subdirectories, write the payload, and on ANY failure delete
+   * the staging directory again.
    *
-   *  That last step is the reason this is a function rather than a convention. A staging method
-   *  that forgets it leaves an orphaned `.<name>.stage-*` directory beside every failed install,
-   *  and nothing fails: the error the user sees is correct, the install is correctly not replaced,
-   *  and the litter accumulates silently until someone looks at the apps directory.
+   * That last step is the reason this is a function rather than a convention. A staging method that
+   * forgets it leaves an orphaned `.<name>.stage-*` directory beside every failed install, and
+   * nothing fails: the error the user sees is correct, the install is correctly not replaced, and
+   * the litter accumulates silently until someone looks at the apps directory.
    */
   private def staged(installDir: Path, createDirectories: Vector[String])(
       writePayload: StagedInstall => Either[InstallFileSystemError.StagingFailed, Unit]
@@ -217,10 +219,9 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
             val isTemp = tempInfixes.exists(infix => candidateName.startsWith(s".$name.$infix-"))
             if isTemp && isStaleTemp(candidate) then SafePaths.deleteRecursively(candidate)
 
-  private def isStaleTemp(path: Path): Boolean =
-    Try(Files.getLastModifiedTime(path).toInstant)
-      .toOption
-      .exists(modified => modified.isBefore(Instant.now().minus(staleTempThreshold)))
+  private def isStaleTemp(path: Path): Boolean = Try(Files.getLastModifiedTime(path).toInstant)
+    .toOption
+    .exists(modified => modified.isBefore(Instant.now().minus(staleTempThreshold)))
 
   private def createStagingDirectory(
       installDir: Path
@@ -235,8 +236,7 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
     StagedInstall(Files.createTempDirectory(parent, s".$name.stage-"), installDir)
   match
     case Success(stagedInstall) => Right(stagedInstall)
-    case Failure(error) =>
-      Left(InstallFileSystemError.StagingFailed(Diagnostics.describe(error)))
+    case Failure(error) => Left(InstallFileSystemError.StagingFailed(Diagnostics.describe(error)))
 
   private def stageCreateDirectories(
       stagedInstall: StagedInstall,
@@ -300,8 +300,8 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
   private def replaceInstallDirectory(
       stagedInstall: StagedInstall
   ): Either[InstallFileSystemError.ReplacementFailed, Unit] =
-    val installDir   = stagedInstall.installDir
-    val parent       = Option(installDir.getParent).getOrElse(Path.of("").toAbsolutePath.normalize())
+    val installDir = stagedInstall.installDir
+    val parent     = Option(installDir.getParent).getOrElse(Path.of("").toAbsolutePath.normalize())
     val backupPrefix = s".${installName(installDir)}.backup-"
 
     val prepared = Try:
@@ -350,8 +350,10 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
           // Move the failed partial install aside instead of deleting it, so the backup is never
           // the only surviving copy if the restore move below also fails. The aside is reclaimed
           // by sweepStaleSiblings on the next run even if we crash here.
-          val parent = Option(installDir.getParent).getOrElse(Path.of("").toAbsolutePath.normalize())
-          val corruptAside = Files.createTempDirectory(parent, s".${installName(installDir)}.corrupt-")
+          val parent =
+            Option(installDir.getParent).getOrElse(Path.of("").toAbsolutePath.normalize())
+          val corruptAside =
+            Files.createTempDirectory(parent, s".${installName(installDir)}.corrupt-")
           Files.delete(corruptAside)
           val _ = Files.move(installDir, corruptAside, StandardCopyOption.REPLACE_EXISTING)
           val _ = Files.move(backupDir, installDir, StandardCopyOption.REPLACE_EXISTING)

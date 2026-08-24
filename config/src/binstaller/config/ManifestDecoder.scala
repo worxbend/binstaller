@@ -4,32 +4,31 @@ import binstaller.config.YamlDecode.*
 
 private[config] object ManifestDecoder:
 
-  def decode(value: Any): DecodeResult[BinaryDistributionProfile] =
-    DecodeResult.accumulate: acc =>
-      val root       = acc(asMap(value, "$"))
-      acc.report(unknownKeyErrors(root, "$", Set("apiVersion", "kind", "metadata", "spec")))
-      val apiVersion = acc(enumValue(
-        requiredString(root, "apiVersion"),
-        "apiVersion",
-        ApiVersion.values.toVector,
-        ApiVersion.V1Alpha1,
-        _.value
-      ))
-      val kind = acc(enumValue(
-        requiredString(root, "kind"),
-        "kind",
-        ManifestKind.values.toVector,
-        ManifestKind.BinaryDistributionProfile,
-        _.value
-      ))
-      val metadata = acc(decodeMetadata(requiredMap(root, "metadata")))
-      val spec     = acc(decodeSpec(requiredMap(root, "spec")))
-      BinaryDistributionProfile(
-        apiVersion = apiVersion,
-        kind = kind,
-        metadata = metadata,
-        spec = spec
-      )
+  def decode(value: Any): DecodeResult[BinaryDistributionProfile] = DecodeResult.accumulate: acc =>
+    val root = acc(asMap(value, "$"))
+    acc.report(unknownKeyErrors(root, "$", Set("apiVersion", "kind", "metadata", "spec")))
+    val apiVersion = acc(enumValue(
+      requiredString(root, "apiVersion"),
+      "apiVersion",
+      ApiVersion.values.toVector,
+      ApiVersion.V1Alpha1,
+      _.value
+    ))
+    val kind = acc(enumValue(
+      requiredString(root, "kind"),
+      "kind",
+      ManifestKind.values.toVector,
+      ManifestKind.BinaryDistributionProfile,
+      _.value
+    ))
+    val metadata = acc(decodeMetadata(requiredMap(root, "metadata")))
+    val spec     = acc(decodeSpec(requiredMap(root, "spec")))
+    BinaryDistributionProfile(
+      apiVersion = apiVersion,
+      kind = kind,
+      metadata = metadata,
+      spec = spec
+    )
 
   private def decodeMetadata(input: DecodeResult[YamlMap]): DecodeResult[ManifestMetadata] =
     DecodeResult.accumulate: acc =>
@@ -106,12 +105,11 @@ private[config] object ManifestDecoder:
       )
 
   private def decodeVersions(input: DecodeResult[YamlMap])
-      : DecodeResult[Map[String, VersionSource]] =
-    DecodeResult.accumulate: acc =>
-      val map     = acc(input)
-      val entries = map.toVector.map:
-        case (name, source) => name -> acc(decodeVersionSource(source, s"spec.versions.$name"))
-      entries.toMap
+      : DecodeResult[Map[String, VersionSource]] = DecodeResult.accumulate: acc =>
+    val map     = acc(input)
+    val entries = map.toVector.map:
+      case (name, source) => name -> acc(decodeVersionSource(source, s"spec.versions.$name"))
+    entries.toMap
 
   private def decodeVersionSource(value: Any, path: String): DecodeResult[VersionSource] =
     value match
@@ -142,36 +140,34 @@ private[config] object ManifestDecoder:
   private def decodeDynamicVersion(
       input: DecodeResult[YamlMap],
       path: String
-  ): DecodeResult[VersionSource] =
-    DecodeResult.accumulate: acc =>
-      val map = acc(input)
-      acc.report(unknownKeyErrors(map, path, Set("type", "note")))
-      val kind = acc(enumValue(
-        requiredString(map, "type", s"$path.type"),
-        s"$path.type",
-        DynamicVersionKind.values.toVector,
-        DynamicVersionKind.LatestUrl,
-        _.value
-      ))
-      val note = acc(optionalString(map, "note", s"$path.note"))
-      VersionSource.Dynamic(kind, note)
+  ): DecodeResult[VersionSource] = DecodeResult.accumulate: acc =>
+    val map = acc(input)
+    acc.report(unknownKeyErrors(map, path, Set("type", "note")))
+    val kind = acc(enumValue(
+      requiredString(map, "type", s"$path.type"),
+      s"$path.type",
+      DynamicVersionKind.values.toVector,
+      DynamicVersionKind.LatestUrl,
+      _.value
+    ))
+    val note = acc(optionalString(map, "note", s"$path.note"))
+    VersionSource.Dynamic(kind, note)
 
   private def decodeVersionResolver(
       input: DecodeResult[YamlMap],
       path: String
-  ): DecodeResult[VersionSource] =
-    DecodeResult.accumulate: acc =>
-      val map = acc(input)
-      acc.report(unknownKeyErrors(map, path, Set("type", "url")))
-      val kind = acc(enumValue(
-        requiredString(map, "type", s"$path.type"),
-        s"$path.type",
-        VersionResolverKind.values.toVector,
-        VersionResolverKind.HttpText,
-        _.value
-      ))
-      val url = acc(requiredString(map, s"$path.url"))
-      VersionSource.Resolver(kind, url)
+  ): DecodeResult[VersionSource] = DecodeResult.accumulate: acc =>
+    val map = acc(input)
+    acc.report(unknownKeyErrors(map, path, Set("type", "url")))
+    val kind = acc(enumValue(
+      requiredString(map, "type", s"$path.type"),
+      s"$path.type",
+      VersionResolverKind.values.toVector,
+      VersionResolverKind.HttpText,
+      _.value
+    ))
+    val url = acc(requiredString(map, s"$path.url"))
+    VersionSource.Resolver(kind, url)
 
   private def decodePlan(input: DecodeResult[Vector[Any]]): DecodeResult[Vector[PlanEntry]] =
     DecodeResult.accumulate: acc =>
@@ -237,7 +233,7 @@ private[config] object ManifestDecoder:
       val installDir        = acc(requiredString(map, s"$path.installDir"))
       val createDirectories =
         acc(optionalStringList(map, "createDirectories", s"$path.createDirectories"))
-      val download          = acc(decodeDownload(requiredMap(map, s"$path.download"), path))
+      val download = acc(decodeDownload(requiredMap(map, s"$path.download"), path))
       acc(unsupportedInstaller(map, s"$path.installer"))
       val executables = acc(decodeExecutables(requiredList(map, s"$path.executables"), path))
       val symlinks    = acc(decodeSymlinks(optionalList(map, "symlinks", s"$path.symlinks"), path))
@@ -331,19 +327,18 @@ private[config] object ManifestDecoder:
   private def decodeArchiveExtract(
       input: DecodeResult[YamlMap],
       archivePath: String
-  ): DecodeResult[ArchiveExtract] =
-    DecodeResult.accumulate: acc =>
-      val map = acc(input)
-      acc.report(unknownKeyErrors(map, s"$archivePath.extract", Set("files", "directories")))
-      val files = acc(decodeExtractMappings(
-        optionalList(map, "files", s"$archivePath.extract.files"),
-        s"$archivePath.extract.files"
-      ))
-      val directories = acc(decodeExtractMappings(
-        optionalList(map, "directories", s"$archivePath.extract.directories"),
-        s"$archivePath.extract.directories"
-      ))
-      ArchiveExtract(files, directories)
+  ): DecodeResult[ArchiveExtract] = DecodeResult.accumulate: acc =>
+    val map = acc(input)
+    acc.report(unknownKeyErrors(map, s"$archivePath.extract", Set("files", "directories")))
+    val files = acc(decodeExtractMappings(
+      optionalList(map, "files", s"$archivePath.extract.files"),
+      s"$archivePath.extract.files"
+    ))
+    val directories = acc(decodeExtractMappings(
+      optionalList(map, "directories", s"$archivePath.extract.directories"),
+      s"$archivePath.extract.directories"
+    ))
+    ArchiveExtract(files, directories)
 
   private def decodeExtractMappings(
       input: DecodeResult[Vector[Any]],
@@ -382,7 +377,7 @@ private[config] object ManifestDecoder:
       (item, itemPath, acc) =>
         val file   = acc(requiredString(item, s"$itemPath.path"))
         val target = acc(requiredString(item, s"$itemPath.target"))
-        val sudo = acc(optionalBoolean(item, "sudo", s"$itemPath.sudo", default = false)
+        val sudo   = acc(optionalBoolean(item, "sudo", s"$itemPath.sudo", default = false)
           .map(SymlinkPrivilege.fromBoolean))
         SymlinkSpec(file, target, sudo)
 
@@ -403,34 +398,34 @@ private[config] object ManifestDecoder:
     case Some(value: Boolean) => DecodeResult.valid(Some(PolicyOverride.fromBoolean(value)))
     case Some(_)              => DecodeResult.invalid(None, path, "value must be a boolean")
 
-  /** Decode an optional nested block, rejecting unknown keys inside it.
+  /**
+   * Decode an optional nested block, rejecting unknown keys inside it.
    *
-   *  Every optional block in this manifest follows the same shape: absent means `None`; present
-   *  means it must be a map, its keys must all be recognised, and only then are its fields read.
-   *  Spelling that out per block is how a new block quietly acquires an unchecked key set — the
-   *  decoder still compiles and still works, it just silently accepts typos, which is the one
-   *  thing this file exists to prevent.
+   * Every optional block in this manifest follows the same shape: absent means `None`; present
+   * means it must be a map, its keys must all be recognised, and only then are its fields read.
+   * Spelling that out per block is how a new block quietly acquires an unchecked key set — the
+   * decoder still compiles and still works, it just silently accepts typos, which is the one thing
+   * this file exists to prevent.
    */
   private def optionalBlock[A](
       map: YamlMap,
       key: String,
       path: String,
       allowed: Set[String]
-  )(decode: (YamlMap, DecodeResult.Accumulator) => A): DecodeResult[Option[A]] =
-    map.get(key) match
-      case None        => DecodeResult.valid(None)
-      case Some(value) =>
-        DecodeResult.accumulate: acc =>
-          val blockMap = acc(asMap(value, path))
-          acc.report(unknownKeyErrors(blockMap, path, allowed))
-          Some(decode(blockMap, acc))
+  )(decode: (YamlMap, DecodeResult.Accumulator) => A): DecodeResult[Option[A]] = map.get(key) match
+    case None        => DecodeResult.valid(None)
+    case Some(value) => DecodeResult.accumulate: acc =>
+        val blockMap = acc(asMap(value, path))
+        acc.report(unknownKeyErrors(blockMap, path, allowed))
+        Some(decode(blockMap, acc))
 
-  /** Decode a list of uniform items, rejecting unknown keys inside each one.
+  /**
+   * Decode a list of uniform items, rejecting unknown keys inside each one.
    *
-   *  The item path (`<path>[<index>]`) is built once and handed to the caller, rather than being
-   *  re-interpolated for the item, its unknown-key report and each of its fields — which is where
-   *  an index or a label goes wrong without any test noticing, because the value still decodes
-   *  and only the path in the error message is off.
+   * The item path (`<path>[<index>]`) is built once and handed to the caller, rather than being
+   * re-interpolated for the item, its unknown-key report and each of its fields — which is where an
+   * index or a label goes wrong without any test noticing, because the value still decodes and only
+   * the path in the error message is off.
    */
   private def decodeItems[A](
       input: DecodeResult[Vector[Any]],
@@ -446,16 +441,17 @@ private[config] object ManifestDecoder:
           acc.report(unknownKeyErrors(item, itemPath, allowed))
           decodeItem(item, itemPath, acc)
 
-  /** Decode a tool name, rejecting an unsafe one here rather than downstream.
+  /**
+   * Decode a tool name, rejecting an unsafe one here rather than downstream.
    *
-   *  Producing the sentinel on failure keeps decoding total, so the rest of the manifest's errors
-   *  are still accumulated and reported in the same pass.
+   * Producing the sentinel on failure keeps decoding total, so the rest of the manifest's errors
+   * are still accumulated and reported in the same pass.
    */
   private def requiredToolName(map: YamlMap, path: String): DecodeResult[ToolName] =
     DecodeResult.accumulate: acc =>
       val raw = acc(requiredString(map, path))
       ToolName.fromString(raw) match
-        case Right(name) => name
+        case Right(name)   => name
         case Left(message) =>
           acc.report(Vector(ValidationError(path, message)))
           ToolName.invalidSentinel

@@ -42,7 +42,8 @@ final class DirectBinaryInstaller(
     sudoCredentials: SudoCredentialProvider = SudoCredentialProvider.unavailable
 ):
 
-  /** Install every tool in an already-resolved plan and render terminal result lines.
+  /**
+   * Install every tool in an already-resolved plan and render terminal result lines.
    *
    * Core-internal (tests/helpers): it consumes a [[ResolvedPlan]] directly and therefore skips the
    * PlanResolver appsDir-containment validation that the production ingest path enforces. Not part
@@ -69,7 +70,7 @@ final class DirectBinaryInstaller(
   ): InstallerResult = preflight(plan) match
     case Some(error) =>
       InstallerResult(Vector(ApplyPreflightError.render(error)), InstallerRunStatus.Failed)
-    case None        =>
+    case None =>
       val observed = installTools(
         plan.policy,
         plan.tools,
@@ -101,9 +102,8 @@ final class DirectBinaryInstaller(
     .find(_.symlinks.exists(_.privilege == SymlinkPrivilege.Sudo))
     .flatMap: tool =>
       plan.policy.allowSudoSymlinks match
-        case PolicyOverride.Disabled =>
-          Some(ApplyPreflightError.SudoSymlinkNotAllowed(tool.name))
-        case PolicyOverride.Enabled => None
+        case PolicyOverride.Disabled => Some(ApplyPreflightError.SudoSymlinkNotAllowed(tool.name))
+        case PolicyOverride.Enabled  => None
 
   private def installTools(
       policy: ResolvedPolicy,
@@ -118,8 +118,8 @@ final class DirectBinaryInstaller(
     else
       supervised:
         given BufferCapacity = BufferCapacity(applyParallelism.value)
-        val serializedEvents     = eventContext.serialized
-        val preparedResults      = Flow
+        val serializedEvents = eventContext.serialized
+        val preparedResults  = Flow
           .fromIterable(tools)
           .mapPar(applyParallelism.value): tool =>
             prepareTool(tool, redactions, verboseOutput, serializedEvents)
@@ -133,9 +133,11 @@ final class DirectBinaryInstaller(
           serializedEvents
         )
 
-  /** Install a single tool without sudo symlink support. Core-internal (tests/helpers): it takes a
-   *  [[ResolvedTool]] directly and so bypasses the PlanResolver appsDir-containment validation the
-   *  production path enforces; not part of the public boundary. */
+  /**
+   * Install a single tool without sudo symlink support. Core-internal (tests/helpers): it takes a
+   * [[ResolvedTool]] directly and so bypasses the PlanResolver appsDir-containment validation the
+   * production path enforces; not part of the public boundary.
+   */
   private[core] def installTool(
       tool: ResolvedTool
   ): Either[ToolInstallError, TerminalToolResult.Completed] =
@@ -162,10 +164,11 @@ final class DirectBinaryInstaller(
       result: Either[ToolInstallError, TerminalToolResult.Completed],
       redactions: SensitiveValueRedactions
   ): TerminalToolResult = result.fold(
-    error => TerminalToolResult.Failed(
-      error.toolName,
-      ToolInstallError.render(error, redactions)
-    ),
+    error =>
+      TerminalToolResult.Failed(
+        error.toolName,
+        ToolInstallError.render(error, redactions)
+      ),
     identity
   )
 
@@ -215,7 +218,8 @@ final class DirectBinaryInstaller(
       redactions: SensitiveValueRedactions
   ): Either[ToolInstallError, TerminalToolResult.Completed] =
     prepareDownloadedBinaryOrArchive(tool, eventContext, redactions).flatMap:
-      case (staged, provenance) => completePreparedTool(policy, tool, staged, provenance, eventContext)
+      case (staged, provenance) =>
+        completePreparedTool(policy, tool, staged, provenance, eventContext)
 
   private def prepareTool(
       tool: ResolvedTool,
@@ -238,30 +242,36 @@ final class DirectBinaryInstaller(
     catch
       case scala.util.control.NonFatal(error) =>
         val message = Diagnostics.describe(error)
-        PreparedToolResult.Failed(tool.name, ToolInstallError.StagingFailed(tool.name, message), verbose)
+        PreparedToolResult.Failed(
+          tool.name,
+          ToolInstallError.StagingFailed(tool.name, message),
+          verbose
+        )
 
   private def prepareDownloadedBinaryOrArchive(
       tool: ResolvedTool,
       eventContext: InstallerEventContext,
       redactions: SensitiveValueRedactions
-  ): Either[ToolInstallError, (StagedInstall, UrlProvenance)] =
-    download(tool, eventContext, redactions).flatMap: artifact =>
-      // The downloaded temp file must be deleted on every exit, including a throw out of staging or
-      // out of an event observer. prepareTool deliberately catches NonFatal and turns such a throw
-      // into a Failed result, so without `finally` the throw would skip the discard and silently
-      // leave behind a file of up to the download size cap.
-      try
-        for
-          // Integrity is checked before staging/replacement so a bad artifact cannot overwrite a
-          // previously working install.
-          _ <- withPhase(tool, InstallerPhase.VerifyingChecksum, eventContext)(
-            verifyChecksum(tool, artifact.sha256)
-          )
-          staged <-
-            withPhase(tool, InstallerPhase.Staging, eventContext)(stage(tool, artifact.path))
-          _ <- prepareStagedInstall(tool, staged, eventContext)
-        yield staged -> artifact.provenance
-      finally artifact.discard()
+  ): Either[ToolInstallError, (StagedInstall, UrlProvenance)] = download(
+    tool,
+    eventContext,
+    redactions
+  ).flatMap: artifact =>
+    // The downloaded temp file must be deleted on every exit, including a throw out of staging or
+    // out of an event observer. prepareTool deliberately catches NonFatal and turns such a throw
+    // into a Failed result, so without `finally` the throw would skip the discard and silently
+    // leave behind a file of up to the download size cap.
+    try
+      for
+        // Integrity is checked before staging/replacement so a bad artifact cannot overwrite a
+        // previously working install.
+        _ <- withPhase(tool, InstallerPhase.VerifyingChecksum, eventContext)(
+          verifyChecksum(tool, artifact.sha256)
+        )
+        staged <- withPhase(tool, InstallerPhase.Staging, eventContext)(stage(tool, artifact.path))
+        _      <- prepareStagedInstall(tool, staged, eventContext)
+      yield staged -> artifact.provenance
+    finally artifact.discard()
 
   private def prepareStagedInstall(
       tool: ResolvedTool,
@@ -472,14 +482,15 @@ final class DirectBinaryInstaller(
   ): Either[ToolInstallError, Unit] = fileSystem.replaceInstall(stagedInstall).left.map: error =>
     ToolInstallError.ReplacementFailed(tool.name, error.message)
 
-  /** Fails on the first declared executable that is not a regular file under `root`.
+  /**
+   * Fails on the first declared executable that is not a regular file under `root`.
    *
-   *  One rule, two roots: the staging tree before the install is swapped in, and the final install
-   *  directory afterwards. Previously each root had its own copy of the rule plus its own path
-   *  resolver, so a change to what counts as a valid executable had to be made in four places.
+   * One rule, two roots: the staging tree before the install is swapped in, and the final install
+   * directory afterwards. Previously each root had its own copy of the rule plus its own path
+   * resolver, so a change to what counts as a valid executable had to be made in four places.
    *
-   *  `.iterator` keeps the scan lazy, so it stops at the first failure rather than stat-ing every
-   *  remaining path.
+   * `.iterator` keeps the scan lazy, so it stops at the first failure rather than stat-ing every
+   * remaining path.
    */
   private def verifyExecutablesUnder(
       tool: ResolvedTool,

@@ -43,10 +43,11 @@ private[core] object ResolvedValue:
   def invalid[A](value: A, path: String, message: String): ResolvedValue[A] =
     ResolvedValue(value, Vector(ValidationError(path, message)))
 
-  /** Combine per-element results, keeping every value and concatenating all errors.
+  /**
+   * Combine per-element results, keeping every value and concatenating all errors.
    *
-   *  Resolution never stops at the first bad field: a user fixing a manifest wants the whole list
-   *  of problems at once, so every element contributes both its value and its errors.
+   * Resolution never stops at the first bad field: a user fixing a manifest wants the whole list of
+   * problems at once, so every element contributes both its value and its errors.
    */
   def sequence[A](values: Vector[ResolvedValue[A]]): ResolvedValue[Vector[A]] =
     ResolvedValue(values.map(_.value), values.flatMap(_.errors))
@@ -54,11 +55,10 @@ private[core] object ResolvedValue:
   /** Combine per-key results into a map, concatenating all errors. */
   def sequenceMap[A](
       values: Vector[(String, ResolvedValue[A])]
-  ): ResolvedValue[Map[String, A]] =
-    ResolvedValue(
-      values.map((name, value) => name -> value.value).toMap,
-      values.flatMap((_, value) => value.errors)
-    )
+  ): ResolvedValue[Map[String, A]] = ResolvedValue(
+    values.map((name, value) => name -> value.value).toMap,
+    values.flatMap((_, value) => value.errors)
+  )
 
 private[core] final class ResolutionBuilder(
     profile: BinaryDistributionProfile,
@@ -510,13 +510,14 @@ private[core] final class ResolutionBuilder(
       vars: Map[String, String]
   ): ResolvedValue[String] = TemplateInterpolator.interpolate(value, path, vars)
 
-  /** Resolve one templated manifest field.
+  /**
+   * Resolve one templated manifest field.
    *
-   *  Every templated field goes through the same three steps in the same order, and the order
-   *  matters: interpolate the raw value, then complain if the RAW value referenced `$${version}`
-   *  while no concrete version exists, then validate the RESOLVED value as a path or URL. Checking
-   *  the wrong one of the two — raw where resolved is meant, or the reverse — is the mistake this
-   *  helper exists to make unrepeatable, since each call site previously spelled all three out.
+   * Every templated field goes through the same three steps in the same order, and the order
+   * matters: interpolate the raw value, then complain if the RAW value referenced `$${version}`
+   * while no concrete version exists, then validate the RESOLVED value as a path or URL. Checking
+   * the wrong one of the two — raw where resolved is meant, or the reverse — is the mistake this
+   * helper exists to make unrepeatable, since each call site previously spelled all three out.
    */
   private def resolveTemplate(
       raw: String,
@@ -540,11 +541,12 @@ private[core] final class ResolutionBuilder(
       version: ResolvedVersion
   ): ResolvedValue[String] = resolveTemplate(raw, path, vars, version, (_, _) => Vector.empty)
 
-  /** Normalize a manifest path, or report why it is not a usable path.
+  /**
+   * Normalize a manifest path, or report why it is not a usable path.
    *
-   *  Both steps have to happen before any two paths can be compared: `pathSyntax` rejects the
-   *  values that must never reach the filesystem at all, and normalization resolves `.`, `..` and
-   *  relative segments so that a containment check on the result means what it says.
+   * Both steps have to happen before any two paths can be compared: `pathSyntax` rejects the values
+   * that must never reach the filesystem at all, and normalization resolves `.`, `..` and relative
+   * segments so that a containment check on the result means what it says.
    */
   private def normalizedPath(
       value: String,
@@ -559,10 +561,11 @@ private[core] final class ResolutionBuilder(
           Left(Vector(ValidationError(path, s"invalid $label: ${Diagnostics.describe(error)}")))
         case Success(result) => Right(result)
 
-  /** The rule: an install root must live strictly inside appsDir.
+  /**
+   * The rule: an install root must live strictly inside appsDir.
    *
-   *  Equal to appsDir is rejected as well as outside it, because a tool whose installDir *is* the
-   *  apps root would have the replace step delete every other tool on the next apply.
+   * Equal to appsDir is rejected as well as outside it, because a tool whose installDir *is* the
+   * apps root would have the replace step delete every other tool on the next apply.
    */
   private def containmentErrors(
       tool: ResolvedTool,
@@ -571,7 +574,7 @@ private[core] final class ResolutionBuilder(
   ): Vector[ValidationError] =
     val path = s"spec.plan[$index].spec.installDir"
     normalizedPath(tool.installDir, path, "installDir") match
-      case Left(errors)                       => errors
+      case Left(errors)                               => errors
       case Right(installDir) if installDir == appsDir =>
         Vector(ValidationError(path, "installDir must be a child of appsDir, not appsDir itself"))
       case Right(installDir) if !installDir.startsWith(appsDir) =>

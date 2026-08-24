@@ -4,12 +4,13 @@ import binstaller.config.BinaryDistributionProfile
 import binstaller.config.ConfigLoadError
 import binstaller.config.ConfigModule
 
-/** Boundary that turns a configured manifest location into a typed profile.
+/**
+ * Boundary that turns a configured manifest location into a typed profile.
  *
- *  Every other outward dependency of the installer service — the HTTP client, the state store, the
- *  metadata client, the lock-file store — is injected. Manifest loading was the exception: it was a
- *  direct filesystem call inside the orchestration logic, so exercising "resolve a plan and render
- *  it" meant first writing YAML to a real directory.
+ * Every other outward dependency of the installer service — the HTTP client, the state store, the
+ * metadata client, the lock-file store — is injected. Manifest loading was the exception: it was a
+ * direct filesystem call inside the orchestration logic, so exercising "resolve a plan and render
+ * it" meant first writing YAML to a real directory.
  */
 trait ProfileSource:
 

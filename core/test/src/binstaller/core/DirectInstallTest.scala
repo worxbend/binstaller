@@ -385,8 +385,8 @@ object DirectInstallTest extends TestSuite with CoreTestSupport:
         stream.iterator().asScala.exists(_.getFileName.toString.contains(".backup-")))
 
     test("staging reclaims stale sibling temp dirs but not fresh ones"):
-      val tempRoot   = tempDirectory("core-sweep")
-      val installDir = tempRoot.resolve("alpha")
+      val tempRoot    = tempDirectory("core-sweep")
+      val installDir  = tempRoot.resolve("alpha")
       val staleOrphan = Files.createDirectory(tempRoot.resolve(".alpha.stage-stale"))
       Files.writeString(staleOrphan.resolve("leftover"), "x")
       val freshOrphan = Files.createDirectory(tempRoot.resolve(".alpha.backup-fresh"))

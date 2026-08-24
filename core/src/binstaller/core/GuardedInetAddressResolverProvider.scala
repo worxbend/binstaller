@@ -29,11 +29,10 @@ final class GuardedInetAddressResolverProvider extends InetAddressResolverProvid
       def lookupByName(
           host: String,
           lookupPolicy: InetAddressResolver.LookupPolicy
-      ): Stream[InetAddress] =
-        GuardedInetAddressResolverProvider.guard(
-          host,
-          builtin.lookupByName(host, lookupPolicy)
-        )
+      ): Stream[InetAddress] = GuardedInetAddressResolverProvider.guard(
+        host,
+        builtin.lookupByName(host, lookupPolicy)
+      )
 
       def lookupByAddress(address: Array[Byte]): String = builtin.lookupByAddress(address)
 

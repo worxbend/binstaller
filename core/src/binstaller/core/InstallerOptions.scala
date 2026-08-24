@@ -30,12 +30,13 @@ final case class InstallerOptions(
     applyParallelism: ApplyParallelism = ApplyParallelism.default
 )
 
-/** Bounded parallelism for apply-time artifact download and staging.
+/**
+ * Bounded parallelism for apply-time artifact download and staging.
  *
- *  The constructor is private so `value` is guaranteed to be at least 1. Without that guarantee
- *  the consumer has to defend against a zero or negative value it was promised could not exist,
- *  which is how a type that is supposed to make illegal states unrepresentable turns into a type
- *  that documents an intention nobody can rely on.
+ * The constructor is private so `value` is guaranteed to be at least 1. Without that guarantee the
+ * consumer has to defend against a zero or negative value it was promised could not exist, which is
+ * how a type that is supposed to make illegal states unrepresentable turns into a type that
+ * documents an intention nobody can rely on.
  */
 final case class ApplyParallelism private (value: Int)
 
@@ -56,20 +57,22 @@ enum ApplyParallelismError:
 /** Rendering helpers for apply parallelism failures. */
 object ApplyParallelismError:
 
-  /** Render a parallelism failure into a concise user-facing line.
+  /**
+   * Render a parallelism failure into a concise user-facing line.
    *
-   *  Deliberately without a flag name: `core` does not know how a command line spells this, and
-   *  embedding "--parallelism" here would be wrong for every caller that is not the CLI.
+   * Deliberately without a flag name: `core` does not know how a command line spells this, and
+   * embedding "--parallelism" here would be wrong for every caller that is not the CLI.
    */
   def render(error: ApplyParallelismError): String = error match
     case ApplyParallelismError.NotPositive(value) => s"must be at least 1, got $value"
 
-/** Rendered command lines plus the outcome of the run.
+/**
+ * Rendered command lines plus the outcome of the run.
  *
- *  Deliberately not a process exit code. A POSIX status is a property of how this program is
- *  delivered — as a CLI — not of what the installer did, so the translation happens once, in
- *  `binstaller.cli.CliExitCode`. A caller embedding core in something that is not a process gets
- *  an answer it can act on rather than an integer it has to decode.
+ * Deliberately not a process exit code. A POSIX status is a property of how this program is
+ * delivered — as a CLI — not of what the installer did, so the translation happens once, in
+ * `binstaller.cli.CliExitCode`. A caller embedding core in something that is not a process gets an
+ * answer it can act on rather than an integer it has to decode.
  */
 final case class InstallerResult(
     lines: Vector[String],

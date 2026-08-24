@@ -19,7 +19,7 @@ object VersionsAndLockTest extends TestSuite with CoreTestSupport:
         FakeHttpTextClient("v1.34.0"),
         testResolutionOptions
       )
-      val result  = service.versions(applyOptions(exampleConfigPath))
+      val result = service.versions(applyOptions(exampleConfigPath))
 
       assert(result.status == InstallerRunStatus.Succeeded)
       assert(result.lines.exists(line =>
@@ -178,7 +178,8 @@ object VersionsAndLockTest extends TestSuite with CoreTestSupport:
       assert(tools(toolName("alpha")).resolvedVersion.contains("1.0.0"))
       assert(tools(toolName("alpha")).versionProvenance.isEmpty)
       assert(
-        tools(toolName("alpha")).downloadProvenance.finalUrl == "https://example.invalid/alpha-1.0.0"
+        tools(toolName("alpha")).downloadProvenance.finalUrl ==
+          "https://example.invalid/alpha-1.0.0"
       )
       assert(tools(toolName("alpha")).sizeBytes.contains(11L))
       assert(tools(toolName("alpha")).checksum.contains(LockFileChecksum("sha256", "a" * 64)))
@@ -187,7 +188,8 @@ object VersionsAndLockTest extends TestSuite with CoreTestSupport:
       assert(tools(toolName("beta")).versionProvenance.exists(_.finalUrl ==
         "https://cdn.example.invalid/beta-version"))
       assert(
-        tools(toolName("beta")).downloadProvenance.finalUrl == "https://cdn.example.invalid/beta-2.0.0"
+        tools(toolName("beta")).downloadProvenance.finalUrl ==
+          "https://cdn.example.invalid/beta-2.0.0"
       )
       assert(tools(toolName("beta")).sizeBytes.contains(22L))
       assert(!tools(toolName("beta")).dynamicSource)
@@ -251,10 +253,9 @@ object VersionsAndLockTest extends TestSuite with CoreTestSupport:
       // Matching the case binds url and file together, so the three facts cannot disagree the way
       // a string tag plus two independently-nullable fields could.
       assert(lock.tools.head.checksum.map(_.source).exists:
-        case LockedChecksumSource.Discovered(url, file, _) =>
-          url == checksumFileUrl && file == "alpha-1.0.0.tar.gz"
-        case _ => false
-      )
+        case LockedChecksumSource.Discovered(url, file, _) => url == checksumFileUrl &&
+          file == "alpha-1.0.0.tar.gz"
+        case _ => false)
 
     test("ambiguous discovered checksum fails resolution with a colliding-path diagnostic"):
       val tempRoot        = tempDirectory("core-checksum-ambiguous")
@@ -296,7 +297,7 @@ object VersionsAndLockTest extends TestSuite with CoreTestSupport:
       assert(result.lines.exists(_.contains("spec.plan[0].spec.download.checksum.discover.url")))
 
     test("mismatched discovered checksum fails before replacement"):
-      val tempRoot = tempDirectory("core-checksum-discovered-mismatch")
+      val tempRoot        = tempDirectory("core-checksum-discovered-mismatch")
       val checksumFileUrl = "https://example.invalid/releases/1.0.0/SHA256SUMS"
       val config          = writeConfig(tempRoot, checksumDiscoveryYaml(tempRoot, checksumFileUrl))
       val existingFile    = tempRoot.resolve("apps/alpha/bin/alpha")
@@ -386,15 +387,14 @@ object VersionsAndLockTest extends TestSuite with CoreTestSupport:
     test("locked apply rejects a malformed locked checksum even when the manifest pins one"):
       // The format check used to run only for tools with no manifest checksum, so a corrupt digest
       // on a pinned tool fell through to a comparison against an unvalidated string.
-      val tempRoot = tempDirectory("core-locked-bad-digest")
-      val config   = writeConfig(tempRoot, lockYaml(tempRoot))
-      val lockPath = tempRoot.resolve("binstaller.lock.json")
-      val current  = currentLockFile(config, dynamicSize = Some(33L))
+      val tempRoot  = tempDirectory("core-locked-bad-digest")
+      val config    = writeConfig(tempRoot, lockYaml(tempRoot))
+      val lockPath  = tempRoot.resolve("binstaller.lock.json")
+      val current   = currentLockFile(config, dynamicSize = Some(33L))
       val corrupted = current.copy(tools = current.tools.map: tool =>
         if tool.name.value == "alpha" then
           tool.copy(checksum = tool.checksum.map(_.copy(value = "not-a-valid-sha256")))
-        else tool
-      )
+        else tool)
       writeLock(lockPath, corrupted)
       val service = lockedApplyService(tempRoot, dynamicSize = Some(33L))
 

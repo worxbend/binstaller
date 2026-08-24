@@ -4,6 +4,7 @@ import java.nio.file.Path
 
 /** Public entrypoint for loading binstaller YAML profiles into typed manifest models. */
 object ConfigModule:
+
   /** Load and validate a profile from a filesystem path string. */
   def load(path: String): Either[ConfigLoadError, BinaryDistributionProfile] =
     ConfigLoader.load(Path.of(path))
@@ -71,11 +72,12 @@ enum PolicyMode(val value: String):
   case Developer extends PolicyMode("developer")
   case Strict    extends PolicyMode("strict")
 
-/** An explicit yes/no decision read from a `spec.policy` boolean.
+/**
+ * An explicit yes/no decision read from a `spec.policy` boolean.
  *
- *  Named rather than `Boolean` so a call site says which way round it is, and shared by every
- *  policy flag rather than given a bespoke type per field: three identical two-case enums with
- *  identical `fromBoolean` helpers said nothing a single one does not.
+ * Named rather than `Boolean` so a call site says which way round it is, and shared by every policy
+ * flag rather than given a bespoke type per field: three identical two-case enums with identical
+ * `fromBoolean` helpers said nothing a single one does not.
  */
 enum PolicyOverride:
   case Enabled, Disabled
@@ -192,12 +194,13 @@ final case class ExecutableMode private (value: String)
 /** Executable mode validation and construction. */
 object ExecutableMode:
 
-  /** Parse a four-digit octal mode such as `0755`.
+  /**
+   * Parse a four-digit octal mode such as `0755`.
    *
-   *  The constructor is private so the "four-digit octal" invariant is guaranteed rather than
-   *  merely documented. `core` parses this value with `Integer.parseInt(value, 8)`, which throws
-   *  `NumberFormatException` on anything else -- an unchecked crash midway through an apply, in a
-   *  codebase that returns `Either` for every other expected failure.
+   * The constructor is private so the "four-digit octal" invariant is guaranteed rather than merely
+   * documented. `core` parses this value with `Integer.parseInt(value, 8)`, which throws
+   * `NumberFormatException` on anything else -- an unchecked crash midway through an apply, in a
+   * codebase that returns `Either` for every other expected failure.
    */
   def fromString(value: String): Either[String, ExecutableMode] =
     if value.matches("0[0-7]{3}") then Right(ExecutableMode(value))

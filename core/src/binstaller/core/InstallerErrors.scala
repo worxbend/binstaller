@@ -14,11 +14,12 @@ object ApplyPreflightError:
     case ApplyPreflightError.SudoSymlinkNotAllowed(toolName) =>
       s"failed $toolName: sudo symlinks are not allowed by policy.allowSudoSymlinks"
 
-/** Expected failure while installing one tool.
+/**
+ * Expected failure while installing one tool.
  *
- *  Every case names the tool it failed for, so that is declared once on the enum rather than
- *  recovered afterwards by a match with one arm per case. The parameter is `name` rather than
- *  `toolName` because an enum case parameter becomes a val and would clash with the inherited one.
+ * Every case names the tool it failed for, so that is declared once on the enum rather than
+ * recovered afterwards by a match with one arm per case. The parameter is `name` rather than
+ * `toolName` because an enum case parameter becomes a val and would clash with the inherited one.
  */
 enum ToolInstallError(val toolName: ToolName):
 
@@ -31,17 +32,24 @@ enum ToolInstallError(val toolName: ToolName):
 
   case ChecksumMismatch(name: ToolName, expected: String, actual: String, source: String)
       extends ToolInstallError(name)
+
   case StagingFailed(name: ToolName, message: String) extends ToolInstallError(name)
+
   case ModeApplicationFailed(name: ToolName, path: String, mode: String, message: String)
       extends ToolInstallError(name)
-  case ReplacementFailed(name: ToolName, message: String)      extends ToolInstallError(name)
+
+  case ReplacementFailed(name: ToolName, message: String)       extends ToolInstallError(name)
   case ArchiveExtractionFailed(name: ToolName, message: String) extends ToolInstallError(name)
   case MissingExecutable(name: ToolName, path: String)          extends ToolInstallError(name)
+
   case SymlinkFailed(name: ToolName, path: String, target: String, message: String)
       extends ToolInstallError(name)
+
   case SudoSymlinkNotAllowed(name: ToolName) extends ToolInstallError(name)
+
   case SudoCredentialCanceled(name: ToolName, path: String, target: String)
       extends ToolInstallError(name)
+
   case SudoCredentialsUnavailable(name: ToolName, path: String, target: String, message: String)
       extends ToolInstallError(name)
 
@@ -57,8 +65,9 @@ object ToolInstallError:
         s"download: $url: $message",
         Vector("tool" -> toolName.value, "url" -> url, "message" -> message) ++
           redirectDetailPairs("download", provenance) ++
-          Vector("suggestion" -> ("check the URL resolves and the release asset exists; " +
-            "run `binstaller plan` to see the resolved URL")),
+          Vector("suggestion" ->
+            ("check the URL resolves and the release asset exists; " +
+              "run `binstaller plan` to see the resolved URL")),
         redactions
       )
     case ToolInstallError.ChecksumMismatch(toolName, expected, actual, source) => detailBlock(
@@ -75,8 +84,8 @@ object ToolInstallError:
     case ToolInstallError.StagingFailed(toolName, message) => detailBlock(
         s"staging: $message",
         Vector(
-          "tool"    -> toolName.value,
-          "message" -> message,
+          "tool"       -> toolName.value,
+          "message"    -> message,
           "suggestion" -> "check free space and write permissions on the appsDir parent directory"
         ),
         redactions
@@ -84,10 +93,10 @@ object ToolInstallError:
     case ToolInstallError.ModeApplicationFailed(toolName, path, mode, message) => detailBlock(
         s"mode: $mode for $path: $message",
         Vector(
-          "tool"    -> toolName.value,
-          "path"    -> path,
-          "mode"    -> mode,
-          "message" -> message,
+          "tool"       -> toolName.value,
+          "path"       -> path,
+          "mode"       -> mode,
+          "message"    -> message,
           "suggestion" -> "check the mode is a four-digit octal string and the staged file exists"
         ),
         redactions
@@ -95,8 +104,8 @@ object ToolInstallError:
     case ToolInstallError.ReplacementFailed(toolName, message) => detailBlock(
         s"replacement: $message",
         Vector(
-          "tool"    -> toolName.value,
-          "message" -> message,
+          "tool"       -> toolName.value,
+          "message"    -> message,
           "suggestion" -> "check free space and write permissions on the appsDir parent directory"
         ),
         redactions
@@ -104,10 +113,11 @@ object ToolInstallError:
     case ToolInstallError.ArchiveExtractionFailed(toolName, message) => detailBlock(
         s"archive extraction: $message",
         Vector(
-          "tool"    -> toolName.value,
-          "message" -> message,
-          "suggestion" -> ("check spec.plan[].spec.download.archive.type matches the artifact " +
-            "and that its file and directory mappings exist inside it")
+          "tool"       -> toolName.value,
+          "message"    -> message,
+          "suggestion" ->
+            ("check spec.plan[].spec.download.archive.type matches the artifact " +
+              "and that its file and directory mappings exist inside it")
         ),
         redactions
       )
@@ -116,20 +126,22 @@ object ToolInstallError:
         Vector(
           "tool"          -> toolName.value,
           "expected path" -> path,
-          "suggestion" -> ("check spec.plan[].spec.executables[].path matches the layout inside " +
-            "the downloaded artifact")
+          "suggestion"    ->
+            ("check spec.plan[].spec.executables[].path matches the layout inside " +
+              "the downloaded artifact")
         ),
         redactions
       )
     case ToolInstallError.SymlinkFailed(toolName, path, target, message) => detailBlock(
         s"symlink: $path -> $target: $message",
         Vector(
-          "tool"    -> toolName.value,
-          "path"    -> path,
-          "target"  -> target,
-          "message" -> message,
-          "suggestion" -> ("check the symlink destination directory exists and is writable, " +
-            "or set sudo: true with spec.policy.allowSudoSymlinks: true")
+          "tool"       -> toolName.value,
+          "path"       -> path,
+          "target"     -> target,
+          "message"    -> message,
+          "suggestion" ->
+            ("check the symlink destination directory exists and is writable, " +
+              "or set sudo: true with spec.policy.allowSudoSymlinks: true")
         ),
         redactions
       )
@@ -154,8 +166,9 @@ object ToolInstallError:
           "path"       -> path,
           "target"     -> target,
           "credential" -> message,
-          "suggestion" -> ("re-run from an interactive terminal, or pre-authorize sudo before " +
-            "running binstaller")
+          "suggestion" ->
+            ("re-run from an interactive terminal, or pre-authorize sudo before " +
+              "running binstaller")
         ),
         redactions
       )

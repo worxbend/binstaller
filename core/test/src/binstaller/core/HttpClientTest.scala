@@ -114,7 +114,8 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
         responseHeaders = Map("Content-Length" -> Vector("5"))
       )
       val progress = RecordingBinaryDownloadProgressObserver()
-      val client   = JdkBinaryDownloadClient(StaticHttpClient(finalResponse), hostGuard = _ => Right(()))
+      val client   =
+        JdkBinaryDownloadClient(StaticHttpClient(finalResponse), hostGuard = _ => Right(()))
 
       val result = client.downloadWithProvenance("https://example.invalid/alpha", progress)
 
