@@ -36,12 +36,6 @@ private[core] final class ResolvingBinaryInstallerService(
     val eventContext = InstallerEventContext.start(eventObserver)
     renderSelectedPlanWithEvents(options, eventContext)
 
-  override def applyWithProgress(
-      options: InstallerOptions,
-      progressObserver: BinaryDownloadProgressObserver
-  ): InstallerResult =
-    applyWithEvents(options, InstallerEventObserver.fromDownloadProgress(progressObserver))
-
   def applyWithEvents(
       options: InstallerOptions,
       eventObserver: InstallerEventObserver

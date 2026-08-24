@@ -123,14 +123,6 @@ final class DirectBinaryInstaller(
           serializedEvents
         )
 
-  private def renderedTerminalLines(
-      terminal: TerminalToolResult,
-      redactions: SensitiveValueRedactions
-  ): Vector[String] = terminal match
-    case TerminalToolResult.Completed(_, _, _) =>
-      Vector(TerminalToolResult.line(terminal, redactions))
-    case TerminalToolResult.Failed(_, _) => Vector(TerminalToolResult.line(terminal, redactions))
-
   /** Install a single tool without sudo symlink support. Core-internal (tests/helpers): it takes a
    *  [[ResolvedTool]] directly and so bypasses the PlanResolver appsDir-containment validation the
    *  production path enforces; not part of the public boundary. */
@@ -350,7 +342,7 @@ final class DirectBinaryInstaller(
     val (verbose, result) = finalized
     val terminal          = terminalResult(result, redactions)
     eventContext.emit(toolResultEvent(terminal))
-    val terminalLines = renderedTerminalLines(terminal, redactions)
+    val terminalLines = Vector(TerminalToolResult.line(terminal, redactions))
     terminalObserver(terminal) match
       case Left(message) => observed.copy(
           lines = observed.lines ++ verbose ++ terminalLines,

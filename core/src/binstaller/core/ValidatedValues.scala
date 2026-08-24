@@ -88,18 +88,6 @@ private[core] object NetworkTargetGuard:
     case v4: Inet4Address => (v4.getAddress()(0) & 0xff) == 0
     case _                => false
 
-/** Normalized absolute installation root. */
-final case class InstallRoot private (path: Path)
-
-object InstallRoot:
-
-  def fromString(value: String): Either[String, InstallRoot] =
-    if value.trim.isEmpty then Left("install root must not be empty")
-    else
-      Try(Path.of(value).toAbsolutePath.normalize()).toEither
-        .left.map(error => s"invalid install root: ${error.getMessage}")
-        .map(InstallRoot(_))
-
 /** A syntactically safe relative path that cannot traverse above its root. */
 final case class RelativeInstallPath private (value: String, path: Path)
 
