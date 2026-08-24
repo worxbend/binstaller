@@ -240,7 +240,11 @@ final class DirectBinaryInstaller(
       redactions: SensitiveValueRedactions
   ): Either[ToolInstallError, (StagedInstall, UrlProvenance)] =
     download(tool, eventContext, redactions).flatMap: artifact =>
-      val result =
+      // The downloaded temp file must be deleted on every exit, including a throw out of staging or
+      // out of an event observer. prepareTool deliberately catches NonFatal and turns such a throw
+      // into a Failed result, so without `finally` the throw would skip the discard and silently
+      // leave behind a file of up to the download size cap.
+      try
         for
           // Integrity is checked before staging/replacement so a bad artifact cannot overwrite a
           // previously working install.
@@ -251,8 +255,7 @@ final class DirectBinaryInstaller(
             withPhase(tool, InstallerPhase.Staging, eventContext)(stage(tool, artifact.path))
           _ <- prepareStagedInstall(tool, staged, eventContext)
         yield staged -> artifact.provenance
-      artifact.discard()
-      result
+      finally artifact.discard()
 
   private def prepareStagedInstall(
       tool: ResolvedTool,
