@@ -202,25 +202,14 @@ private[config] object ManifestDecoder:
       )
 
   private def optionalWhen(map: YamlMap, path: String): DecodeResult[Option[WhenClause]] =
-    map.get("when") match
-      case None        => DecodeResult.valid(None)
-      case Some(value) =>
-        DecodeResult.accumulate: acc =>
-          val whenMap = acc(asMap(value, path))
-          acc.report(unknownKeyErrors(whenMap, path, Set("os", "architecture")))
-          val os           = acc(optionalOs(whenMap, s"$path.os"))
-          val architecture = acc(optionalString(whenMap, "architecture", s"$path.architecture"))
-          Some(WhenClause(os, architecture))
+    optionalBlock(map, "when", path, Set("os", "architecture")): (whenMap, acc) =>
+      val os           = acc(optionalOs(whenMap, s"$path.os"))
+      val architecture = acc(optionalString(whenMap, "architecture", s"$path.architecture"))
+      WhenClause(os, architecture)
 
   private def optionalOs(map: YamlMap, path: String): DecodeResult[Option[OsClause]] =
-    map.get("os") match
-      case None        => DecodeResult.valid(None)
-      case Some(value) =>
-        DecodeResult.accumulate: acc =>
-          val osMap = acc(asMap(value, path))
-          acc.report(unknownKeyErrors(osMap, path, Set("family")))
-          val family = acc(optionalString(osMap, "family", s"$path.family"))
-          Some(OsClause(family))
+    optionalBlock(map, "os", path, Set("family")): (osMap, acc) =>
+      OsClause(acc(optionalString(osMap, "family", s"$path.family")))
 
   private def decodeBinaryToolSpec(
       input: DecodeResult[YamlMap],
@@ -274,46 +263,38 @@ private[config] object ManifestDecoder:
       DownloadSpec(url, filename, checksum, archive)
 
   private def optionalChecksum(map: YamlMap, path: String): DecodeResult[Option[ChecksumSpec]] =
-    map.get("checksum") match
-      case None        => DecodeResult.valid(None)
-      case Some(value) =>
-        DecodeResult.accumulate: acc =>
-          val checksumMap = acc(asMap(value, path))
-          acc.report(unknownKeyErrors(checksumMap, path, Set("algorithm", "value", "discover")))
-          val algorithm = acc(enumValue(
-            requiredString(checksumMap, s"$path.algorithm"),
-            s"$path.algorithm",
-            ChecksumAlgorithm.values.toVector,
-            ChecksumAlgorithm.Sha256,
-            _.value
-          ))
-          val checksum = acc(optionalString(checksumMap, "value", s"$path.value"))
-          val discover = acc(optionalChecksumDiscovery(checksumMap, s"$path.discover"))
-          acc.report(checksumShapeErrors(path, checksum, discover))
-          acc.report(checksum.toVector.flatMap(value =>
-            checksumValueErrors(algorithm, value, s"$path.value")
-          ))
-          Some(ChecksumSpec(algorithm, checksum, discover))
+    optionalBlock(map, "checksum", path, Set("algorithm", "value", "discover")):
+      (checksumMap, acc) =>
+        val algorithm = acc(enumValue(
+          requiredString(checksumMap, s"$path.algorithm"),
+          s"$path.algorithm",
+          ChecksumAlgorithm.values.toVector,
+          ChecksumAlgorithm.Sha256,
+          _.value
+        ))
+        val checksum = acc(optionalString(checksumMap, "value", s"$path.value"))
+        val discover = acc(optionalChecksumDiscovery(checksumMap, s"$path.discover"))
+        acc.report(checksumShapeErrors(path, checksum, discover))
+        acc.report(checksum.toVector.flatMap(value =>
+          checksumValueErrors(algorithm, value, s"$path.value")
+        ))
+        ChecksumSpec(algorithm, checksum, discover)
 
   private def optionalChecksumDiscovery(
       map: YamlMap,
       path: String
-  ): DecodeResult[Option[ChecksumDiscoverySpec]] = map.get("discover") match
-    case None        => DecodeResult.valid(None)
-    case Some(value) =>
-      DecodeResult.accumulate: acc =>
-        val sourceMap = acc(asMap(value, path))
-        acc.report(unknownKeyErrors(sourceMap, path, Set("type", "url", "file")))
-        val kind = acc(enumValue(
-          requiredString(sourceMap, s"$path.type"),
-          s"$path.type",
-          ChecksumDiscoveryKind.values.toVector,
-          ChecksumDiscoveryKind.Sha256Sum,
-          _.value
-        ))
-        val url  = acc(requiredString(sourceMap, s"$path.url"))
-        val file = acc(optionalString(sourceMap, "file", s"$path.file"))
-        Some(ChecksumDiscoverySpec(kind, url, file))
+  ): DecodeResult[Option[ChecksumDiscoverySpec]] =
+    optionalBlock(map, "discover", path, Set("type", "url", "file")): (sourceMap, acc) =>
+      val kind = acc(enumValue(
+        requiredString(sourceMap, s"$path.type"),
+        s"$path.type",
+        ChecksumDiscoveryKind.values.toVector,
+        ChecksumDiscoveryKind.Sha256Sum,
+        _.value
+      ))
+      val url  = acc(requiredString(sourceMap, s"$path.url"))
+      val file = acc(optionalString(sourceMap, "file", s"$path.file"))
+      ChecksumDiscoverySpec(kind, url, file)
 
   private def checksumShapeErrors(
       path: String,
@@ -337,21 +318,16 @@ private[config] object ManifestDecoder:
       else Vector(ValidationError(path, "sha256 checksum must be 64 hexadecimal characters"))
 
   private def optionalArchive(map: YamlMap, path: String): DecodeResult[Option[ArchiveSpec]] =
-    map.get("archive") match
-      case None        => DecodeResult.valid(None)
-      case Some(value) =>
-        DecodeResult.accumulate: acc =>
-          val archiveMap = acc(asMap(value, path))
-          acc.report(unknownKeyErrors(archiveMap, path, Set("type", "extract")))
-          val archiveType = acc(enumValue(
-            requiredString(archiveMap, s"$path.type"),
-            s"$path.type",
-            ArchiveType.values.toVector,
-            ArchiveType.Zip,
-            _.value
-          ))
-          val extract = acc(decodeArchiveExtract(requiredMap(archiveMap, s"$path.extract"), path))
-          Some(ArchiveSpec(archiveType, extract))
+    optionalBlock(map, "archive", path, Set("type", "extract")): (archiveMap, acc) =>
+      val archiveType = acc(enumValue(
+        requiredString(archiveMap, s"$path.type"),
+        s"$path.type",
+        ArchiveType.values.toVector,
+        ArchiveType.Zip,
+        _.value
+      ))
+      val extract = acc(decodeArchiveExtract(requiredMap(archiveMap, s"$path.extract"), path))
+      ArchiveSpec(archiveType, extract)
 
   private def decodeArchiveExtract(
       input: DecodeResult[YamlMap],
@@ -374,15 +350,10 @@ private[config] object ManifestDecoder:
       input: DecodeResult[Vector[Any]],
       path: String
   ): DecodeResult[Vector[ExtractMapping]] =
-    DecodeResult.accumulate: acc =>
-      val list = acc(input)
-      list.zipWithIndex.map:
-        case (value, index) =>
-          val item = acc(asMap(value, s"$path[$index]"))
-          acc.report(unknownKeyErrors(item, s"$path[$index]", Set("from", "to")))
-          val from = acc(requiredString(item, s"$path[$index].from"))
-          val to   = acc(requiredString(item, s"$path[$index].to"))
-          ExtractMapping(from, to)
+    decodeItems(input, path, Set("from", "to")): (item, itemPath, acc) =>
+      val from = acc(requiredString(item, s"$itemPath.from"))
+      val to   = acc(requiredString(item, s"$itemPath.to"))
+      ExtractMapping(from, to)
 
   private def unsupportedInstaller(map: YamlMap, path: String): DecodeResult[Unit] =
     map.get("installer") match
@@ -399,33 +370,22 @@ private[config] object ManifestDecoder:
       input: DecodeResult[Vector[Any]],
       specPath: String
   ): DecodeResult[Vector[ExecutableSpec]] =
-    val path = s"$specPath.executables"
-    DecodeResult.accumulate: acc =>
-      val list = acc(input)
-      list.zipWithIndex.map:
-        case (value, index) =>
-          val item = acc(asMap(value, s"$path[$index]"))
-          acc.report(unknownKeyErrors(item, s"$path[$index]", Set("path", "mode")))
-          val file = acc(requiredString(item, s"$path[$index].path"))
-          val mode = acc(optionalMode(item, s"$path[$index].mode"))
-          ExecutableSpec(file, mode)
+    decodeItems(input, s"$specPath.executables", Set("path", "mode")): (item, itemPath, acc) =>
+      val file = acc(requiredString(item, s"$itemPath.path"))
+      val mode = acc(optionalMode(item, s"$itemPath.mode"))
+      ExecutableSpec(file, mode)
 
   private def decodeSymlinks(
       input: DecodeResult[Vector[Any]],
       specPath: String
   ): DecodeResult[Vector[SymlinkSpec]] =
-    val path = s"$specPath.symlinks"
-    DecodeResult.accumulate: acc =>
-      val list = acc(input)
-      list.zipWithIndex.map:
-        case (value, index) =>
-          val item = acc(asMap(value, s"$path[$index]"))
-          acc.report(unknownKeyErrors(item, s"$path[$index]", Set("path", "target", "sudo")))
-          val file   = acc(requiredString(item, s"$path[$index].path"))
-          val target = acc(requiredString(item, s"$path[$index].target"))
-          val sudo = acc(optionalBoolean(item, "sudo", s"$path[$index].sudo", default = false)
-            .map(SymlinkPrivilege.fromBoolean))
-          SymlinkSpec(file, target, sudo)
+    decodeItems(input, s"$specPath.symlinks", Set("path", "target", "sudo")):
+      (item, itemPath, acc) =>
+        val file   = acc(requiredString(item, s"$itemPath.path"))
+        val target = acc(requiredString(item, s"$itemPath.target"))
+        val sudo = acc(optionalBoolean(item, "sudo", s"$itemPath.sudo", default = false)
+          .map(SymlinkPrivilege.fromBoolean))
+        SymlinkSpec(file, target, sudo)
 
   private def optionalMode(map: YamlMap, path: String): DecodeResult[Option[ExecutableMode]] =
     map.get("mode") match
@@ -444,6 +404,49 @@ private[config] object ManifestDecoder:
     case None                 => DecodeResult.valid(None)
     case Some(value: Boolean) => DecodeResult.valid(Some(PolicyOverride.fromBoolean(value)))
     case Some(_)              => DecodeResult.invalid(None, path, "value must be a boolean")
+
+  /** Decode an optional nested block, rejecting unknown keys inside it.
+   *
+   *  Every optional block in this manifest follows the same shape: absent means `None`; present
+   *  means it must be a map, its keys must all be recognised, and only then are its fields read.
+   *  Spelling that out per block is how a new block quietly acquires an unchecked key set — the
+   *  decoder still compiles and still works, it just silently accepts typos, which is the one
+   *  thing this file exists to prevent.
+   */
+  private def optionalBlock[A](
+      map: YamlMap,
+      key: String,
+      path: String,
+      allowed: Set[String]
+  )(decode: (YamlMap, DecodeResult.Accumulator) => A): DecodeResult[Option[A]] =
+    map.get(key) match
+      case None        => DecodeResult.valid(None)
+      case Some(value) =>
+        DecodeResult.accumulate: acc =>
+          val blockMap = acc(asMap(value, path))
+          acc.report(unknownKeyErrors(blockMap, path, allowed))
+          Some(decode(blockMap, acc))
+
+  /** Decode a list of uniform items, rejecting unknown keys inside each one.
+   *
+   *  The item path (`<path>[<index>]`) is built once and handed to the caller, rather than being
+   *  re-interpolated for the item, its unknown-key report and each of its fields — which is where
+   *  an index or a label goes wrong without any test noticing, because the value still decodes
+   *  and only the path in the error message is off.
+   */
+  private def decodeItems[A](
+      input: DecodeResult[Vector[Any]],
+      path: String,
+      allowed: Set[String]
+  )(decodeItem: (YamlMap, String, DecodeResult.Accumulator) => A): DecodeResult[Vector[A]] =
+    DecodeResult.accumulate: acc =>
+      val list = acc(input)
+      list.zipWithIndex.map:
+        case (value, index) =>
+          val itemPath = s"$path[$index]"
+          val item     = acc(asMap(value, itemPath))
+          acc.report(unknownKeyErrors(item, itemPath, allowed))
+          decodeItem(item, itemPath, acc)
 
   private def unknownKeyErrors(
       map: YamlMap,
