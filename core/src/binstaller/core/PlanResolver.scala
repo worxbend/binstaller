@@ -42,6 +42,23 @@ private[core] object ResolvedValue:
   def invalid[A](value: A, path: String, message: String): ResolvedValue[A] =
     ResolvedValue(value, Vector(ValidationError(path, message)))
 
+  /** Combine per-element results, keeping every value and concatenating all errors.
+   *
+   *  Resolution never stops at the first bad field: a user fixing a manifest wants the whole list
+   *  of problems at once, so every element contributes both its value and its errors.
+   */
+  def sequence[A](values: Vector[ResolvedValue[A]]): ResolvedValue[Vector[A]] =
+    ResolvedValue(values.map(_.value), values.flatMap(_.errors))
+
+  /** Combine per-key results into a map, concatenating all errors. */
+  def sequenceMap[A](
+      values: Vector[(String, ResolvedValue[A])]
+  ): ResolvedValue[Map[String, A]] =
+    ResolvedValue(
+      values.map((name, value) => name -> value.value).toMap,
+      values.flatMap((_, value) => value.errors)
+    )
+
 private[core] final class ResolutionBuilder(
     profile: BinaryDistributionProfile,
     options: ResolutionOptions,
@@ -77,10 +94,7 @@ private[core] final class ResolutionBuilder(
       case (name, value) =>
         val path = s"spec.vars.$name"
         name -> interpolate(value, path, options.runtimeVariables ++ rawVars)
-    ResolvedValue(
-      resolved.map((name, value) => name -> value.value).toMap,
-      resolved.flatMap((_, value) => value.errors)
-    )
+    ResolvedValue.sequenceMap(resolved)
 
   private def resolvePolicy(vars: Map[String, String]): ResolvedValue[ResolvedPolicy] =
     val appsDir   = interpolate(profile.spec.policy.appsDir, "spec.policy.appsDir", vars)
@@ -115,10 +129,7 @@ private[core] final class ResolutionBuilder(
   ): ResolvedValue[Map[String, ResolvedVersion]] =
     val resolved = profile.spec.versions.toVector.filter((name, _) => activeVersionRefs(name)).map:
       case (name, source) => name -> resolveVersionSource(name, source, vars)
-    ResolvedValue(
-      resolved.map((name, value) => name -> value.value).toMap,
-      resolved.flatMap((_, value) => value.errors)
-    )
+    ResolvedValue.sequenceMap(resolved)
 
   private def resolveVersionSource(
       name: String,
@@ -180,10 +191,7 @@ private[core] final class ResolutionBuilder(
   ): ResolvedValue[Vector[ResolvedTool]] =
     val resolved = entries.map:
       case (entry, index) => resolveTool(entry, index, baseVars, versions)
-    ResolvedValue(
-      resolved.map(_.value),
-      resolved.flatMap(_.errors)
-    )
+    ResolvedValue.sequence(resolved)
 
   private def matchesHost(entry: PlanEntry): Boolean = entry.when.forall: clause =>
     val osMatches = clause.os.flatMap(_.family).forall: expected =>
@@ -416,7 +424,7 @@ private[core] final class ResolutionBuilder(
             to.errors ++ versionTemplateErrors(mapping.to, toPath, version) ++
             ResolvedPathValidator.archivePath(to.value, toPath, "archive target")
         )
-    ResolvedValue(resolved.map(_.value), resolved.flatMap(_.errors))
+    ResolvedValue.sequence(resolved)
 
   private def resolveExecutables(
       spec: BinaryToolSpec,
@@ -433,7 +441,7 @@ private[core] final class ResolutionBuilder(
           value.errors ++ versionTemplateErrors(executable.path, path, version) ++
             ResolvedPathValidator.installRelativePath(value.value, path, "executable path")
         )
-    ResolvedValue(resolved.map(_.value), resolved.flatMap(_.errors))
+    ResolvedValue.sequence(resolved)
 
   private def resolveSymlinks(
       spec: BinaryToolSpec,
@@ -460,7 +468,7 @@ private[core] final class ResolutionBuilder(
             target.errors ++ versionTemplateErrors(symlink.target, targetPath, version) ++
             ResolvedPathValidator.symlinkTarget(target.value, targetPath, installDir)
         )
-    ResolvedValue(resolved.map(_.value), resolved.flatMap(_.errors))
+    ResolvedValue.sequence(resolved)
 
   private def resolveStringVector(
       values: Vector[String],
@@ -481,7 +489,7 @@ private[core] final class ResolutionBuilder(
               "create directory path"
             )
         )
-    ResolvedValue(resolved.map(_.value), resolved.flatMap(_.errors))
+    ResolvedValue.sequence(resolved)
 
   private def versionTemplateErrors(
       value: String,
