@@ -77,53 +77,25 @@ enum InstallFileSystemError:
 /** Filesystem boundary for staging artifacts before replacing a final install directory. */
 trait InstallFileSystem:
 
-  /** Stage a file-backed direct binary without materializing it in heap. */
+  /** Stage a downloaded binary into a temporary install tree, streaming it from `artifact`.
+   *
+   *  Abstract on purpose. A default that read the artifact into a byte array would let any
+   *  implementation pull a download-cap-sized file into the JVM heap simply by not overriding it.
+   */
   def stageDirectBinaryFromFile(
       installDir: Path,
       createDirectories: Vector[String],
       executablePath: String,
       artifact: Path
-  ): Either[InstallFileSystemError.StagingFailed, StagedInstall] = Try(
-    Files.readAllBytes(artifact)
-  ) match
-    case Failure(error) => Left(InstallFileSystemError.StagingFailed(Diagnostics.describe(error)))
-    case Success(bytes) => stageDirectBinary(installDir, createDirectories, executablePath, bytes)
-
-  /** Stage a direct binary into a temporary install tree. */
-  def stageDirectBinary(
-      installDir: Path,
-      createDirectories: Vector[String],
-      executablePath: String,
-      bytes: Array[Byte]
   ): Either[InstallFileSystemError.StagingFailed, StagedInstall]
 
-  /** Stage files selected from an archive into a temporary install tree. */
-  def stageArchive(
-      installDir: Path,
-      createDirectories: Vector[String],
-      archive: ResolvedArchive,
-      bytes: Array[Byte],
-      commandExecutor: CommandExecutor
-  ): Either[InstallFileSystemError.StagingFailed, StagedInstall]
-
-  /** Stage a file-backed archive without materializing it in heap. */
+  /** Stage the manifest's selected archive members into a temporary install tree, streamed. */
   def stageArchiveFromFile(
       installDir: Path,
       createDirectories: Vector[String],
       archive: ResolvedArchive,
-      artifact: Path,
-      commandExecutor: CommandExecutor
-  ): Either[InstallFileSystemError.StagingFailed, StagedInstall] = Try(
-    Files.readAllBytes(artifact)
-  ) match
-    case Failure(error) => Left(InstallFileSystemError.StagingFailed(Diagnostics.describe(error)))
-    case Success(bytes) => stageArchive(
-        installDir,
-        createDirectories,
-        archive,
-        bytes,
-        commandExecutor
-      )
+      artifact: Path
+  ): Either[InstallFileSystemError.StagingFailed, StagedInstall]
 
   /** Apply requested executable modes inside the staged install tree. */
   def applyExecutableModes(
@@ -170,55 +142,14 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
       installDir: Path,
       createDirectories: Vector[String],
       archive: ResolvedArchive,
-      artifact: Path,
-      commandExecutor: CommandExecutor
+      artifact: Path
   ): Either[InstallFileSystemError.StagingFailed, StagedInstall] =
     val normalizedInstallDir = installDir.toAbsolutePath.normalize()
     createStagingDirectory(normalizedInstallDir).flatMap: stagedInstall =>
       val result: Either[InstallFileSystemError.StagingFailed, Unit] =
         stageCreateDirectories(stagedInstall, createDirectories).flatMap: _ =>
-          ArchiveExtractor.extractFile(
-            archive,
-            artifact,
-            stagedInstall.stagingDir,
-            commandExecutor
-          ).left.map(InstallFileSystemError.StagingFailed.apply)
-      result match
-        case Right(())   => Right(stagedInstall)
-        case Left(error) =>
-          discardStaged(stagedInstall)
-          Left(error)
-
-  def stageDirectBinary(
-      installDir: Path,
-      createDirectories: Vector[String],
-      executablePath: String,
-      bytes: Array[Byte]
-  ): Either[InstallFileSystemError.StagingFailed, StagedInstall] =
-    val normalizedInstallDir = installDir.toAbsolutePath.normalize()
-    createStagingDirectory(normalizedInstallDir).flatMap: stagedInstall =>
-      writeStagedDirectBinary(stagedInstall, createDirectories, executablePath, bytes) match
-        case Right(())   => Right(stagedInstall)
-        case Left(error) =>
-          discardStaged(stagedInstall)
-          Left(error)
-
-  def stageArchive(
-      installDir: Path,
-      createDirectories: Vector[String],
-      archive: ResolvedArchive,
-      bytes: Array[Byte],
-      commandExecutor: CommandExecutor
-  ): Either[InstallFileSystemError.StagingFailed, StagedInstall] =
-    val normalizedInstallDir = installDir.toAbsolutePath.normalize()
-    createStagingDirectory(normalizedInstallDir).flatMap: stagedInstall =>
-      val result: Either[InstallFileSystemError.StagingFailed, Unit] =
-        stageCreateDirectories(stagedInstall, createDirectories) match
-          case Left(error) => Left(error)
-          case Right(())   =>
-            ArchiveExtractor.extract(archive, bytes, stagedInstall.stagingDir, commandExecutor)
-              .left
-              .map(message => InstallFileSystemError.StagingFailed(message))
+          ArchiveExtractor.extractFile(archive, artifact, stagedInstall.stagingDir)
+            .left.map(InstallFileSystemError.StagingFailed.apply)
       result match
         case Right(())   => Right(stagedInstall)
         case Left(error) =>
@@ -291,19 +222,6 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
     case Failure(error) =>
       Left(InstallFileSystemError.StagingFailed(Diagnostics.describe(error)))
 
-  private def writeStagedDirectBinary(
-      stagedInstall: StagedInstall,
-      createDirectories: Vector[String],
-      executablePath: String,
-      bytes: Array[Byte]
-  ): Either[InstallFileSystemError.StagingFailed, Unit] =
-    stageCreateDirectories(stagedInstall, createDirectories).flatMap: _ =>
-      val binaryWrite: Either[String, Unit] =
-        resolveInside(stagedInstall.stagingDir, executablePath).flatMap: path =>
-          writeBinary(path, bytes)
-
-      binaryWrite.left.map(InstallFileSystemError.StagingFailed.apply)
-
   private def stageCreateDirectories(
       stagedInstall: StagedInstall,
       createDirectories: Vector[String]
@@ -352,20 +270,6 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
               Diagnostics.describe(error)
             )
           )
-
-  private def writeBinary(path: Path, bytes: Array[Byte]): Either[String, Unit] = Try:
-    Option(path.getParent).foreach: parent =>
-      Files.createDirectories(parent)
-    val _ = Files.write(
-      path,
-      bytes,
-      StandardOpenOption.CREATE,
-      StandardOpenOption.TRUNCATE_EXISTING,
-      StandardOpenOption.WRITE
-    )
-  match
-    case Success(_)     => Right(())
-    case Failure(error) => Left(Diagnostics.describe(error))
 
   private def copyBinary(source: Path, target: Path): Either[String, Unit] = Try:
     Option(target.getParent).foreach(Files.createDirectories(_))

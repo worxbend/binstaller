@@ -399,21 +399,20 @@ private[core] final class RecordingInstallFileSystem(
 
   def replaceCalls: Int = replacements
 
-  def stageDirectBinary(
+  def stageDirectBinaryFromFile(
       installDir: Path,
       createDirectories: Vector[String],
       executablePath: String,
-      bytes: Array[Byte]
+      artifact: Path
   ): Either[InstallFileSystemError.StagingFailed, StagedInstall] = stageFailure match
     case Some(message) => Left(InstallFileSystemError.StagingFailed(message))
     case None          => stageSuccess(installDir)
 
-  def stageArchive(
+  def stageArchiveFromFile(
       installDir: Path,
       createDirectories: Vector[String],
       archive: ResolvedArchive,
-      bytes: Array[Byte],
-      commandExecutor: CommandExecutor
+      artifact: Path
   ): Either[InstallFileSystemError.StagingFailed, StagedInstall] = stageFailure match
     case Some(message) => Left(InstallFileSystemError.StagingFailed(message))
     case None          => stageSuccess(installDir)

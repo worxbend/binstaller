@@ -2,7 +2,6 @@ package binstaller.core
 
 import binstaller.config.Diagnostics
 
-import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.http.HttpClient
@@ -247,53 +246,6 @@ private[core] object BoundedBinaryBodyReader:
       ) match
         case Success(result) => Right(result)
         case Failure(error)  => Left(BinaryDownloadError(url, Diagnostics.describe(error)))
-
-  def read(
-      url: String,
-      input: InputStream,
-      totalBytes: Option[Long],
-      limits: BinaryDownloadLimits,
-      progressObserver: BinaryDownloadProgressObserver,
-      nowNanos: () => Long = () => System.nanoTime()
-  ): Either[BinaryDownloadError, Array[Byte]] = totalBytes match
-    // Reject oversized declared bodies before reading, then enforce the same limit while reading
-    // because Content-Length can be absent or wrong.
-    case Some(length) if length > limits.maxBytes =>
-      Left(BinaryDownloadError(url, maxSizeMessage(length, limits.maxBytes)))
-    case _ => readBounded(url, input, totalBytes, limits, progressObserver, nowNanos)
-
-  private def readBounded(
-      url: String,
-      input: InputStream,
-      totalBytes: Option[Long],
-      limits: BinaryDownloadLimits,
-      progressObserver: BinaryDownloadProgressObserver,
-      nowNanos: () => Long
-  ): Either[BinaryDownloadError, Array[Byte]] = Try:
-    val deadline = nowNanos() + limits.bodyTimeout.toNanos
-    progressObserver.onProgress(BinaryDownloadProgress.Started(url, totalBytes))
-    val output = ByteArrayOutputStream()
-    val buffer = Array.ofDim[Byte](64 * 1024)
-    var read   = input.read(buffer)
-    var total  = 0L
-
-    while read != -1 do
-      rejectAfterDeadline(nowNanos(), deadline, limits.bodyTimeout)
-      total += read.toLong
-      if total > limits.maxBytes then
-        throw IllegalArgumentException(
-          maxSizeMessage(total, limits.maxBytes)
-        )
-      output.write(buffer, 0, read)
-      progressObserver.onProgress(BinaryDownloadProgress.Advanced(url, total, totalBytes))
-      read = input.read(buffer)
-
-    rejectAfterDeadline(nowNanos(), deadline, limits.bodyTimeout)
-    progressObserver.onProgress(BinaryDownloadProgress.Finished(url, total, totalBytes))
-    output.toByteArray
-  match
-    case Success(bytes) => Right(bytes)
-    case Failure(error) => Left(BinaryDownloadError(url, Diagnostics.describe(error)))
 
   private def rejectAfterDeadline(now: Long, deadline: Long, timeout: Duration): Unit =
     if now > deadline then

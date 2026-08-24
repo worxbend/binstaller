@@ -4,7 +4,6 @@ import binstaller.config.ArchiveType
 import binstaller.config.Diagnostics
 import org.tukaani.xz.XZInputStream
 
-import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.Path
@@ -49,38 +48,16 @@ private[core] object ArchiveExtractor:
   private enum ArchiveKind:
     case Zip, Tar
 
-  def extract(
-      archive: ResolvedArchive,
-      bytes: Array[Byte],
-      stagingDir: Path,
-      commandExecutor: CommandExecutor
-  ): Either[String, Unit] =
-    val _ = commandExecutor // retained for source compatibility with injected filesystem fakes
-    archive.original.archiveType match
-      case ArchiveType.Zip =>
-        streamArchive(archive, stagingDir, ArchiveKind.Zip, () => ByteArrayInputStream(bytes))
-      case ArchiveType.TarGz =>
-        streamArchive(
-          archive,
-          stagingDir,
-          ArchiveKind.Tar,
-          () => GZIPInputStream(ByteArrayInputStream(bytes))
-        )
-      case ArchiveType.TarXz =>
-        streamArchive(
-          archive,
-          stagingDir,
-          ArchiveKind.Tar,
-          () => XZInputStream(ByteArrayInputStream(bytes))
-        )
-
+  /** Extract the manifest's selected members from an archive file into a staging directory.
+   *
+   *  Always streamed from the file: the archive is never held in the JVM heap, so a multi-hundred
+   *  megabyte release artifact costs a buffer rather than its own size.
+   */
   def extractFile(
       archive: ResolvedArchive,
       artifact: Path,
-      stagingDir: Path,
-      commandExecutor: CommandExecutor
+      stagingDir: Path
   ): Either[String, Unit] =
-    val _ = commandExecutor // retained for source compatibility with injected filesystem fakes
     archive.original.archiveType match
       case ArchiveType.Zip =>
         streamArchive(archive, stagingDir, ArchiveKind.Zip, () => Files.newInputStream(artifact))

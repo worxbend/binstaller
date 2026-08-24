@@ -434,8 +434,7 @@ final class DirectBinaryInstaller(
           Path.of(tool.installDir),
           tool.createDirectories,
           archive,
-          artifact,
-          commandExecutor
+          artifact
         )
         .left
         .map(error => ToolInstallError.ArchiveExtractionFailed(tool.name, error.message))

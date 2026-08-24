@@ -9,6 +9,7 @@ import binstaller.config.SymlinkPrivilege
 import utest.*
 
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.net.InetAddress
 import java.nio.charset.StandardCharsets
@@ -505,10 +506,11 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
           assert(progress.urls.distinct == Vector("https://cdn.example.invalid/alpha"))
         case Left(error) => abort(s"expected binary response, got $error")
 
-    test("bounded body reader rejects oversized content length before buffering"):
-      val result = BoundedBinaryBodyReader.read(
+    test("bounded body writer rejects oversized content length before buffering"):
+      val result = BoundedBinaryBodyReader.write(
         "https://example.invalid/alpha",
         ByteArrayInputStream("abc".getBytes(StandardCharsets.UTF_8)),
+        ByteArrayOutputStream(),
         Some(11L),
         BinaryDownloadLimits(maxBytes = 10L, bodyTimeout = Duration.ofSeconds(5)),
         BinaryDownloadProgressObserver.none
@@ -516,10 +518,11 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       assert(result.left.exists(_.message.contains("exceeds max allowed 10 bytes")))
 
-    test("bounded body reader stops downloads that exceed max size without content length"):
-      val result = BoundedBinaryBodyReader.read(
+    test("bounded body writer stops downloads that exceed max size without content length"):
+      val result = BoundedBinaryBodyReader.write(
         "https://example.invalid/alpha",
         ByteArrayInputStream("oversized-body".getBytes(StandardCharsets.UTF_8)),
+        ByteArrayOutputStream(),
         None,
         BinaryDownloadLimits(maxBytes = 4L, bodyTimeout = Duration.ofSeconds(5)),
         BinaryDownloadProgressObserver.none
@@ -527,11 +530,12 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       assert(result.left.exists(_.message.contains("exceeds max allowed 4 bytes")))
 
-    test("bounded body reader fails when body read exceeds deadline"):
+    test("bounded body writer fails when body read exceeds deadline"):
       var now    = 0L
-      val result = BoundedBinaryBodyReader.read(
+      val result = BoundedBinaryBodyReader.write(
         "https://example.invalid/alpha",
         ByteArrayInputStream("abcdef".getBytes(StandardCharsets.UTF_8)),
+        ByteArrayOutputStream(),
         None,
         BinaryDownloadLimits(maxBytes = 1024L, bodyTimeout = Duration.ofNanos(1)),
         BinaryDownloadProgressObserver.none,
@@ -1717,11 +1721,15 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       )
       val _ = Files.setLastModifiedTime(staleOrphan, twoHoursAgo)
 
-      val staged = InstallFileSystem.nio.stageDirectBinary(
+      // The artifact lives outside tempRoot so it cannot be mistaken for one of the orphaned
+      // staging siblings this test is asserting about.
+      val artifact = Files.createTempFile("binstaller-core-sweep-artifact", ".bin")
+      Files.writeString(artifact, "alpha")
+      val staged = InstallFileSystem.nio.stageDirectBinaryFromFile(
         installDir,
         Vector.empty,
         "bin/alpha",
-        "alpha".getBytes(StandardCharsets.UTF_8)
+        artifact
       )
 
       assert(staged.isRight)
