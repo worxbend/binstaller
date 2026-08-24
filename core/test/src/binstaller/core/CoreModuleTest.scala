@@ -24,9 +24,6 @@ import upickle.default.write
 object CoreModuleTest extends TestSuite with CoreTestSupport:
 
   val tests: Tests = Tests:
-    test("module path includes config before core"):
-      assert(CoreModule.modulePath == Vector("config", "core"))
-
     test("https url validation accepts uppercase scheme and public hosts"):
       assert(HttpsUrl.fromString("HTTPS://example.com/tool.tar.gz").isRight)
       assert(HttpsUrl.fromString("https://example.com/tool.tar.gz").isRight)

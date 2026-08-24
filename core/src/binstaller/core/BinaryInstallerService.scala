@@ -1,6 +1,28 @@
 package binstaller.core
 
-/** Boundary service consumed by CLI commands and tests. */
+/** The entry point to binstaller's core. Start here.
+ *
+ *  Everything a caller needs is four commands, each taking an [[InstallerOptions]] describing which
+ *  manifest to read and how to behave, and each returning an [[InstallerResult]] with the rendered
+ *  output lines and a process exit code:
+ *
+ *    - [[plan]] resolves the manifest and renders what would happen. It writes nothing.
+ *    - [[apply]] performs the install.
+ *    - [[versions]] reports the resolved version of each tool, and a newer one where known.
+ *    - [[lock]] resolves the manifest and writes reproducible lock metadata.
+ *
+ *  `plan` and `apply` each have a `WithEvents` variant ([[planWithEvents]], [[applyWithEvents]])
+ *  taking an [[InstallerEventObserver]]. The plain forms are those variants with a no-op observer.
+ *  Use a `WithEvents` form to drive progress output: core emits renderer-agnostic lifecycle events
+ *  and never decides how they are displayed, which is what keeps terminal formatting out of the
+ *  install logic. [[applyWithProgress]] is a narrower convenience for callers that only care about
+ *  download progress.
+ *
+ *  Build the production implementation with `BinaryInstallerService.resolving(httpTextClient)`.
+ *  The other `resolving` overloads exist to substitute one boundary at a time — the installer, the
+ *  state store, the metadata client, the lock-file store, the host platform — and default to the
+ *  production wiring for everything a caller does not override.
+ */
 trait BinaryInstallerService:
 
   /** Render a script-friendly install plan without events. */

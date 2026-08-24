@@ -21,9 +21,6 @@ import java.util.concurrent.Callable
 
 /** Picocli-backed command boundary for the `binstaller` process. */
 object CliModule:
-  /** Module path used by app and tests to identify the CLI layer. */
-  def modulePath: Vector[String] = Vector("config", "core", "cli")
-
   /** Run the CLI with process stdout/stderr. */
   def run(args: Vector[String]): Int = run(
     args,

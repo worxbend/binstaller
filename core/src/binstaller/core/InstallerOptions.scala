@@ -1,12 +1,5 @@
 package binstaller.core
 
-import binstaller.config.ConfigModule
-
-/** Public module metadata for core planning and apply behavior. */
-object CoreModule:
-  /** Module path used by downstream modules to report dependency lineage. */
-  def modulePath: Vector[String] = Vector(ConfigModule.moduleName, "core")
-
 /** Whether apply should ignore a saved execution state file. */
 enum ResetState:
   case Enabled, Disabled

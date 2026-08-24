@@ -34,9 +34,6 @@ import java.util.concurrent.TimeUnit
 object CliModuleTest extends TestSuite:
 
   val tests: Tests = Tests:
-    test("module path includes upstream modules"):
-      assert(CliModule.modulePath == Vector("config", "core", "cli"))
-
     test("terminal password conversion copies and clears the mutable input buffer"):
       val chars  = "secret".toCharArray
       val result = TerminalSudoCredentialProvider.passwordFromChars(Some(chars))

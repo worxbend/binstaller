@@ -4,9 +4,6 @@ import java.nio.file.Path
 
 /** Public entrypoint for loading binstaller YAML profiles into typed manifest models. */
 object ConfigModule:
-  /** Stable module name used by downstream module path reporting. */
-  val moduleName: String = "config"
-
   /** Load and validate a profile from a filesystem path string. */
   def load(path: String): Either[ConfigLoadError, BinaryDistributionProfile] =
     ConfigLoader.load(Path.of(path))

@@ -8,9 +8,6 @@ import java.nio.file.Path
 object ConfigModuleTest extends TestSuite:
 
   val tests: Tests = Tests:
-    test("module exposes its name"):
-      assert(ConfigModule.moduleName == "config")
-
     test("config example loads into typed manifest"):
       val profile = exampleProfile
 
