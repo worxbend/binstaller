@@ -85,7 +85,15 @@ final class DirectBinaryInstaller(
         then InstallerRunStatus.Failed
         else InstallerRunStatus.Succeeded
 
-      InstallerResult(lines, status, terminalResults = observed.results)
+      InstallerResult(
+        lines,
+        status,
+        terminalResults = observed.results,
+        // Rendered with the same redactions used to build `lines`, so these texts are the very
+        // strings that appear there -- a renderer can match on them rather than parse them.
+        renderedTerminalLines =
+          observed.results.map(TerminalToolResult.renderedLine(_, plan.redactions))
+      )
 
   private def preflight(plan: ResolvedPlan): Option[ApplyPreflightError] = plan.tools
     .find(_.symlinks.exists(_.privilege == SymlinkPrivilege.Sudo))

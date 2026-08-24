@@ -2143,6 +2143,23 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
           )
         ))
 
+    test("rendered terminal lines pair each apply line with its status"):
+      val tempRoot = Files.createTempDirectory("binstaller-core-rendered-lines")
+      val config   = writeConfig(tempRoot, twoToolYaml(tempRoot, "rendered.state.json"))
+      val service  = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
+
+      val result = service.apply(applyOptions(config))
+
+      // Each paired text must be one of the lines actually printed, so a renderer can match on it
+      // rather than re-derive it, and the statuses must line up with the terminal results.
+      assert(result.renderedTerminalLines.nonEmpty)
+      assert(result.renderedTerminalLines.forall(rendered => result.lines.contains(rendered.text)))
+      assert(result.renderedTerminalLines.size == result.terminalResults.size)
+      assert(result.renderedTerminalLines.map(_.status) == result.terminalResults.map:
+        case _: TerminalToolResult.Completed => ToolResultStatus.Completed
+        case _: TerminalToolResult.Failed    => ToolResultStatus.Failed
+      )
+
     test("apply state status remains serialized as a stable string"):
       val state = ApplyState.empty("profile", "fingerprint").copy(tools =
         Vector(ApplyStateTool(

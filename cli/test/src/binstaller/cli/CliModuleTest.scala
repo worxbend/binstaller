@@ -413,6 +413,28 @@ object CliModuleTest extends TestSuite:
       assert(result.out.contains("installed alpha"))
       assert(result.out.contains("✨ Summary"))
 
+    test("apply colours result lines by their status, not by their wording"):
+      // The colour must come from the typed status core pairs with each rendered line. A prefix
+      // test on the text would keep passing here while silently losing its colour the moment core
+      // reworded "installed " or "failed ".
+      val tempRoot = Files.createTempDirectory("binstaller-cli-result-colour")
+      val appsDir  = tempRoot.resolve("apps")
+      val config   = writeConfig(tempRoot, progressYaml(appsDir))
+      val service  = BinaryInstallerService.resolving(
+        FakeHttpTextClient("v1.34.0"),
+        DirectBinaryInstaller(
+          ProgressBinaryDownloadClient("alpha-binary".getBytes),
+          InstallFileSystem.nio
+        )
+      )
+
+      val result = runCli(Vector("apply", "--config", config.toString), service)
+
+      assert(result.exitCode == 0)
+      // The green escape must sit immediately before the text, i.e. the line itself is coloured.
+      val greenPrefix = fansi.Color.Green("x").toString.takeWhile(_ != 'x')
+      assert(result.out.contains(s"${greenPrefix}installed alpha"))
+
     test("apply renders overlapping downloads as separate progress lines"):
       val tempRoot = Files.createTempDirectory("binstaller-cli-parallel-progress")
       val appsDir  = tempRoot.resolve("apps")

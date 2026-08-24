@@ -295,7 +295,8 @@ private[cli] final class ApplyCommand(
           val result        = service.applyWithEvents(options, eventRenderer)
           eventRenderer.finish()
           result.copy(lines =
-            CliApplyOutput.colorLines(result.lines, outputStyle) ++ eventRenderer.summaryLines
+            CliApplyOutput.colorLines(result.lines, result.renderedTerminalLines, outputStyle) ++
+              eventRenderer.summaryLines
           )
       )
 

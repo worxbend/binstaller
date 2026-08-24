@@ -4,7 +4,9 @@ import binstaller.core.DownloadProgressStatus
 import binstaller.core.InstallerEvent
 import binstaller.core.InstallerEventObserver
 import binstaller.core.InstallerRunStatus
+import binstaller.core.RenderedTerminalLine
 import binstaller.core.RenderSafety
+import binstaller.core.ToolResultStatus
 
 import java.io.PrintWriter
 import java.net.URI
@@ -258,15 +260,24 @@ private[cli] final case class ProgressLine(plain: String, styled: String):
 
 private[cli] object CliApplyOutput:
 
+  /** Colour the apply lines that report a tool's outcome, leaving every other line alone.
+   *
+   *  Which lines those are is decided by looking them up among the rendered terminal lines core
+   *  hands back, each already paired with its status -- not by testing the text for a prefix. A
+   *  prefix test silently loses its colour the moment core rewords a message, and would colour
+   *  any future line that happens to begin the same way.
+   */
   def colorLines(
       lines: Vector[String],
+      renderedTerminalLines: Vector[RenderedTerminalLine],
       outputStyle: CliOutputStyle = CliOutputStyle.Ansi
-  ): Vector[String] = lines.map(colorLine(_, outputStyle))
-
-  private def colorLine(line: String, outputStyle: CliOutputStyle): String =
-    if line.startsWith("installed ") then outputStyle.color(line)(fansi.Color.Green)
-    else if line.startsWith("failed ") then outputStyle.color(line)(fansi.Color.Red)
-    else line
+  ): Vector[String] =
+    val statusByText = renderedTerminalLines.map(rendered => rendered.text -> rendered.status).toMap
+    lines.map: line =>
+      statusByText.get(line) match
+        case Some(ToolResultStatus.Completed) => outputStyle.color(line)(fansi.Color.Green)
+        case Some(ToolResultStatus.Failed)    => outputStyle.color(line)(fansi.Color.Red)
+        case None                             => line
 
   def summary(
       event: InstallerEvent.Summary,

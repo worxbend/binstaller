@@ -75,7 +75,8 @@ final case class InstallerResult(
     lines: Vector[String],
     status: InstallerRunStatus,
     terminalResults: Vector[TerminalToolResult] = Vector.empty,
-    skippedTools: Int = 0
+    skippedTools: Int = 0,
+    renderedTerminalLines: Vector[RenderedTerminalLine] = Vector.empty
 )
 
 /** Tool selection requested by `--only` and `--skip`. */
