@@ -1,6 +1,5 @@
 package binstaller.core
 
-import binstaller.config.ConfigModule
 
 import java.nio.file.Path
 
@@ -26,7 +25,8 @@ private[core] final class ResolvingBinaryInstallerService(
     installer: DirectBinaryInstaller,
     stateStore: ApplyStateStore,
     metadataClient: BinaryMetadataClient,
-    lockFileStore: LockFileStore
+    lockFileStore: LockFileStore,
+    profileSource: ProfileSource
 ) extends BinaryInstallerService:
 
   def planWithEvents(
@@ -127,7 +127,7 @@ private[core] final class ResolvingBinaryInstallerService(
 
   private def resolveFromOptions(
       options: InstallerOptions
-  ): Either[ResolvePlanError, PreparedPlan] = ConfigModule.load(options.configPath) match
+  ): Either[ResolvePlanError, PreparedPlan] = profileSource.load(options.configPath) match
     case Left(error)    => Left(ResolvePlanError.ConfigLoadFailed(error))
     case Right(profile) => PlanResolver.resolve(profile, resolutionOptions, httpTextClient).map:
         plan =>

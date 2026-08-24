@@ -42,10 +42,16 @@ happens.
 ## Data Flow
 
 1. CLI parses command flags into `InstallerOptions`.
-2. `ConfigModule.load` reads YAML into `BinaryDistributionProfile`.
+2. `ProfileSource` turns the configured manifest location into a
+   `BinaryDistributionProfile`. The production implementation
+   (`ProfileSource.yamlFile`) delegates to `ConfigModule.load`; tests can
+   substitute `ProfileSource.yamlText` to resolve a manifest without touching
+   the filesystem.
 3. `PlanResolver` resolves runtime variables, manifest vars, policy paths,
    version sources, download URLs, archive mappings, executable paths, and
-   symlinks into `ResolvedPlan`.
+   symlinks into `ResolvedPlan`. Host OS and architecture — which decide the
+   `when:` selectors — are an explicit `ResolutionOptions` input with no
+   default; only `ResolutionOptions.fromEnvironment()` detects them.
 4. `ToolSelection` applies `--only` first and `--skip` second while preserving
    manifest order.
 5. `plan` renders the selected `ResolvedPlan` directly as script-friendly text.

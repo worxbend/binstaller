@@ -85,20 +85,25 @@ object BinaryInstallerService:
     resolving(httpTextClient, DirectBinaryInstaller.default(sudoCredentials))
 
   /** Create a resolving service with an injected installer and optionally-overridden state, lock
-   *  metadata, and lock-file storage boundaries. Defaults reproduce the production wiring, so
-   *  callers override only the boundaries a given test needs. */
+   *  metadata, lock-file storage, host-platform, and manifest-source boundaries.
+   *
+   *  Every default reproduces the production wiring, so a caller overrides only the one boundary it
+   *  needs. `profileSource = ProfileSource.yamlText(...)` in particular lets a test drive a whole
+   *  command from an in-memory manifest, without a temporary directory. */
   def resolving(
       httpTextClient: HttpTextClient,
       installer: DirectBinaryInstaller,
       stateStore: ApplyStateStore = ApplyStateStore.cwd,
       metadataClient: BinaryMetadataClient = BinaryMetadataClient.jdk,
       lockFileStore: LockFileStore = LockFileStore.nio,
-      resolutionOptions: ResolutionOptions = ResolutionOptions.fromEnvironment()
+      resolutionOptions: ResolutionOptions = ResolutionOptions.fromEnvironment(),
+      profileSource: ProfileSource = ProfileSource.yamlFile
   ): BinaryInstallerService = ResolvingBinaryInstallerService(
     httpTextClient,
     resolutionOptions,
     installer,
     stateStore,
     metadataClient,
-    lockFileStore
+    lockFileStore,
+    profileSource
   )

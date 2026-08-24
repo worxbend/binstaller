@@ -9,29 +9,42 @@ import binstaller.config.PolicyMode
 import binstaller.config.SymlinkPrivilege
 import binstaller.config.ValidationError
 
-/** Variable-resolution inputs and display redaction policy for manifest resolution. */
+/** Variable-resolution inputs and display redaction policy for manifest resolution.
+ *
+ *  `hostPlatform` has no default on purpose. It decides which `when:` selectors match, so a
+ *  defaulted value would let a caller silently bind the JVM's ambient OS and architecture while
+ *  appearing to specify its inputs — and a plan that quietly depends on the machine that resolved
+ *  it is a plan that behaves differently in CI than on a laptop.
+ */
 final case class ResolutionOptions(
     runtimeVariables: Map[String, String],
     redactions: SensitiveValueRedactions,
-    hostPlatform: HostPlatform = HostPlatform.current
+    hostPlatform: HostPlatform
 )
 
 /** Resolution option constructors. */
 object ResolutionOptions:
 
   /** Build options from explicit runtime variables and derive sensitive-value redactions. */
-  def apply(runtimeVariables: Map[String, String]): ResolutionOptions = ResolutionOptions(
+  def apply(
+      runtimeVariables: Map[String, String],
+      hostPlatform: HostPlatform
+  ): ResolutionOptions = ResolutionOptions(
     runtimeVariables,
     SensitiveValueRedactions.fromRuntimeVariables(runtimeVariables),
-    HostPlatform.current
+    hostPlatform
   )
 
   /**
    * Build options from a deliberately small, non-secret environment allowlist. Arbitrary process
    * environment values are not exposed to manifest URL interpolation.
+   *
+   * This is the one function that reads ambient process state: the environment allowlist and the
+   * host OS/architecture are both detected here and nowhere else.
    */
   def fromEnvironment(): ResolutionOptions = ResolutionOptions(
-    sys.env.view.filterKeys(RuntimeTemplateEnvironment.allowed).toMap
+    sys.env.view.filterKeys(RuntimeTemplateEnvironment.allowed).toMap,
+    HostPlatform.current
   )
 
 private[core] object RuntimeTemplateEnvironment:

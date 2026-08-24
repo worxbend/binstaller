@@ -294,6 +294,21 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
 
       assert(errors.count(errorAt("spec.plan[0].spec.download.filename")) == 1)
 
+    test("a plan renders from an in-memory manifest, without touching the filesystem"):
+      // The manifest source is a boundary like every other. A configPath that does not exist
+      // proves the use case never reaches the disk to find one.
+      val service = BinaryInstallerService.resolving(
+        FakeHttpTextClient(""),
+        DirectBinaryInstaller(RoutingBinaryDownloadClient.success, InstallFileSystem.nio),
+        resolutionOptions = testResolutionOptions,
+        profileSource = ProfileSource.yamlText(shellSyntaxYaml)
+      )
+
+      val result = service.plan(applyOptions(Path.of("/nonexistent/never-read.yaml")))
+
+      assert(result.status == InstallerRunStatus.Succeeded)
+      assert(result.lines.exists(_.contains("alpha")))
+
     test("shell command substitution is text and is never executed"):
       val plan = resolve(shellSyntaxYaml)
 
