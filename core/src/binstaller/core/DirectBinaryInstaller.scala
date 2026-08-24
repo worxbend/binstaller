@@ -5,7 +5,6 @@ import binstaller.config.ChecksumAlgorithm
 import binstaller.config.Diagnostics
 import binstaller.config.SymlinkPrivilege
 
-import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
 import ox.channels.BufferCapacity
@@ -36,7 +35,7 @@ private[core] enum PreparedToolResult:
 /** Installer that applies resolved direct-binary and archive-backed tools. */
 final class DirectBinaryInstaller(
     downloadClient: BinaryDownloadClient,
-    fileSystem: InstallFileSystem,
+    private[core] val fileSystem: InstallFileSystem,
     commandExecutor: CommandExecutor = CommandExecutor.process,
     sudoCredentials: SudoCredentialProvider = SudoCredentialProvider.unavailable
 ):
@@ -265,7 +264,7 @@ final class DirectBinaryInstaller(
     val result =
       for
         _ <- withPhase(tool, InstallerPhase.VerifyingExecutables, eventContext)(
-          verifyStagedExecutables(tool, stagedInstall)
+          verifyExecutablesUnder(tool, stagedInstall.stagingDir)
         )
         _ <- withPhase(tool, InstallerPhase.ApplyingModes, eventContext)(
           applyModes(tool, stagedInstall)
@@ -329,7 +328,7 @@ final class DirectBinaryInstaller(
       _ <-
         withPhase(tool, InstallerPhase.ReplacingInstall, eventContext)(replace(tool, stagedInstall))
       _ <- withPhase(tool, InstallerPhase.VerifyingExecutables, eventContext)(
-        verifyExecutables(tool)
+        verifyExecutablesUnder(tool, Path.of(tool.installDir))
       )
       _ <- withPhase(tool, InstallerPhase.CreatingSymlinks, eventContext)(
         SymlinkInstaller.create(policy, tool, commandExecutor, sudoCredentials)
@@ -466,48 +465,30 @@ final class DirectBinaryInstaller(
   ): Either[ToolInstallError, Unit] = fileSystem.replaceInstall(stagedInstall).left.map: error =>
     ToolInstallError.ReplacementFailed(tool.name, error.message)
 
-  private def verifyExecutables(tool: ResolvedTool): Either[ToolInstallError, Unit] =
-    tool.executables
-      .map: executable =>
-        resolveInsideInstall(tool, executable.path).flatMap: path =>
-          if Files.isRegularFile(path) then Right(())
-          else Left(ToolInstallError.MissingExecutable(tool.name, executable.path))
-      .collectFirst:
-        case Left(error) => error
-    match
-      case Some(error) => Left(error)
-      case None        => Right(())
-
-  private def verifyStagedExecutables(
+  /** Fails on the first declared executable that is not a regular file under `root`.
+   *
+   *  One rule, two roots: the staging tree before the install is swapped in, and the final install
+   *  directory afterwards. Previously each root had its own copy of the rule plus its own path
+   *  resolver, so a change to what counts as a valid executable had to be made in four places.
+   *
+   *  `.iterator` keeps the scan lazy, so it stops at the first failure rather than stat-ing every
+   *  remaining path.
+   */
+  private def verifyExecutablesUnder(
       tool: ResolvedTool,
-      stagedInstall: StagedInstall
-  ): Either[ToolInstallError, Unit] = tool.executables
+      root: Path
+  ): Either[ToolInstallError, Unit] = tool.executables.iterator
     .map: executable =>
-      resolveInsideStaging(tool, stagedInstall, executable.path).flatMap: path =>
-        if Files.isRegularFile(path) then Right(())
-        else Left(ToolInstallError.MissingExecutable(tool.name, executable.path))
+      SafePaths
+        .resolveInside(root, executable.path)
+        .left.map(message => ToolInstallError.StagingFailed(tool.name, message))
+        .flatMap: path =>
+          if fileSystem.isRegularFile(path) then Right(())
+          else Left(ToolInstallError.MissingExecutable(tool.name, executable.path))
     .collectFirst:
       case Left(error) => error
-  match
-    case Some(error) => Left(error)
-    case None        => Right(())
+    .toLeft(())
 
-  private def resolveInsideStaging(
-      tool: ResolvedTool,
-      stagedInstall: StagedInstall,
-      relative: String
-  ): Either[ToolInstallError, Path] =
-    SafePaths.resolveInside(stagedInstall.stagingDir, relative).left.map: message =>
-      ToolInstallError.StagingFailed(tool.name, message)
-
-  private def resolveInsideInstall(
-      tool: ResolvedTool,
-      relative: String
-  ): Either[ToolInstallError, Path] =
-    SafePaths.resolveInside(Path.of(tool.installDir), relative).left.map: message =>
-      ToolInstallError.StagingFailed(tool.name, message)
-
-/** Constructors for the production binary installer. */
 object DirectBinaryInstaller:
 
   /** Production installer wired to JDK downloads, NIO staging, and bounded process execution. */

@@ -61,7 +61,14 @@ private[core] final class ResolvingBinaryInstallerService(
               _
             ))
             val result =
-              StatefulApplyRunner.run(options, lockedPrepared, installer, stateStore, eventContext)
+              StatefulApplyRunner.run(
+                options,
+                lockedPrepared,
+                installer,
+                installer.fileSystem,
+                stateStore,
+                eventContext
+              )
             emitSummary(result, statePath, eventContext)
             result
 

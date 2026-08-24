@@ -97,6 +97,14 @@ trait InstallFileSystem:
       artifact: Path
   ): Either[InstallFileSystemError.StagingFailed, StagedInstall]
 
+  /** Whether the path is an existing regular file. */
+  def isRegularFile(path: Path): Boolean = Files.isRegularFile(path)
+
+  /** Raw target of a symbolic link, or `None` when the path is not a readable symlink. */
+  def symlinkTarget(path: Path): Option[Path] =
+    if !Files.isSymbolicLink(path) then None
+    else Try(Files.readSymbolicLink(path)).toOption
+
   /** Apply requested executable modes inside the staged install tree. */
   def applyExecutableModes(
       stagedInstall: StagedInstall,

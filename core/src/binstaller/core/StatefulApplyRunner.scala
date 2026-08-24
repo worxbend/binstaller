@@ -1,8 +1,6 @@
 package binstaller.core
 
-import java.nio.file.Files
 import java.nio.file.Path
-import scala.util.Try
 
 private[core] object StatefulApplyRunner:
 
@@ -10,6 +8,7 @@ private[core] object StatefulApplyRunner:
       options: InstallerOptions,
       prepared: PreparedPlan,
       installer: DirectBinaryInstaller,
+      fileSystem: InstallFileSystem,
       stateStore: ApplyStateStore,
       eventContext: InstallerEventContext
   ): InstallerResult = statePath(options, prepared.plan) match
@@ -36,7 +35,16 @@ private[core] object StatefulApplyRunner:
             1
           )
         case Right((statePath, state)) =>
-          runWithState(statePath, state, prepared, options, installer, stateStore, eventContext)
+          runWithState(
+            statePath,
+            state,
+            prepared,
+            options,
+            installer,
+            fileSystem,
+            stateStore,
+            eventContext
+          )
 
   private def statePath(options: InstallerOptions, plan: ResolvedPlan): Option[String] =
     options.statePath.orElse(plan.policy.stateFile)
@@ -87,10 +95,11 @@ private[core] object StatefulApplyRunner:
       prepared: PreparedPlan,
       options: InstallerOptions,
       installer: DirectBinaryInstaller,
+      fileSystem: InstallFileSystem,
       stateStore: ApplyStateStore,
       eventContext: InstallerEventContext
   ): InstallerResult =
-    val completed = prepared.plan.tools.filter(tool => completedAndPresent(state, tool))
+    val completed = prepared.plan.tools.filter(tool => completedAndPresent(state, tool, fileSystem))
       .map(_.name)
       .toSet
     val pendingTools = prepared.plan.tools.filterNot(tool => completed(tool.name))
@@ -126,20 +135,41 @@ private[core] object StatefulApplyRunner:
 
     result.copy(lines = skippedLines ++ result.lines, skippedTools = skippedLines.size)
 
-  private def completedAndPresent(state: ApplyState, tool: ResolvedTool): Boolean = state.tools
+  /** Whether a tool recorded as completed is still actually installed.
+   *
+   *  This is a business rule — "may apply skip this tool?" — so it asks the injected
+   *  [[InstallFileSystem]] rather than `java.nio.file.Files` directly. Probing the real disk here
+   *  meant a test supplying an in-memory filesystem still had its skip decision made by whatever
+   *  happened to exist on the machine running the test.
+   */
+  private def completedAndPresent(
+      state: ApplyState,
+      tool: ResolvedTool,
+      fileSystem: InstallFileSystem
+  ): Boolean = state.tools
     .find(_.name == tool.name)
     .exists: saved =>
       saved.status == ApplyStateToolStatus.Completed &&
         saved.installDir.contains(tool.installDir) &&
-        tool.executables.forall(executable => installedFileExists(tool, executable.path)) &&
-        tool.symlinks.forall(symlink => installedSymlinkMatches(tool, symlink))
+        tool.executables.forall(executable =>
+          installedFileExists(tool, executable.path, fileSystem)
+        ) &&
+        tool.symlinks.forall(symlink => installedSymlinkMatches(tool, symlink, fileSystem))
 
-  private def installedFileExists(tool: ResolvedTool, relative: String): Boolean =
+  private def installedFileExists(
+      tool: ResolvedTool,
+      relative: String,
+      fileSystem: InstallFileSystem
+  ): Boolean =
     val root     = Path.of(tool.installDir).toAbsolutePath.normalize()
     val resolved = root.resolve(relative).normalize()
-    resolved.startsWith(root) && Files.isRegularFile(resolved)
+    resolved.startsWith(root) && fileSystem.isRegularFile(resolved)
 
-  private def installedSymlinkMatches(tool: ResolvedTool, symlink: ResolvedSymlink): Boolean =
+  private def installedSymlinkMatches(
+      tool: ResolvedTool,
+      symlink: ResolvedSymlink,
+      fileSystem: InstallFileSystem
+  ): Boolean =
     val installRoot = Path.of(tool.installDir).toAbsolutePath.normalize()
     val rawPath     = Path.of(symlink.path)
     val path        =
@@ -148,15 +178,13 @@ private[core] object StatefulApplyRunner:
     val expected  =
       if rawTarget.isAbsolute then rawTarget.normalize()
       else installRoot.resolve(rawTarget).normalize()
-    if !Files.isSymbolicLink(path) then false
-    else
-      Try:
-        val actualRaw = Files.readSymbolicLink(path)
-        val actual    =
-          if actualRaw.isAbsolute then actualRaw.normalize()
-          else Option(path.getParent).getOrElse(installRoot).resolve(actualRaw).normalize()
-        actual == expected
-      .getOrElse(false)
+    // A path that is not a symlink and one whose target cannot be read both yield None, which is
+    // the same "does not match" answer the explicit guard plus Try(...).getOrElse(false) gave.
+    fileSystem.symlinkTarget(path).exists: actualRaw =>
+      val actual =
+        if actualRaw.isAbsolute then actualRaw.normalize()
+        else Option(path.getParent).getOrElse(installRoot).resolve(actualRaw).normalize()
+      actual == expected
 
   private def updateState(state: ApplyState, result: TerminalToolResult): ApplyState =
     val updatedTool = result match
