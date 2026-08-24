@@ -265,6 +265,16 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(errors.exists(_.message.contains("unresolved variable 'MISSING'")))
       assert(errors.exists(_.message.contains("no concrete version is available")))
 
+    test("a failing download.filename is reported once, not once per resolver"):
+      // `filename` is resolved inside the download block; nothing above it may resolve it a
+      // second time, or every filename problem reaches the user twice.
+      val errors = resolveErrors(invalidVariablesYaml.replace(
+        "          filename: alpha",
+        """          filename: "${MISSING}""""
+      ))
+
+      assert(errors.count(errorAt("spec.plan[0].spec.download.filename")) == 1)
+
     test("shell command substitution is text and is never executed"):
       val plan = resolve(shellSyntaxYaml)
 

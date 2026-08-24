@@ -206,15 +206,14 @@ private[core] final class ResolutionBuilder(
       baseVars: Map[String, String],
       versions: Map[String, ResolvedVersion]
   ): ResolvedValue[ResolvedTool] =
-    val spec        = entry.spec
-    val version     = versions.getOrElse(spec.versionRef, ResolvedVersion.Concrete(""))
-    val versionVars = concreteVersionVars(version)
-    val vars        = baseVars ++ versionVars + ("tool" -> entry.name)
-    val specPath    = s"spec.plan[$index].spec"
-    val installDir  = interpolate(spec.installDir, s"$specPath.installDir", vars)
-    val filename    = interpolate(spec.download.filename, s"$specPath.download.filename", vars)
-    val localVars   = vars + ("installDir"              -> installDir.value)
-    val download    = resolveDownload(spec.download, specPath, localVars, version)
+    val spec              = entry.spec
+    val version           = versions.getOrElse(spec.versionRef, ResolvedVersion.Concrete(""))
+    val versionVars       = concreteVersionVars(version)
+    val vars              = baseVars ++ versionVars + ("tool" -> entry.name)
+    val specPath          = s"spec.plan[$index].spec"
+    val installDir        = interpolate(spec.installDir, s"$specPath.installDir", vars)
+    val localVars         = vars + ("installDir"              -> installDir.value)
+    val download          = resolveDownload(spec.download, specPath, localVars, version)
     val createDirectories = resolveStringVector(
       spec.createDirectories,
       s"$specPath.createDirectories",
@@ -237,8 +236,6 @@ private[core] final class ResolutionBuilder(
       ),
       installDir.errors ++
         versionTemplateErrors(spec.installDir, s"$specPath.installDir", version) ++
-        filename.errors ++
-        versionTemplateErrors(spec.download.filename, s"$specPath.download.filename", version) ++
         createDirectories.errors ++ download.errors ++ executables.errors ++
         symlinks.errors ++ directBinaryExecutableErrors(spec, specPath)
     )
