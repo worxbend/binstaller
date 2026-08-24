@@ -1,6 +1,6 @@
 package binstaller.core
 
-import binstaller.config.AllowSudoSymlinks
+import binstaller.config.PolicyOverride
 import binstaller.config.Diagnostics
 import binstaller.config.SymlinkPrivilege
 
@@ -60,8 +60,8 @@ private[core] object SymlinkInstaller:
       commandExecutor: CommandExecutor,
       sudoCredentials: SudoCredentialProvider
   ): Either[ToolInstallError, Unit] = policy.allowSudoSymlinks match
-    case AllowSudoSymlinks.Disabled => Left(ToolInstallError.SudoSymlinkNotAllowed(tool.name))
-    case AllowSudoSymlinks.Enabled  =>
+    case PolicyOverride.Disabled => Left(ToolInstallError.SudoSymlinkNotAllowed(tool.name))
+    case PolicyOverride.Enabled  =>
       val path = Path.of(symlink.path)
       // Privileged writes must name an absolute destination. Relative sudo paths would depend on
       // process cwd and make plan output misleading.

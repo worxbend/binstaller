@@ -30,12 +30,18 @@ private[core] object ManifestFingerprint:
 
   private def appendPolicy(builder: StringBuilder, policy: binstaller.config.InstallPolicy): Unit =
     append(builder, "spec.policy.mode", policy.mode.value)
-    append(builder, "spec.policy.continueOnError", policy.continueOnError.toString)
+    append(builder, "spec.policy.continueOnError", renderPolicyFlag(policy.continueOnError))
     append(builder, "spec.policy.appsDir", policy.appsDir)
     append(builder, "spec.policy.allowSudoSymlinks", policy.allowSudoSymlinks.toString)
     appendOverride(builder, "spec.policy.allowDynamicLatestUrls", policy.allowDynamicLatestUrls)
     appendOverride(builder, "spec.policy.allowMissingChecksums", policy.allowMissingChecksums)
     append(builder, "spec.policy.stateFile", policy.stateFile.getOrElse(""))
+
+  // continueOnError was a raw Boolean and hashed as "true"/"false". Keeping that spelling means
+  // this change does not invalidate every saved apply state and force a full reinstall.
+  private def renderPolicyFlag(value: PolicyOverride): String = value match
+    case PolicyOverride.Enabled  => "true"
+    case PolicyOverride.Disabled => "false"
 
   private def appendOverride(
       builder: StringBuilder,

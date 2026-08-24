@@ -4,7 +4,7 @@ import binstaller.config.ChecksumAlgorithm
 import binstaller.config.ConfigModule
 import binstaller.config.ExecutableMode
 import binstaller.config.ArchiveType
-import binstaller.config.AllowSudoSymlinks
+import binstaller.config.PolicyOverride
 import binstaller.config.SymlinkPrivilege
 import utest.*
 
@@ -1593,12 +1593,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
     test("apply errors redact sensitive runtime values and scrub terminal controls"):
       val secret = "secret-token-value"
       val plan   = ResolvedPlan(
-        ResolvedPolicy(
-          "/tmp/apps",
-          None,
-          AllowSudoSymlinks.Disabled,
-          ContinueOnError.Disabled
-        ),
+        ResolvedPolicy.restricted("/tmp/apps"),
         Vector(directTool(Path.of("/tmp/apps/alpha")).copy(download =
           ResolvedDownload(
             url = s"https://example.invalid/$secret/alpha",
@@ -1625,12 +1620,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
     test("checksum mismatch diagnostics redact discovered checksum source"):
       val secret = "secret-token-value"
       val plan   = ResolvedPlan(
-        ResolvedPolicy(
-          "/tmp/apps",
-          None,
-          AllowSudoSymlinks.Disabled,
-          ContinueOnError.Disabled
-        ),
+        ResolvedPolicy.restricted("/tmp/apps"),
         Vector(directTool(Path.of("/tmp/apps/alpha")).copy(download =
           ResolvedDownload(
             url = "https://example.invalid/alpha",
@@ -1702,12 +1692,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         ))
       )
       val plan = ResolvedPlan(
-        ResolvedPolicy(
-          "/tmp/apps",
-          None,
-          AllowSudoSymlinks.Disabled,
-          ContinueOnError.Disabled
-        ),
+        ResolvedPolicy.restricted("/tmp/apps"),
         Vector(directTool(Path.of("/tmp/apps/alpha"))),
         SensitiveValueRedactions(Vector(secret))
       )
@@ -1813,12 +1798,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         commandExecutor
       )
       val plan = ResolvedPlan(
-        ResolvedPolicy(
-          tempRoot.toString,
-          None,
-          AllowSudoSymlinks.Disabled,
-          ContinueOnError.Disabled
-        ),
+        ResolvedPolicy.restricted(tempRoot.toString),
         Vector(sudoSymlinkTool(installDir))
       )
 
@@ -1842,12 +1822,8 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         credentials
       )
       val plan = ResolvedPlan(
-        ResolvedPolicy(
-          tempRoot.toString,
-          None,
-          AllowSudoSymlinks.Enabled,
-          ContinueOnError.Disabled
-        ),
+        ResolvedPolicy.restricted(tempRoot.toString)
+          .copy(allowSudoSymlinks = PolicyOverride.Enabled),
         Vector(sudoSymlinkTool(installDir))
       )
 
@@ -1882,12 +1858,8 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         credentials
       )
       val plan = ResolvedPlan(
-        ResolvedPolicy(
-          tempRoot.toString,
-          None,
-          AllowSudoSymlinks.Enabled,
-          ContinueOnError.Disabled
-        ),
+        ResolvedPolicy.restricted(tempRoot.toString)
+          .copy(allowSudoSymlinks = PolicyOverride.Enabled),
         Vector(sudoSymlinkTool(installDir))
       )
 
@@ -1934,12 +1906,8 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       )
       val beta = directTool(betaInstall).copy(name = "beta")
       val plan = ResolvedPlan(
-        ResolvedPolicy(
-          tempRoot.toString,
-          None,
-          AllowSudoSymlinks.Enabled,
-          ContinueOnError.Enabled
-        ),
+        ResolvedPolicy.restricted(tempRoot.toString)
+          .copy(allowSudoSymlinks = PolicyOverride.Enabled, continueOnError = PolicyOverride.Enabled),
         Vector(sudoSymlinkTool(alphaInstall), beta)
       )
 
@@ -1963,12 +1931,8 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
         credentials
       )
       val plan = ResolvedPlan(
-        ResolvedPolicy(
-          tempRoot.toString,
-          None,
-          AllowSudoSymlinks.Enabled,
-          ContinueOnError.Disabled
-        ),
+        ResolvedPolicy.restricted(tempRoot.toString)
+          .copy(allowSudoSymlinks = PolicyOverride.Enabled),
         Vector(sudoSymlinkTool(installDir))
       )
 

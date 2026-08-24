@@ -1,6 +1,6 @@
 package binstaller.core
 
-import binstaller.config.AllowSudoSymlinks
+import binstaller.config.PolicyOverride
 import binstaller.config.ChecksumAlgorithm
 import binstaller.config.Diagnostics
 import binstaller.config.SymlinkPrivilege
@@ -99,9 +99,9 @@ final class DirectBinaryInstaller(
     .find(_.symlinks.exists(_.privilege == SymlinkPrivilege.Sudo))
     .flatMap: tool =>
       plan.policy.allowSudoSymlinks match
-        case AllowSudoSymlinks.Disabled =>
+        case PolicyOverride.Disabled =>
           Some(ApplyPreflightError.SudoSymlinkNotAllowed(tool.name))
-        case AllowSudoSymlinks.Enabled => None
+        case PolicyOverride.Enabled => None
 
   private def installTools(
       policy: ResolvedPolicy,
@@ -134,13 +134,10 @@ final class DirectBinaryInstaller(
   /** Install a single tool without sudo symlink support. Core-internal (tests/helpers): it takes a
    *  [[ResolvedTool]] directly and so bypasses the PlanResolver appsDir-containment validation the
    *  production path enforces; not part of the public boundary. */
-  private[core] def installTool(tool: ResolvedTool): Either[ToolInstallError, TerminalToolResult.Completed] =
-    val policy = ResolvedPolicy(
-      tool.installDir,
-      None,
-      AllowSudoSymlinks.Disabled,
-      ContinueOnError.Disabled
-    )
+  private[core] def installTool(
+      tool: ResolvedTool
+  ): Either[ToolInstallError, TerminalToolResult.Completed] =
+    val policy = ResolvedPolicy.restricted(tool.installDir)
     if tool.symlinks.exists(_.privilege == SymlinkPrivilege.Sudo) then
       Left(ToolInstallError.SudoSymlinkNotAllowed(tool.name))
     else
@@ -309,7 +306,7 @@ final class DirectBinaryInstaller(
   private def stoppedAfterFailure(
       policy: ResolvedPolicy,
       results: Vector[TerminalToolResult]
-  ): Boolean = policy.continueOnError == ContinueOnError.Disabled &&
+  ): Boolean = policy.continueOnError == PolicyOverride.Disabled &&
     results.exists(_.isInstanceOf[TerminalToolResult.Failed])
 
   private def discardPrepared(prepared: PreparedToolResult): Unit = prepared match

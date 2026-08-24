@@ -28,7 +28,7 @@ object ConfigModuleTest extends TestSuite:
       assert(profile.spec.plan.size == 15)
       assert(profile.spec.versions.contains("kubectl"))
       assert(profile.spec.policy.mode == PolicyMode.Developer)
-      assert(profile.spec.policy.allowSudoSymlinks == AllowSudoSymlinks.Enabled)
+      assert(profile.spec.policy.allowSudoSymlinks == PolicyOverride.Enabled)
 
     test("policy defaults to developer behavior with overridable strict gates"):
       val developer = ConfigModule.loadString(policyModeYaml(""))

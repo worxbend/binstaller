@@ -58,9 +58,9 @@ final case class ProfileSpec(
 /** Profile-wide execution policy decoded from `spec.policy`. */
 final case class InstallPolicy(
     mode: PolicyMode,
-    continueOnError: Boolean,
+    continueOnError: PolicyOverride,
     appsDir: String,
-    allowSudoSymlinks: AllowSudoSymlinks,
+    allowSudoSymlinks: PolicyOverride,
     allowDynamicLatestUrls: Option[PolicyOverride],
     allowMissingChecksums: Option[PolicyOverride],
     stateFile: Option[String]
@@ -71,16 +71,12 @@ enum PolicyMode(val value: String):
   case Developer extends PolicyMode("developer")
   case Strict    extends PolicyMode("strict")
 
-/** Whether profile validation permits privileged symlink declarations. */
-enum AllowSudoSymlinks:
-  case Enabled, Disabled
-
-/** Helpers for converting YAML booleans into the explicit sudo-symlink policy. */
-object AllowSudoSymlinks:
-  /** Convert `true` to [[Enabled]] and `false` to [[Disabled]]. */
-  def fromBoolean(value: Boolean): AllowSudoSymlinks = if value then Enabled else Disabled
-
-/** Optional explicit override for strict/developer policy defaults. */
+/** An explicit yes/no decision read from a `spec.policy` boolean.
+ *
+ *  Named rather than `Boolean` so a call site says which way round it is, and shared by every
+ *  policy flag rather than given a bespoke type per field: three identical two-case enums with
+ *  identical `fromBoolean` helpers said nothing a single one does not.
+ */
 enum PolicyOverride:
   case Enabled, Disabled
 

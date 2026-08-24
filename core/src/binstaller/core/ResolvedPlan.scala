@@ -1,11 +1,12 @@
 package binstaller.core
 
-import binstaller.config.AllowSudoSymlinks
 import binstaller.config.ArchiveSpec
 import binstaller.config.ChecksumAlgorithm
 import binstaller.config.ConfigLoadError
 import binstaller.config.ExecutableMode
+import binstaller.config.InstallPolicy
 import binstaller.config.PolicyMode
+import binstaller.config.PolicyOverride
 import binstaller.config.SymlinkPrivilege
 import binstaller.config.ValidationError
 
@@ -92,29 +93,59 @@ final case class ResolvedPlan(
     redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
 )
 
-/** Resolved profile-wide policy used by apply execution. */
+/** Resolved profile-wide policy used by apply execution.
+ *
+ *  No field has a default. The allowances are *derived* from `mode` plus the manifest's explicit
+ *  overrides by [[ManifestPolicy.allowance]], so a default would let a caller assemble a fully
+ *  permissive policy without `mode` ever being consulted — an object in a state the derivation
+ *  cannot produce. Build one with [[ResolvedPolicy.fromManifest]] or [[ResolvedPolicy.restricted]].
+ */
 final case class ResolvedPolicy(
     appsDir: String,
     stateFile: Option[String],
-    allowSudoSymlinks: AllowSudoSymlinks,
-    continueOnError: ContinueOnError,
-    mode: PolicyMode = PolicyMode.Developer,
-    allowDynamicLatestUrls: PolicyAllowance = PolicyAllowance.Allowed,
-    allowMissingChecksums: PolicyAllowance = PolicyAllowance.Allowed
+    allowSudoSymlinks: PolicyOverride,
+    continueOnError: PolicyOverride,
+    mode: PolicyMode,
+    allowDynamicLatestUrls: PolicyAllowance,
+    allowMissingChecksums: PolicyAllowance
 )
+
+/** Constructors for resolved policy. */
+object ResolvedPolicy:
+
+  /** Derive the effective policy from a decoded manifest policy block. */
+  def fromManifest(
+      appsDir: String,
+      stateFile: Option[String],
+      policy: InstallPolicy
+  ): ResolvedPolicy = ResolvedPolicy(
+    appsDir,
+    stateFile,
+    policy.allowSudoSymlinks,
+    policy.continueOnError,
+    policy.mode,
+    ManifestPolicy.allowance(policy.mode, policy.allowDynamicLatestUrls),
+    ManifestPolicy.allowance(policy.mode, policy.allowMissingChecksums)
+  )
+
+  /** The most restrictive policy: strict mode, nothing allowed, no sudo, no continue-on-error.
+   *
+   *  For call sites that install a single already-resolved tool and must not inherit permissions
+   *  from a manifest they never read.
+   */
+  def restricted(installDir: String): ResolvedPolicy = ResolvedPolicy(
+    installDir,
+    None,
+    allowSudoSymlinks = PolicyOverride.Disabled,
+    continueOnError = PolicyOverride.Disabled,
+    mode = PolicyMode.Strict,
+    allowDynamicLatestUrls = PolicyAllowance.Rejected,
+    allowMissingChecksums = PolicyAllowance.Rejected
+  )
 
 /** Effective allow/reject decision after applying a manifest policy profile and overrides. */
 enum PolicyAllowance:
   case Allowed, Rejected
-
-/** Whether apply should continue after a failed tool. */
-enum ContinueOnError:
-  case Enabled, Disabled
-
-/** Helpers for converting manifest booleans into continue-on-error policy. */
-object ContinueOnError:
-  /** Convert a manifest boolean into [[ContinueOnError]]. */
-  def fromBoolean(value: Boolean): ContinueOnError = if value then Enabled else Disabled
 
 /** One resolved binary tool ready for rendering or execution. */
 final case class ResolvedTool(

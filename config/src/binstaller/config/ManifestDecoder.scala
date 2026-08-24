@@ -73,15 +73,17 @@ private[config] object ManifestDecoder:
         PolicyMode.Developer,
         _.value
       ))
-      val continueOnError =
-        acc(optionalBoolean(map, "continueOnError", "spec.policy.continueOnError", default = false))
+      val continueOnError = acc(
+        optionalBoolean(map, "continueOnError", "spec.policy.continueOnError", default = false)
+          .map(PolicyOverride.fromBoolean)
+      )
       val appsDir           = acc(requiredString(map, "spec.policy.appsDir"))
       val allowSudoSymlinks = acc(optionalBoolean(
         map,
         "allowSudoSymlinks",
         "spec.policy.allowSudoSymlinks",
         default = false
-      ).map(AllowSudoSymlinks.fromBoolean))
+      ).map(PolicyOverride.fromBoolean))
       val allowDynamicLatestUrls = acc(optionalPolicyOverride(
         map,
         "allowDynamicLatestUrls",

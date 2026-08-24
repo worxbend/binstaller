@@ -43,8 +43,8 @@ private[config] object ProfileValidator:
 
   private def sudoSymlinkErrors(profile: BinaryDistributionProfile): Vector[ValidationError] =
     profile.spec.policy.allowSudoSymlinks match
-      case AllowSudoSymlinks.Enabled  => Vector.empty
-      case AllowSudoSymlinks.Disabled => profile.spec.plan.zipWithIndex.flatMap:
+      case PolicyOverride.Enabled  => Vector.empty
+      case PolicyOverride.Disabled => profile.spec.plan.zipWithIndex.flatMap:
           case (entry, entryIndex) => entry.spec.symlinks.zipWithIndex.collect:
               case (symlink, symlinkIndex) if symlink.privilege == SymlinkPrivilege.Sudo =>
                 ValidationError(

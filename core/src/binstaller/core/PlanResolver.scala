@@ -106,21 +106,7 @@ private[core] final class ResolutionBuilder(
       ResolvedPathValidator.stateFile(value, "spec.policy.stateFile")
 
     ResolvedValue(
-      ResolvedPolicy(
-        appsDir.value,
-        stateFile.value,
-        profile.spec.policy.allowSudoSymlinks,
-        ContinueOnError.fromBoolean(profile.spec.policy.continueOnError),
-        profile.spec.policy.mode,
-        ManifestPolicy.allowance(
-          profile.spec.policy.mode,
-          profile.spec.policy.allowDynamicLatestUrls
-        ),
-        ManifestPolicy.allowance(
-          profile.spec.policy.mode,
-          profile.spec.policy.allowMissingChecksums
-        )
-      ),
+      ResolvedPolicy.fromManifest(appsDir.value, stateFile.value, profile.spec.policy),
       appsDir.errors ++ stateFile.errors ++ stateFilePathErrors
     )
 
