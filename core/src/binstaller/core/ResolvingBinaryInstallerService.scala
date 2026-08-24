@@ -72,7 +72,7 @@ private[core] final class ResolvingBinaryInstallerService(
     outcome.merge
 
   def versions(options: InstallerOptions): InstallerResult =
-    resolveFromOptions(options).fold(renderError, renderVersions)
+    resolveSelectedPreparedPlan(options).fold(renderError, renderVersions)
 
   def lock(options: InstallerOptions, lockOptions: LockOptions): InstallerResult =
     resolveSelectedPreparedPlan(options) match

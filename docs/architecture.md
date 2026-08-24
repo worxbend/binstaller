@@ -53,7 +53,8 @@ happens.
    `when:` selectors — are an explicit `ResolutionOptions` input with no
    default; only `ResolutionOptions.fromEnvironment()` detects them.
 4. `ToolSelection` applies `--only` first and `--skip` second while preserving
-   manifest order.
+   manifest order. Every command that resolves a plan — `plan`, `apply`,
+   `versions` and `lock` — applies the selection.
 5. `plan` renders the selected `ResolvedPlan` directly as script-friendly text.
 6. `apply` checks state compatibility, executes each selected tool, writes apply
    state after terminal tool results, and emits `InstallerEvent` values. Tools

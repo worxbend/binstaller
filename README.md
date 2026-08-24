@@ -165,8 +165,8 @@ binstaller apply --locked --lock-file binstaller.lock.json
 | `--state FILE` | Override the profile state file for `apply`. |
 | `--reset-state` | Ignore saved execution state and start fresh. |
 | `--verbose` | Show additional command diagnostics. |
-| `--only TOOL` | Include only a named tool (`plan`, `apply`, `lock`). Repeatable. |
-| `--skip TOOL` | Omit a named tool (`plan`, `apply`, `lock`). Repeatable. |
+| `--only TOOL` | Include only a named tool (`plan`, `apply`, `versions`, `lock`). Repeatable. |
+| `--skip TOOL` | Omit a named tool (`plan`, `apply`, `versions`, `lock`). Repeatable. |
 
 **`plan` and `apply` also accept**
 

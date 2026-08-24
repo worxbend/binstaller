@@ -33,7 +33,7 @@ Usage: binstaller [-hV] [--reset-state] [--verbose] [--config=FILE]
 
 ### Selection
 
-Available on `plan`, `apply` and `lock`. Both flags are repeatable.
+Available on `plan`, `apply`, `versions` and `lock`. Both flags are repeatable.
 
 | Flag | Meaning |
 |---|---|

@@ -300,6 +300,32 @@ object CliModuleTest extends TestSuite:
       assert(!plainOutput.contains("https://cdn.example.invalid/kubernetes/stable.txt"))
       assert(!plainOutput.contains("final url"))
 
+    test("versions honours --only and reports an unknown tool"):
+      // `versions` used to resolve the whole manifest and ignore the selection flags, so a caller
+      // passing --only got every tool anyway, with no indication the flag had been dropped.
+      val service = BinaryInstallerService.resolving(
+        FakeHttpTextClient("v1.34.0"),
+        exampleResolutionOptions
+      )
+
+      val selected = runCli(
+        Vector("versions", "--config", configExamplePath.toString, "--only", "kubectl"),
+        service
+      )
+
+      assert(selected.exitCode == 0)
+      val plainSelected = stripAnsi(selected.out)
+      assert(plainSelected.contains("kubectl"))
+      assert(!plainSelected.contains("helm"))
+
+      val unknown = runCli(
+        Vector("versions", "--config", configExamplePath.toString, "--only", "nope"),
+        service
+      )
+
+      assert(unknown.exitCode == 1)
+      assert(unknown.out.contains("unknown tool 'nope'"))
+
     test("plan renders local and sudo symlink actions without executing them"):
       val tempRoot = Files.createTempDirectory("binstaller-cli-dry-symlinks")
       val appsDir  = tempRoot.resolve("apps")

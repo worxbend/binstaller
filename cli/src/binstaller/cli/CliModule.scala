@@ -170,14 +170,6 @@ private[cli] abstract class ConfiguredCommand(
     out: PrintWriter
 ) extends Callable[Integer]:
 
-  protected def execute(action: InstallerOptions => InstallerResult): Integer =
-    executeWithOptions(identity, action)
-
-  protected def executeRendered(
-      action: InstallerOptions => InstallerResult,
-      renderResult: InstallerResult => InstallerResult
-  ): Integer = executeWithOptions(identity, action, renderResult)
-
   protected def executeWithOptions(
       amend: InstallerOptions => InstallerOptions,
       action: InstallerOptions => InstallerResult
@@ -312,9 +304,10 @@ private[cli] final class VersionsCommand(
     service: BinaryInstallerService,
     out: PrintWriter,
     outputStyle: CliOutputStyle
-) extends ConfiguredCommand(root, out):
+) extends SelectableCommand(root, out):
 
-  override def call(): Integer = executeRendered(
+  override def call(): Integer = executeWithOptions(
+    _.copy(selection = selection),
     service.versions,
     result =>
       if result.status == InstallerRunStatus.Succeeded then
