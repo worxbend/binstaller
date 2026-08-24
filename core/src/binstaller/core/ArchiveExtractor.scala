@@ -408,8 +408,6 @@ private[core] object ArchiveExtractor:
         output.write(buffer, 0, count)
         remaining = remaining - count
 
-  // Skip a tar member of known length, charging its declared size to the budget up front so a
-  // bomb is rejected before it can inflate, and failing loudly if the stream ends early.
   // Copy an already-extracted member to any additional targets (a member covered by both a file
   // and a directory mapping). Disk-to-disk, so it does not inflate; the count is bounded by the
   // manifest's mapping count, so it needs no budget charge.
@@ -418,6 +416,8 @@ private[core] object ArchiveExtractor:
       Option(target.getParent).foreach(parent => Files.createDirectories(parent))
       val _ = Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
 
+  // Skip a tar member of known length, charging its declared size to the budget up front so a
+  // bomb is rejected before it can inflate, and failing loudly if the stream ends early.
   private def boundedSkip(input: InputStream, bytes: Long, budget: ExtractedByteBudget): Unit =
     budget.inflate(bytes)
     val buffer    = Array.ofDim[Byte](8192)
