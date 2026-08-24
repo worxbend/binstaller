@@ -118,25 +118,37 @@ object InstallFileSystem:
 
 private[core] object NioInstallFileSystem extends InstallFileSystem:
 
+  /** Every staging entry point shares one lifecycle: create a staging directory next to the final
+   *  install, pre-create the requested subdirectories, write the payload, and on ANY failure delete
+   *  the staging directory again.
+   *
+   *  That last step is the reason this is a function rather than a convention. A staging method
+   *  that forgets it leaves an orphaned `.<name>.stage-*` directory beside every failed install,
+   *  and nothing fails: the error the user sees is correct, the install is correctly not replaced,
+   *  and the litter accumulates silently until someone looks at the apps directory.
+   */
+  private def staged(installDir: Path, createDirectories: Vector[String])(
+      writePayload: StagedInstall => Either[InstallFileSystemError.StagingFailed, Unit]
+  ): Either[InstallFileSystemError.StagingFailed, StagedInstall] =
+    val normalizedInstallDir = installDir.toAbsolutePath.normalize()
+    createStagingDirectory(normalizedInstallDir).flatMap: stagedInstall =>
+      stageCreateDirectories(stagedInstall, createDirectories)
+        .flatMap(_ => writePayload(stagedInstall)) match
+        case Right(())   => Right(stagedInstall)
+        case Left(error) =>
+          discardStaged(stagedInstall)
+          Left(error)
+
   override def stageDirectBinaryFromFile(
       installDir: Path,
       createDirectories: Vector[String],
       executablePath: String,
       artifact: Path
   ): Either[InstallFileSystemError.StagingFailed, StagedInstall] =
-    val normalizedInstallDir = installDir.toAbsolutePath.normalize()
-    createStagingDirectory(normalizedInstallDir).flatMap: stagedInstall =>
-      val result: Either[InstallFileSystemError.StagingFailed, Unit] =
-        stageCreateDirectories(stagedInstall, createDirectories).flatMap: _ =>
-          resolveInside(stagedInstall.stagingDir, executablePath)
-            .flatMap(path => copyBinary(artifact, path))
-            .left
-            .map(InstallFileSystemError.StagingFailed.apply)
-      result match
-        case Right(())   => Right(stagedInstall)
-        case Left(error) =>
-          discardStaged(stagedInstall)
-          Left(error)
+    staged(installDir, createDirectories): stagedInstall =>
+      resolveInside(stagedInstall.stagingDir, executablePath)
+        .flatMap(path => copyBinary(artifact, path))
+        .left.map(InstallFileSystemError.StagingFailed.apply)
 
   override def stageArchiveFromFile(
       installDir: Path,
@@ -144,17 +156,9 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
       archive: ResolvedArchive,
       artifact: Path
   ): Either[InstallFileSystemError.StagingFailed, StagedInstall] =
-    val normalizedInstallDir = installDir.toAbsolutePath.normalize()
-    createStagingDirectory(normalizedInstallDir).flatMap: stagedInstall =>
-      val result: Either[InstallFileSystemError.StagingFailed, Unit] =
-        stageCreateDirectories(stagedInstall, createDirectories).flatMap: _ =>
-          ArchiveExtractor.extractFile(archive, artifact, stagedInstall.stagingDir)
-            .left.map(InstallFileSystemError.StagingFailed.apply)
-      result match
-        case Right(())   => Right(stagedInstall)
-        case Left(error) =>
-          discardStaged(stagedInstall)
-          Left(error)
+    staged(installDir, createDirectories): stagedInstall =>
+      ArchiveExtractor.extractFile(archive, artifact, stagedInstall.stagingDir)
+        .left.map(InstallFileSystemError.StagingFailed.apply)
 
   def applyExecutableModes(
       stagedInstall: StagedInstall,

@@ -5,6 +5,7 @@ import binstaller.config.Diagnostics
 import org.tukaani.xz.XZInputStream
 
 import java.io.InputStream
+import java.io.OutputStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -36,6 +37,9 @@ private[core] object ArchiveExtractor:
   // stalls and must not trip on a large legitimate archive extracted on a slow machine.
   private[core] val maxEntries: Int = 65536
   private val extractionTimeBudgetMillis: Long = 300_000L
+
+  /** Shared copy/skip/drain buffer size. Not a tuning knob — just one number instead of four. */
+  private val copyBufferBytes: Int = 8192
 
   private[core] def validateExtractedSize(bytes: Long): Either[String, Unit] =
     if bytes >= 0 && bytes <= maxExtractedBytes then Right(())
@@ -345,24 +349,32 @@ private[core] object ArchiveExtractor:
     case value if value.endsWith("/") => s"$value$child"
     case value                        => s"$value/$child"
 
-  private def copyStream(
-      input: InputStream,
-      target: Path,
-      budget: ExtractedByteBudget
-  ): Unit =
+  private def ensureParent(target: Path): Unit =
     Option(target.getParent).foreach(parent => Files.createDirectories(parent))
+
+  // Create the target's parent directories and open it for a full overwrite. TRUNCATE_EXISTING
+  // matters: re-extracting over an older, longer file must not leave that file's tail behind, which
+  // would silently produce a corrupt binary rather than a failure.
+  private def writingTo(target: Path)(body: OutputStream => Unit): Unit =
+    ensureParent(target)
     Using.resource(Files.newOutputStream(
       target,
       StandardOpenOption.CREATE,
       StandardOpenOption.TRUNCATE_EXISTING,
       StandardOpenOption.WRITE
-    )): output =>
-      val buffer = Array.ofDim[Byte](8192)
-      var count  = input.read(buffer)
-      while count != -1 do
-        budget.extract(count.toLong)
-        output.write(buffer, 0, count)
-        count = input.read(buffer)
+    ))(body)
+
+  private def copyStream(
+      input: InputStream,
+      target: Path,
+      budget: ExtractedByteBudget
+  ): Unit = writingTo(target): output =>
+    val buffer = Array.ofDim[Byte](copyBufferBytes)
+    var count  = input.read(buffer)
+    while count != -1 do
+      budget.extract(count.toLong)
+      output.write(buffer, 0, count)
+      count = input.read(buffer)
 
   private def copyBounded(
       input: InputStream,
@@ -370,15 +382,11 @@ private[core] object ArchiveExtractor:
       bytes: Long,
       budget: ExtractedByteBudget
   ): Unit =
+    // Charged before a single byte is written, so an oversized member is rejected rather than
+    // partially extracted.
     budget.extract(bytes)
-    Option(target.getParent).foreach(parent => Files.createDirectories(parent))
-    Using.resource(Files.newOutputStream(
-      target,
-      StandardOpenOption.CREATE,
-      StandardOpenOption.TRUNCATE_EXISTING,
-      StandardOpenOption.WRITE
-    )): output =>
-      val buffer    = Array.ofDim[Byte](8192)
+    writingTo(target): output =>
+      val buffer    = Array.ofDim[Byte](copyBufferBytes)
       var remaining = bytes
       while remaining > 0 do
         val count = input.read(buffer, 0, math.min(buffer.length.toLong, remaining).toInt)
@@ -391,14 +399,14 @@ private[core] object ArchiveExtractor:
   // manifest's mapping count, so it needs no budget charge.
   private def duplicateTo(source: Path, extras: Vector[Path]): Unit =
     extras.foreach: target =>
-      Option(target.getParent).foreach(parent => Files.createDirectories(parent))
+      ensureParent(target)
       val _ = Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
 
   // Skip a tar member of known length, charging its declared size to the budget up front so a
   // bomb is rejected before it can inflate, and failing loudly if the stream ends early.
   private def boundedSkip(input: InputStream, bytes: Long, budget: ExtractedByteBudget): Unit =
     budget.inflate(bytes)
-    val buffer    = Array.ofDim[Byte](8192)
+    val buffer    = Array.ofDim[Byte](copyBufferBytes)
     var remaining = bytes
     while remaining > 0 do
       val count = input.read(buffer, 0, math.min(buffer.length.toLong, remaining).toInt)
@@ -407,7 +415,7 @@ private[core] object ArchiveExtractor:
 
   // Drain a stream of unknown length (a zip member), charging every inflated chunk to the budget.
   private def boundedDrain(input: InputStream, budget: ExtractedByteBudget): Unit =
-    val buffer = Array.ofDim[Byte](8192)
+    val buffer = Array.ofDim[Byte](copyBufferBytes)
     var count  = input.read(buffer)
     while count != -1 do
       budget.inflate(count.toLong)
