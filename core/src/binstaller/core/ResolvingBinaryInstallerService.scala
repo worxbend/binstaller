@@ -42,35 +42,34 @@ private[core] final class ResolvingBinaryInstallerService(
   ): InstallerResult =
     val eventContext = InstallerEventContext.start(eventObserver)
     eventContext.emit(InstallerEvent.ResolvingStarted(options.configPath, _))
-    resolveSelectedPreparedPlan(options) match
-      case Left(error) =>
-        val result = renderError(error)
-        emitSummary(result, stateFilePath = None, eventContext)
+    // Both failure channels are already rendered InstallerResults, so the whole thing is one flat
+    // sequence and the happy path stays at the top indentation level rather than the bottom of a
+    // three-deep pyramid.
+    val outcome =
+      for
+        prepared <- resolveSelectedPreparedPlan(options)
+          .left.map(error => failed(renderError(error), eventContext))
+        lockedProvenance <- validateLockIfRequested(options, prepared)
+          .left.map(error => failed(renderLockedApplyError(error), eventContext))
+      yield
+        val lockedPrepared = lockedProvenance.fold(prepared)(applyLockedChecksums(prepared, _))
+        val statePath      = configuredStatePath(options, lockedPrepared.plan)
+        eventContext.emit(InstallerEvent.PlanReady(
+          lockedPrepared.plan.tools.map(_.name),
+          statePath,
+          _
+        ))
+        val result = StatefulApplyRunner.run(
+          options,
+          lockedPrepared,
+          installer,
+          installer.fileSystem,
+          stateStore,
+          eventContext
+        )
+        emitSummary(result, statePath, eventContext)
         result
-      case Right(prepared) => validateLockIfRequested(options, prepared) match
-          case Left(error) =>
-            val result = renderLockedApplyError(error)
-            emitSummary(result, stateFilePath = None, eventContext)
-            result
-          case Right(lockedProvenance) =>
-            val lockedPrepared = lockedProvenance.fold(prepared)(applyLockedChecksums(prepared, _))
-            val statePath      = configuredStatePath(options, lockedPrepared.plan)
-            eventContext.emit(InstallerEvent.PlanReady(
-              lockedPrepared.plan.tools.map(_.name),
-              statePath,
-              _
-            ))
-            val result =
-              StatefulApplyRunner.run(
-                options,
-                lockedPrepared,
-                installer,
-                installer.fileSystem,
-                stateStore,
-                eventContext
-              )
-            emitSummary(result, statePath, eventContext)
-            result
+    outcome.merge
 
   def versions(options: InstallerOptions): InstallerResult =
     resolveFromOptions(options).fold(renderError, renderVersions)
@@ -104,24 +103,21 @@ private[core] final class ResolvingBinaryInstallerService(
       eventContext: InstallerEventContext
   ): InstallerResult =
     eventContext.emit(InstallerEvent.ResolvingStarted(options.configPath, _))
-    resolveSelectedPreparedPlan(options) match
-      case Left(error) =>
-        val result = renderError(error)
-        emitSummary(result, stateFilePath = None, eventContext)
+    val outcome =
+      for
+        prepared <- resolveSelectedPreparedPlan(options)
+          .left.map(error => failed(renderError(error), eventContext))
+        lockedProvenance <- validateLockIfRequested(options, prepared)
+          .left.map(error => failed(renderLockedApplyError(error), eventContext))
+      yield
+        // A pure lookup over options and the resolved policy, so computing it after the lock check
+        // rather than before changes nothing observable.
+        val statePath = configuredStatePath(options, prepared.plan)
+        eventContext.emit(InstallerEvent.PlanReady(prepared.plan.tools.map(_.name), statePath, _))
+        val result = PlanRenderer.render(prepared.plan, lockedProvenance)
+        emitSummary(result, statePath, eventContext)
         result
-      case Right(prepared) =>
-        val plan      = prepared.plan
-        val statePath = configuredStatePath(options, plan)
-        validateLockIfRequested(options, prepared) match
-          case Left(error) =>
-            val result = renderLockedApplyError(error)
-            emitSummary(result, stateFilePath = None, eventContext)
-            result
-          case Right(lockedProvenance) =>
-            eventContext.emit(InstallerEvent.PlanReady(plan.tools.map(_.name), statePath, _))
-            val result = PlanRenderer.render(plan, lockedProvenance)
-            emitSummary(result, statePath, eventContext)
-            result
+    outcome.merge
 
   private def resolveSelectedPreparedPlan(
       options: InstallerOptions
@@ -146,6 +142,14 @@ private[core] final class ResolvingBinaryInstallerService(
       options: InstallerOptions,
       plan: ResolvedPlan
   ): Option[String] = options.statePath.orElse(plan.policy.stateFile)
+
+  /** Emit the run summary for a failed run and return its rendered result unchanged. */
+  private def failed(
+      result: InstallerResult,
+      eventContext: InstallerEventContext
+  ): InstallerResult =
+    emitSummary(result, stateFilePath = None, eventContext)
+    result
 
   private def emitSummary(
       result: InstallerResult,
