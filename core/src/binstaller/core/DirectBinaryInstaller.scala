@@ -375,34 +375,27 @@ final class DirectBinaryInstaller(
       eventContext: InstallerEventContext,
       redactions: SensitiveValueRedactions
   ): BinaryDownloadProgressObserver = new BinaryDownloadProgressObserver:
-    def onProgress(progress: BinaryDownloadProgress): Unit = progress match
-      case BinaryDownloadProgress.Started(url, totalBytes) =>
-        eventContext.emit(InstallerEvent.DownloadProgress(
-          tool.name,
-          RenderSafety.display(url, redactions),
-          0L,
-          totalBytes,
-          DownloadProgressStatus.Started,
-          _
-        ))
-      case BinaryDownloadProgress.Advanced(url, downloadedBytes, totalBytes) =>
-        eventContext.emit(InstallerEvent.DownloadProgress(
-          tool.name,
-          RenderSafety.display(url, redactions),
-          downloadedBytes,
-          totalBytes,
-          DownloadProgressStatus.Advanced,
-          _
-        ))
-      case BinaryDownloadProgress.Finished(url, downloadedBytes, totalBytes) =>
-        eventContext.emit(InstallerEvent.DownloadProgress(
-          tool.name,
-          RenderSafety.display(url, redactions),
-          downloadedBytes,
-          totalBytes,
-          DownloadProgressStatus.Finished,
-          _
-        ))
+    def onProgress(progress: BinaryDownloadProgress): Unit =
+      val (url, downloadedBytes, totalBytes, status) = progressSnapshot(progress)
+      eventContext.emit(InstallerEvent.DownloadProgress(
+        tool.name,
+        RenderSafety.display(url, redactions),
+        downloadedBytes,
+        totalBytes,
+        status,
+        _
+      ))
+
+  /** The one thing that actually differs between the three download progress stages. */
+  private def progressSnapshot(
+      progress: BinaryDownloadProgress
+  ): (String, Long, Option[Long], DownloadProgressStatus) = progress match
+    case BinaryDownloadProgress.Started(url, totalBytes) =>
+      (url, 0L, totalBytes, DownloadProgressStatus.Started)
+    case BinaryDownloadProgress.Advanced(url, downloadedBytes, totalBytes) =>
+      (url, downloadedBytes, totalBytes, DownloadProgressStatus.Advanced)
+    case BinaryDownloadProgress.Finished(url, downloadedBytes, totalBytes) =>
+      (url, downloadedBytes, totalBytes, DownloadProgressStatus.Finished)
 
   private def withPhase[A](
       tool: ResolvedTool,

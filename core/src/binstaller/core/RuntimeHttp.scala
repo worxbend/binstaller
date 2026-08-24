@@ -5,9 +5,8 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.io.InputStream
+import scala.annotation.tailrec
 import scala.util.Try
-import scala.util.boundary
-import scala.util.boundary.break
 import java.time.Duration
 
 private[core] object RuntimeHttpClient:
@@ -21,6 +20,16 @@ private[core] object RuntimeHttpClient:
   private val redirectStatuses = Set(301, 302, 303, 307, 308)
   private val maxRedirects     = 10
 
+  // Every redirect failure has to release the connection before returning the error. Repeating
+  // `response.body().close()` at each exit is how one of them eventually gets forgotten and leaks
+  // a connection from the pool, so failing and closing is a single operation here.
+  private def failClosing(
+      response: HttpResponse[InputStream],
+      message: String
+  ): Either[String, Nothing] =
+    response.body().close()
+    Left(message)
+
   def getInputStream(
       client: HttpClient,
       initialUrl: String,
@@ -28,45 +37,44 @@ private[core] object RuntimeHttpClient:
       // live DNS. Production uses the fail-closed resolved check as defense-in-depth.
       hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved
   ): Either[String, RuntimeHttpResponse] = RuntimeUrl.httpsUri(initialUrl).flatMap: initialUri =>
-    boundary:
-      var current   = initialUri
-      var redirects = Vector.empty[UrlRedirectHop]
-      var remaining = maxRedirects
-      while true do
-        hostGuard(current.getHost) match
-          case Left(message) => break(Left(message))
-          case Right(())     => ()
+    @tailrec
+    def follow(
+        current: URI,
+        redirects: Vector[UrlRedirectHop],
+        remaining: Int
+    ): Either[String, RuntimeHttpResponse] = hostGuard(current.getHost) match
+      case Left(message) => Left(message)
+      case Right(())     =>
         val request  = HttpRequest.newBuilder(current).timeout(requestTimeout).GET().build()
         val response = client.send(request, HttpResponse.BodyHandlers.ofInputStream())
-        if redirectStatuses(response.statusCode()) then
-          if remaining == 0 then
-            response.body().close()
-            break(Left(s"HTTP redirect limit exceeded ($maxRedirects)"))
-          val location = response.headers().firstValue("Location")
-          if location.isEmpty || location.get().trim.isEmpty then
-            response.body().close()
-            break(Left(s"HTTP ${response.statusCode()} redirect is missing Location"))
-          // A malformed Location makes URI.resolve throw IllegalArgumentException; treat it as a
-          // failed redirect rather than letting it escape the download boundary uncaught.
-          Try(current.resolve(location.get()).toString).toEither match
-            case Left(error) =>
-              response.body().close()
-              break(Left(s"invalid redirect Location: ${error.getMessage}"))
-            case Right(next) => RuntimeUrl.httpsUri(next) match
-                case Left(message) =>
-                  response.body().close()
-                  break(Left(s"unsafe redirect target: $message"))
-                case Right(uri) =>
-                  redirects :+= UrlRedirectHop(current.toString, uri.toString, response.statusCode())
-                  response.body().close()
-                  current = uri
-                  remaining -= 1
-        else
+        if !redirectStatuses(response.statusCode()) then
+          // The caller streams this body, so it must stay open.
           val provenance =
             if redirects.nonEmpty then UrlProvenance(initialUrl, current.toString, redirects)
             else UrlProvenance.fromResponse(initialUrl, response)
-          break(Right(RuntimeHttpResponse(response, provenance)))
-      Left("unreachable HTTP redirect state")
+          Right(RuntimeHttpResponse(response, provenance))
+        else if remaining == 0 then
+          failClosing(response, s"HTTP redirect limit exceeded ($maxRedirects)")
+        else
+          val location = response.headers().firstValue("Location")
+          if location.isEmpty || location.get().trim.isEmpty then
+            failClosing(response, s"HTTP ${response.statusCode()} redirect is missing Location")
+          else
+            // A malformed Location makes URI.resolve throw IllegalArgumentException; treat it as a
+            // failed redirect rather than letting it escape the download boundary uncaught.
+            val next = Try(current.resolve(location.get()).toString).toEither
+              .left.map(error => s"invalid redirect Location: ${error.getMessage}")
+              .flatMap(RuntimeUrl.httpsUri(_).left.map(message =>
+                s"unsafe redirect target: $message"
+              ))
+            next match
+              case Left(message) => failClosing(response, message)
+              case Right(uri)    =>
+                val hop = UrlRedirectHop(current.toString, uri.toString, response.statusCode())
+                response.body().close()
+                follow(uri, redirects :+ hop, remaining - 1)
+
+    follow(initialUri, Vector.empty, maxRedirects)
 
 private[core] final case class RuntimeHttpResponse(
     response: HttpResponse[InputStream],
