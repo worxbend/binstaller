@@ -2154,6 +2154,40 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(decoded.tools.head.status == ApplyStateToolStatus.Failed)
       assert(decoded.tools.head.message.contains("network unavailable"))
 
+    test("an unrecognised apply state status is a decode failure, not a read failure"):
+      // The state file is a user-editable JSON artifact in the working directory, so a hand-typed
+      // or hand-merged status is a realistic input. Reporting it as "could not read" sends the
+      // user looking at file permissions instead of at the line they edited.
+      assert(ApplyStateToolStatus.fromString("pending").isEmpty)
+      assert(ApplyStateToolStatus.fromString("completed").contains(ApplyStateToolStatus.Completed))
+
+      val tempRoot  = Files.createTempDirectory("binstaller-core-state-status")
+      val stateFile = tempRoot.resolve("corrupt.state.json")
+      Files.writeString(
+        stateFile,
+        """
+          |{
+          |  "schemaVersion": 1,
+          |  "profileName": "profile",
+          |  "manifestFingerprint": "fingerprint",
+          |  "tools": [
+          |    {
+          |      "name": "alpha",
+          |      "status": "pending",
+          |      "installDir": null,
+          |      "message": null,
+          |      "download": null
+          |    }
+          |  ]
+          |}
+          |""".stripMargin
+      )
+
+      ApplyStateStore.nio(tempRoot).load(stateFile) match
+        case Left(ApplyStateError.DecodeFailed(_, message)) =>
+          assert(message.contains("unknown apply state tool status"))
+        case other => abort(s"expected a decode failure, got $other")
+
     test("plan emits resolving plan-ready and summary events in order"):
       val tempRoot = Files.createTempDirectory("binstaller-core-events-plan")
       val config   = writeConfig(tempRoot, twoToolYaml(tempRoot, "plan.state.json"))

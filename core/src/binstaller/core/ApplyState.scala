@@ -67,13 +67,19 @@ enum ApplyStateToolStatus(val value: String):
 /** Apply-state tool status constructors and JSON codec. */
 object ApplyStateToolStatus:
 
-  def fromString(value: String): ApplyStateToolStatus = value match
-    case Completed.value => Completed
-    case Failed.value    => Failed
-    case other => throw IllegalArgumentException(s"unknown apply state tool status: $other")
+  /** Parse a serialized status, or `None` if the string is not one this version writes. */
+  def fromString(value: String): Option[ApplyStateToolStatus] = value match
+    case Completed.value => Some(Completed)
+    case Failed.value    => Some(Failed)
+    case _               => None
 
-  given ReadWriter[ApplyStateToolStatus] =
-    readwriter[String].bimap[ApplyStateToolStatus](_.value, fromString)
+  given ReadWriter[ApplyStateToolStatus] = readwriter[String].bimap[ApplyStateToolStatus](
+    _.value,
+    value =>
+      fromString(value).getOrElse(
+        throw upickle.core.Abort(s"unknown apply state tool status: $value")
+      )
+  )
 
 /** Serialized status for a single tool in the apply state file. */
 final case class ApplyStateTool(
@@ -147,9 +153,9 @@ private[core] final class NioApplyStateStore(val cwd: Path) extends ApplyStateSt
     if !Files.exists(path) then Right(None)
     else
       Try(read[ApplyState](Files.readString(path))) match
-        case Success(state)                     => Right(Some(state))
-        case Failure(error: upickle.core.Abort) =>
-          Left(ApplyStateError.DecodeFailed(path, Diagnostics.describe(error)))
+        case Success(state)              => Right(Some(state))
+        case Failure(NioApplyStateStore.Decode(message)) =>
+          Left(ApplyStateError.DecodeFailed(path, message))
         case Failure(error) => Left(ApplyStateError.ReadFailed(path, Diagnostics.describe(error)))
 
   def save(path: Path, state: ApplyState): Either[ApplyStateError, Unit] =
@@ -175,3 +181,31 @@ private[core] final class NioApplyStateStore(val cwd: Path) extends ApplyStateSt
       case Failure(error) =>
         val _ = Files.deleteIfExists(tmp)
         Left(ApplyStateError.WriteFailed(path, Diagnostics.describe(error)))
+
+private[core] object NioApplyStateStore:
+
+  /** Matches the exceptions that mean "the file was read, but its contents are not a valid state".
+   *
+   *  upickle signals a rejected value with `Abort`, but rethrows one raised inside a visitor
+   *  wrapped in `AbortException`, and wraps that again in a `TraceVisitor.TraceException` carrying
+   *  the JSON path. None of the three is a subtype of another, so matching only `Abort` reports a
+   *  corrupt state file as one that could not be read at all — which sends the user to check file
+   *  permissions instead of the line they hand-edited.
+   *
+   *  The extracted message prefers the innermost cause, because that is the one that names the
+   *  actual problem; the wrapper only carries the JSON path, which is appended when present.
+   */
+  private[core] object Decode:
+
+    def unapply(error: Throwable): Option[String] = error match
+      case _: (upickle.core.Abort | upickle.core.AbortException |
+          upickle.core.TraceVisitor.TraceException) =>
+        val location = Option(error.getMessage).filter(_.nonEmpty)
+        val reason   = Diagnostics.describe(rootCause(error))
+        Some(location.filter(_ != reason).fold(reason)(at => s"$reason at $at"))
+      case _ => None
+
+    @scala.annotation.tailrec
+    private def rootCause(error: Throwable): Throwable = Option(error.getCause) match
+      case Some(cause) if cause ne error => rootCause(cause)
+      case _                             => error
