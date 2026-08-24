@@ -37,7 +37,7 @@ private[core] object RuntimeHttpClient:
       initialUrl: String,
       // Injectable so tests can drive the redirect/status logic against a stubbed transport without
       // live DNS. Production uses the fail-closed resolved check as defense-in-depth.
-      hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved
+      hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved(_)
   ): Either[String, RuntimeHttpResponse] = RuntimeUrl.httpsUri(initialUrl).flatMap: initialUri =>
     @tailrec
     def follow(

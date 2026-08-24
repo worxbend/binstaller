@@ -120,7 +120,7 @@ object BinaryDownloadLimits:
 private[core] final class JdkBinaryDownloadClient(
     client: HttpClient,
     limits: BinaryDownloadLimits = BinaryDownloadLimits.default,
-    hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved
+    hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved(_)
 ) extends BinaryDownloadClient:
 
   def download(url: String): Either[BinaryDownloadError, Array[Byte]] =

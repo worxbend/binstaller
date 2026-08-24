@@ -59,8 +59,26 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(NetworkTargetGuard.validate("8.8.8.8").isRight)
       assert(NetworkTargetGuard.validate("101.64.0.1").isRight)
 
-    test("validateResolved fails closed for unresolvable hosts"):
-      assert(NetworkTargetGuard.validateResolved("does-not-exist.invalid").isLeft)
+    test("validateResolved fails closed and names the host on every branch"):
+      // The resolver is injected rather than looked up for real: a live lookup of an .invalid host
+      // is slow behind a long-timeout resolver and outright wrong behind a captive portal, which
+      // answers every name and would turn this into a false pass.
+      val threw = NetworkTargetGuard.validateResolved(
+        "unknown.example",
+        _ => throw java.net.UnknownHostException("no such host")
+      )
+      assert(threw.left.exists(message =>
+        message.contains("unknown.example") && message.contains("no such host")
+      ))
+
+      val empty = NetworkTargetGuard.validateResolved("empty.example", _ => Array.empty)
+      assert(empty.left.exists(_.contains("did not resolve to any address")))
+
+      val private_ = NetworkTargetGuard.validateResolved(
+        "rebind.example",
+        _ => Array(InetAddress.getByName("10.0.0.5"))
+      )
+      assert(private_.left.exists(_.contains("private, local, link-local, or multicast")))
 
     test("guarded resolver drops blocked addresses and fails closed when none remain"):
       val privateAddr = InetAddress.getByName("10.0.0.5")

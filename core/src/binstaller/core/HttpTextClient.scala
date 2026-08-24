@@ -37,7 +37,7 @@ object HttpTextClient:
 
 private[core] final class JdkHttpTextClient(
     client: HttpClient,
-    hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved
+    hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved(_)
 ) extends HttpTextClient:
 
   private val maxResponseBytes = 4L * 1024L * 1024L

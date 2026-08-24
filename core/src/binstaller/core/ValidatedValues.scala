@@ -55,14 +55,22 @@ private[core] object NetworkTargetGuard:
    * Resolve the host immediately before a request as fail-closed defense-in-depth. The authoritative
    * rebinding guarantee comes from the installed [[GuardedInetAddressResolverProvider]]: the HTTP
    * client re-resolves independently, so this pre-check alone cannot pin the connected address.
+   *
+   * `resolve` is injectable so tests can drive all three fail-closed branches without a live DNS
+   * lookup; production uses the JDK resolver.
    */
-  def validateResolved(host: String): Either[String, Unit] =
-    Try(InetAddress.getAllByName(host).toVector).toEither.left
-      .map(_ => "URL host could not be resolved")
+  def validateResolved(
+      host: String,
+      resolve: String => Array[InetAddress] = InetAddress.getAllByName
+  ): Either[String, Unit] =
+    Try(resolve(host).toVector).toEither.left
+      // Naming the host and the cause is the difference between a report a user can act on and
+      // one that collapses an unknown host, a refused resolver and a timeout into the same line.
+      .map(error => s"URL host '$host' could not be resolved: ${Diagnostics.describe(error)}")
       .flatMap: addresses =>
-        if addresses.isEmpty then Left("URL host did not resolve to any address")
+        if addresses.isEmpty then Left(s"URL host '$host' did not resolve to any address")
         else if addresses.exists(isBlockedAddress) then
-          Left("URL host resolves to a private, local, link-local, or multicast address")
+          Left(s"URL host '$host' resolves to a private, local, link-local, or multicast address")
         else Right(())
 
   private def isIpLiteral(host: String): Boolean = host.contains(':') ||

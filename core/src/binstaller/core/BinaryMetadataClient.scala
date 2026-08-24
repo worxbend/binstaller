@@ -38,7 +38,7 @@ object BinaryMetadataClient:
 
 private[core] final class JdkBinaryMetadataClient(
     client: HttpClient,
-    hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved
+    hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved(_)
 ) extends BinaryMetadataClient:
 
   private val maxBytes = BinaryDownloadLimits.default.maxBytes
