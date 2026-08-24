@@ -211,7 +211,7 @@ private[core] final class ResolutionBuilder(
     val versionVars       = concreteVersionVars(version)
     val vars              = baseVars ++ versionVars + ("tool" -> entry.name)
     val specPath          = s"spec.plan[$index].spec"
-    val installDir        = interpolate(spec.installDir, s"$specPath.installDir", vars)
+    val installDir        = resolveTemplate(spec.installDir, s"$specPath.installDir", vars, version)
     val localVars         = vars + ("installDir"              -> installDir.value)
     val download          = resolveDownload(spec.download, specPath, localVars, version)
     val createDirectories = resolveStringVector(
@@ -234,9 +234,7 @@ private[core] final class ResolutionBuilder(
         executables = executables.value,
         symlinks = symlinks.value
       ),
-      installDir.errors ++
-        versionTemplateErrors(spec.installDir, s"$specPath.installDir", version) ++
-        createDirectories.errors ++ download.errors ++ executables.errors ++
+      installDir.errors ++ createDirectories.errors ++ download.errors ++ executables.errors ++
         symlinks.errors ++ directBinaryExecutableErrors(spec, specPath)
     )
 
@@ -266,20 +264,20 @@ private[core] final class ResolutionBuilder(
       version: ResolvedVersion
   ): ResolvedValue[ResolvedDownload] =
     val path     = s"$specPath.download"
-    val url      = interpolate(download.url, s"$path.url", vars)
-    val filename = interpolate(download.filename, s"$path.filename", vars)
+    val url      = resolveTemplate(download.url, s"$path.url", vars, version, httpsUrlErrors)
+    val filename = resolveTemplate(
+      download.filename,
+      s"$path.filename",
+      vars,
+      version,
+      ResolvedPathValidator.downloadFilename
+    )
     val archive  = resolveArchive(download.archive, path, vars, version)
     val checksum = resolveChecksum(download.checksum, path, vars, version, filename.value)
 
     ResolvedValue(
       ResolvedDownload(url.value, filename.value, checksum.value, archive.value),
-      url.errors ++ versionTemplateErrors(download.url, s"$path.url", version) ++
-        httpsUrlErrors(url.value, s"$path.url") ++
-        filename.errors ++
-        versionTemplateErrors(download.filename, s"$path.filename", version) ++
-        ResolvedPathValidator.downloadFilename(filename.value, s"$path.filename") ++
-        checksum.errors ++
-        archive.errors
+      url.errors ++ filename.errors ++ checksum.errors ++ archive.errors
     )
 
   private def resolveChecksum(
@@ -412,14 +410,23 @@ private[core] final class ResolutionBuilder(
       case (mapping, index) =>
         val fromPath = s"$path[$index].from"
         val toPath   = s"$path[$index].to"
-        val from     = interpolate(mapping.from, fromPath, vars)
-        val to       = interpolate(mapping.to, toPath, vars)
+        val from     = resolveTemplate(
+          mapping.from,
+          fromPath,
+          vars,
+          version,
+          ResolvedPathValidator.archivePath(_, _, "archive source")
+        )
+        val to = resolveTemplate(
+          mapping.to,
+          toPath,
+          vars,
+          version,
+          ResolvedPathValidator.archivePath(_, _, "archive target")
+        )
         ResolvedValue(
           ResolvedExtractMapping(from.value, to.value),
-          from.errors ++ versionTemplateErrors(mapping.from, fromPath, version) ++
-            ResolvedPathValidator.archivePath(from.value, fromPath, "archive source") ++
-            to.errors ++ versionTemplateErrors(mapping.to, toPath, version) ++
-            ResolvedPathValidator.archivePath(to.value, toPath, "archive target")
+          from.errors ++ to.errors
         )
     ResolvedValue.sequence(resolved)
 
@@ -432,12 +439,14 @@ private[core] final class ResolutionBuilder(
     val resolved = spec.executables.zipWithIndex.map:
       case (executable, index) =>
         val path  = s"$specPath.executables[$index].path"
-        val value = interpolate(executable.path, path, vars)
-        ResolvedValue(
-          ResolvedExecutable(value.value, executable.mode),
-          value.errors ++ versionTemplateErrors(executable.path, path, version) ++
-            ResolvedPathValidator.installRelativePath(value.value, path, "executable path")
+        val value = resolveTemplate(
+          executable.path,
+          path,
+          vars,
+          version,
+          ResolvedPathValidator.installRelativePath(_, _, "executable path")
         )
+        ResolvedValue(ResolvedExecutable(value.value, executable.mode), value.errors)
     ResolvedValue.sequence(resolved)
 
   private def resolveSymlinks(
@@ -451,19 +460,30 @@ private[core] final class ResolutionBuilder(
       case (symlink, index) =>
         val pathPath   = s"$specPath.symlinks[$index].path"
         val targetPath = s"$specPath.symlinks[$index].target"
-        val path       = interpolate(symlink.path, pathPath, vars)
-        val target     = interpolate(symlink.target, targetPath, vars)
-        val pathErrors = symlink.privilege match
-          case SymlinkPrivilege.User =>
-            ResolvedPathValidator.installRelativePath(path.value, pathPath, "local symlink path")
-          case SymlinkPrivilege.Sudo =>
-            ResolvedPathValidator.externalPath(path.value, pathPath, "sudo symlink path")
+        // A sudo symlink lands outside installDir by design, so the two privileges validate the
+        // link path against different rules.
+        val path = resolveTemplate(
+          symlink.path,
+          pathPath,
+          vars,
+          version,
+          (resolved, at) =>
+            symlink.privilege match
+              case SymlinkPrivilege.User =>
+                ResolvedPathValidator.installRelativePath(resolved, at, "local symlink path")
+              case SymlinkPrivilege.Sudo =>
+                ResolvedPathValidator.externalPath(resolved, at, "sudo symlink path")
+        )
+        val target = resolveTemplate(
+          symlink.target,
+          targetPath,
+          vars,
+          version,
+          ResolvedPathValidator.symlinkTarget(_, _, installDir)
+        )
         ResolvedValue(
           ResolvedSymlink(path.value, target.value, symlink.privilege),
-          path.errors ++ versionTemplateErrors(symlink.path, pathPath, version) ++
-            pathErrors ++
-            target.errors ++ versionTemplateErrors(symlink.target, targetPath, version) ++
-            ResolvedPathValidator.symlinkTarget(target.value, targetPath, installDir)
+          path.errors ++ target.errors
         )
     ResolvedValue.sequence(resolved)
 
@@ -476,15 +496,12 @@ private[core] final class ResolutionBuilder(
     val resolved = values.zipWithIndex.map:
       case (value, index) =>
         val itemPath = s"$path[$index]"
-        val item     = interpolate(value, itemPath, vars)
-        ResolvedValue(
-          item.value,
-          item.errors ++ versionTemplateErrors(value, itemPath, version) ++
-            ResolvedPathValidator.installRelativePath(
-              item.value,
-              itemPath,
-              "create directory path"
-            )
+        resolveTemplate(
+          value,
+          itemPath,
+          vars,
+          version,
+          ResolvedPathValidator.installRelativePath(_, _, "create directory path")
         )
     ResolvedValue.sequence(resolved)
 
@@ -505,6 +522,36 @@ private[core] final class ResolutionBuilder(
       path: String,
       vars: Map[String, String]
   ): ResolvedValue[String] = TemplateInterpolator.interpolate(value, path, vars)
+
+  /** Resolve one templated manifest field.
+   *
+   *  Every templated field goes through the same three steps in the same order, and the order
+   *  matters: interpolate the raw value, then complain if the RAW value referenced `$${version}`
+   *  while no concrete version exists, then validate the RESOLVED value as a path or URL. Checking
+   *  the wrong one of the two — raw where resolved is meant, or the reverse — is the mistake this
+   *  helper exists to make unrepeatable, since each call site previously spelled all three out.
+   */
+  private def resolveTemplate(
+      raw: String,
+      path: String,
+      vars: Map[String, String],
+      version: ResolvedVersion,
+      validate: (String, String) => Vector[ValidationError]
+  ): ResolvedValue[String] =
+    val interpolated = interpolate(raw, path, vars)
+    ResolvedValue(
+      interpolated.value,
+      interpolated.errors ++ versionTemplateErrors(raw, path, version) ++
+        validate(interpolated.value, path)
+    )
+
+  /** Resolve a templated field that carries no path or URL rule of its own. */
+  private def resolveTemplate(
+      raw: String,
+      path: String,
+      vars: Map[String, String],
+      version: ResolvedVersion
+  ): ResolvedValue[String] = resolveTemplate(raw, path, vars, version, (_, _) => Vector.empty)
 
   private def validateInstallDirectories(
       policy: ResolvedPolicy,
