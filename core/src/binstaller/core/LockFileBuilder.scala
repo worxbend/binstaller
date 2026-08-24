@@ -43,14 +43,7 @@ private[core] object LockFileBuilder:
       tool: ResolvedTool,
       actual: Sha256Digest
   ): Either[LockBuildError, LockFileChecksum] = tool.download.checksum match
-    case None => Right(LockFileChecksum(
-        "sha256",
-        actual.value,
-        "inspected",
-        None,
-        None,
-        None
-      ))
+    case None => Right(LockFileChecksum.inspected("sha256", actual.value))
     case Some(configured) if configured.value.equalsIgnoreCase(actual.value) =>
       Right(LockFileChecksum.fromResolved(configured))
     case Some(configured) => Left(LockBuildError(

@@ -157,14 +157,7 @@ private[core] trait CoreTestSupport:
           versionProvenance = Some(betaVersionProvenance),
           downloadProvenance = betaDownloadProvenance,
           sizeBytes = Some(22L),
-          checksum = Some(LockFileChecksum(
-            "sha256",
-            "b" * 64,
-            "inspected",
-            None,
-            None,
-            None
-          )),
+          checksum = Some(LockFileChecksum.inspected("sha256", "b" * 64)),
           dynamicSource = false
         ),
         LockFileTool(
@@ -174,14 +167,7 @@ private[core] trait CoreTestSupport:
           downloadProvenance = UrlProvenance.direct("https://example.invalid/latest/gamma"),
           sizeBytes = dynamicSize,
           checksum = dynamicSize.map(_ =>
-            LockFileChecksum(
-              "sha256",
-              "c" * 64,
-              "inspected",
-              None,
-              None,
-              None
-            )
+            LockFileChecksum.inspected("sha256", "c" * 64)
           ),
           dynamicSource = true
         )

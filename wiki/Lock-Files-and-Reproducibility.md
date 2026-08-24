@@ -50,10 +50,7 @@ That last line is the one to read in CI. `missing 0` is the goal.
       "checksum": {
         "algorithm": "sha256",
         "value": "45d49e064d8684926fed97ad051c6ecebbf796a3c709edaa7a4a166b2978633d",
-        "source": "configured",
-        "discoveryUrl": null,
-        "discoveryFile": null,
-        "discoveryProvenance": null
+        "source": "configured"
       },
       "dynamicSource": false
     }
@@ -66,7 +63,7 @@ That last line is the one to read in CI. `missing 0` is the goal.
 | `manifestFingerprint` | Ties the lock to the exact manifest content it was generated from. |
 | `downloadProvenance.redirects` | Records every hop, so a changed CDN path is visible in review. |
 | `sizeBytes` | Cross-checked against upstream metadata at locked-apply time. |
-| `checksum.source` | `configured`, `discovered`, or absent — provenance of the digest itself. |
+| `checksum.source` | Provenance of the digest itself: `"configured"` (pinned in the manifest), `"inspected"` (observed while writing the lock), or a `discovered` object carrying the discovery `url`, `file` and its own `provenance`. Absent when no checksum is known. |
 | `dynamicSource` | Marks tools whose version is intentionally resolved by a latest-URL. |
 
 > ⚠️ `finalUrl` values for GitHub release assets contain **signed, expiring** query parameters.

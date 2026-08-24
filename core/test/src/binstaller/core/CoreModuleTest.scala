@@ -888,11 +888,13 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
       assert(lockResult.lines.exists(_.contains(
         "checksums: configured 0, discovered 1, inspected 0, missing 0"
       )))
-      assert(lock.tools.head.checksum.exists(checksum =>
-        checksum.source == "discovered" &&
-          checksum.discoveryUrl.contains(checksumFileUrl) &&
-          checksum.discoveryFile.contains("alpha-1.0.0.tar.gz")
-      ))
+      // Matching the case binds url and file together, so the three facts cannot disagree the way
+      // a string tag plus two independently-nullable fields could.
+      assert(lock.tools.head.checksum.map(_.source).exists:
+        case LockedChecksumSource.Discovered(url, file, _) =>
+          url == checksumFileUrl && file == "alpha-1.0.0.tar.gz"
+        case _ => false
+      )
 
     test("ambiguous discovered checksum fails resolution with a colliding-path diagnostic"):
       val tempRoot        = Files.createTempDirectory("binstaller-core-checksum-ambiguous")
@@ -1115,7 +1117,7 @@ object CoreModuleTest extends TestSuite with CoreTestSupport:
             None,
             UrlProvenance.direct(url),
             Some(expected.length.toLong),
-            Some(LockFileChecksum("sha256", expectedHash, "inspected", None, None, None)),
+            Some(LockFileChecksum.inspected("sha256", expectedHash)),
             false
           ))
         )

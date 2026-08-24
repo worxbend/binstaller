@@ -57,42 +57,62 @@ final case class LockFileTool(
     dynamicSource: Boolean
 )
 
+/** Where a locked checksum came from.
+ *
+ *  The three fields describing a discovery source can only ever be populated together, so they
+ *  belong to that case rather than to the record. Previously the lock file carried `source` as a
+ *  free string alongside three nullable siblings, and `summary` counted the states by comparing
+ *  string literals — a typo there silently reports zero of a category rather than failing.
+ */
+enum LockedChecksumSource derives upickle.default.ReadWriter:
+
+  /** Pinned by the manifest author. */
+  @upickle.implicits.key("configured") case Configured
+
+  /** Fetched from a discovery source published alongside the artifact. */
+  @upickle.implicits.key("discovered")
+  case Discovered(url: String, file: String, provenance: UrlProvenance)
+
+  /** Observed by downloading the artifact while writing the lock file. */
+  @upickle.implicits.key("inspected") case Inspected
+
 /** Serialized checksum metadata copied from the manifest or a typed discovery source. */
 final case class LockFileChecksum(
     algorithm: String,
     value: String,
-    source: String,
-    discoveryUrl: Option[String],
-    discoveryFile: Option[String],
-    discoveryProvenance: Option[UrlProvenance]
+    source: LockedChecksumSource
 )
 
 /** Lock-file checksum constructors and summaries. */
 object LockFileChecksum:
 
-  /** Build a configured checksum entry for legacy call sites and tests. */
+  /** Build a checksum entry pinned by the manifest author. */
   def apply(algorithm: String, value: String): LockFileChecksum =
-    LockFileChecksum(algorithm, value, "configured", None, None, None)
+    LockFileChecksum(algorithm, value, LockedChecksumSource.Configured)
+
+  /** Build a checksum entry observed by downloading the artifact. */
+  def inspected(algorithm: String, value: String): LockFileChecksum =
+    LockFileChecksum(algorithm, value, LockedChecksumSource.Inspected)
 
   /** Convert resolved checksum provenance into lock-file metadata. */
-  def fromResolved(checksum: ResolvedChecksum): LockFileChecksum = checksum.source match
-    case ResolvedChecksumSource.Configured =>
-      LockFileChecksum(checksum.algorithm.value, checksum.value)
-    case ResolvedChecksumSource.Discovered(url, file, provenance) => LockFileChecksum(
-        checksum.algorithm.value,
-        checksum.value,
-        "discovered",
-        Some(url),
-        Some(file),
-        Some(provenance)
-      )
+  def fromResolved(checksum: ResolvedChecksum): LockFileChecksum = LockFileChecksum(
+    checksum.algorithm.value,
+    checksum.value,
+    checksum.source match
+      case ResolvedChecksumSource.Configured => LockedChecksumSource.Configured
+      case ResolvedChecksumSource.Discovered(url, file, provenance) =>
+        LockedChecksumSource.Discovered(url, file, provenance)
+  )
 
   /** Summarize checksum states across lock-file tools. */
   def summary(tools: Vector[LockFileTool]): String =
-    val configured = tools.count(_.checksum.exists(_.source == "configured"))
-    val discovered = tools.count(_.checksum.exists(_.source == "discovered"))
-    val inspected  = tools.count(_.checksum.exists(_.source == "inspected"))
-    val missing    = tools.count(_.checksum.isEmpty)
+    val sources    = tools.flatMap(_.checksum).map(_.source)
+    val configured = sources.count(_ == LockedChecksumSource.Configured)
+    val discovered = sources.count:
+      case _: LockedChecksumSource.Discovered => true
+      case _                                  => false
+    val inspected = sources.count(_ == LockedChecksumSource.Inspected)
+    val missing   = tools.count(_.checksum.isEmpty)
     s"configured $configured, discovered $discovered, inspected $inspected, missing $missing"
 
 /** Lock-file JSON codecs and constructors. */
