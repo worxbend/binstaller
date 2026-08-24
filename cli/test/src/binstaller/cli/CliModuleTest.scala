@@ -2,7 +2,6 @@ package binstaller.cli
 
 import binstaller.config.Sha256Digest
 import binstaller.core.BinaryInstallerService
-import binstaller.core.ApplyParallelism
 import binstaller.core.BinaryDownloadArtifact
 import binstaller.core.BinaryDownloadClient
 import binstaller.core.BinaryDownloadError
