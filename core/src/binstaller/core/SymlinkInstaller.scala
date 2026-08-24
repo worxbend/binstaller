@@ -18,16 +18,19 @@ private[core] object SymlinkInstaller:
       commandExecutor: CommandExecutor,
       sudoCredentials: SudoCredentialProvider
   ): Either[ToolInstallError, Unit] =
-    val writes = tool.symlinks.map: symlink =>
-      symlink.privilege match
-        case SymlinkPrivilege.User => createLocalSymlink(tool, symlink)
-        case SymlinkPrivilege.Sudo =>
-          createSudoSymlink(policy, tool, symlink, commandExecutor, sudoCredentials)
-    writes.collectFirst:
-      case Left(error) => error
-    match
-      case Some(error) => Left(error)
-      case None        => Right(())
+    // `.iterator` is load-bearing, not a style choice: creating a symlink can prompt for a sudo
+    // password and shell out to `sudo ln`. A strict `.map` runs every remaining entry after the
+    // first failure -- prompting the user again and performing privileged writes -- and then
+    // discards all of those results in favour of the first error.
+    tool.symlinks.iterator
+      .map: symlink =>
+        symlink.privilege match
+          case SymlinkPrivilege.User => createLocalSymlink(tool, symlink)
+          case SymlinkPrivilege.Sudo =>
+            createSudoSymlink(policy, tool, symlink, commandExecutor, sudoCredentials)
+      .collectFirst:
+        case Left(error) => error
+      .toLeft(())
 
   private def createLocalSymlink(
       tool: ResolvedTool,
