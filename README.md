@@ -175,6 +175,12 @@ binstaller apply --locked --lock-file binstaller.lock.json
 | `--locked` | Require a compatible JSON lock file before rendering or applying. |
 | `--lock-file FILE` | Path to the JSON lock file used by `--locked`. |
 
+**`apply` also accepts**
+
+| Flag | Meaning |
+|---|---|
+| `--parallelism N` | Number of tools downloaded and staged concurrently. Default `4`. Must be at least `1`. |
+
 **`lock` also accepts**
 
 | Flag | Meaning |

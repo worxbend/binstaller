@@ -45,7 +45,9 @@ and command output consumes resolved plans or renderer-agnostic events.
    manifest order.
 5. `plan` renders the selected `ResolvedPlan` directly as script-friendly text.
 6. `apply` checks state compatibility, executes each selected tool, writes apply
-   state after terminal tool results, and emits `InstallerEvent` values.
+   state after terminal tool results, and emits `InstallerEvent` values. Tools
+   are downloaded and staged with bounded parallelism (`ApplyParallelism`,
+   default 4, overridable with `apply --parallelism N`).
 7. CLI apply progress consumes the event contract to keep a compact progress
    line and summary without changing core execution behavior.
 

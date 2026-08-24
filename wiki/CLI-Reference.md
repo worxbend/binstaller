@@ -89,12 +89,14 @@ binstaller apply
 binstaller apply --only lazygit
 binstaller apply --reset-state
 binstaller apply --locked --lock-file binstaller.lock.json
+binstaller apply --parallelism 1
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--locked` | Require a compatible JSON lock file before applying. |
 | `--lock-file FILE` | Path to the lock file used by `--locked`. |
+| `--parallelism N` | Number of tools downloaded and staged concurrently. Default `4`. Must be at least `1`. Lower it to reduce network and disk pressure; `--parallelism 1` makes the run fully sequential. |
 
 **Per-tool phases:** `Resolving` → `Planning` → `LoadingState` → `Downloading` →
 `VerifyingChecksum` → `Staging` → `ApplyingModes` → `ReplacingInstall` →
