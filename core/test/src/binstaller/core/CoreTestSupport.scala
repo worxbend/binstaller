@@ -63,7 +63,7 @@ private[core] trait CoreTestSupport:
     case other        => abort(s"expected one tool, got ${other.size}")
 
   protected def assertInstallSuccess(
-      result: Either[ToolInstallError, ToolInstallSuccess],
+      result: Either[ToolInstallError, TerminalToolResult.Completed],
       installDir: String
   ): Unit = result match
     case Right(success) =>

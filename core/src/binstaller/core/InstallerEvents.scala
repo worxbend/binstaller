@@ -131,13 +131,6 @@ private[core] object InstallerEventContext:
 private[core] final class SerializedInstallerEventSink(observer: InstallerEventObserver):
   def emit(event: InstallerEvent): Unit = observer.onEvent(event)
 
-/** Successful installation of a single tool. */
-final case class ToolInstallSuccess(
-    toolName: String,
-    installDir: String,
-    download: Option[UrlProvenance] = None
-)
-
 /** Terminal result emitted for state persistence and renderer summaries. */
 enum TerminalToolResult:
   case Completed(toolName: String, installDir: String, download: Option[UrlProvenance] = None)

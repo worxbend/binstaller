@@ -126,7 +126,7 @@ final class DirectBinaryInstaller(
   /** Install a single tool without sudo symlink support. Core-internal (tests/helpers): it takes a
    *  [[ResolvedTool]] directly and so bypasses the PlanResolver appsDir-containment validation the
    *  production path enforces; not part of the public boundary. */
-  private[core] def installTool(tool: ResolvedTool): Either[ToolInstallError, ToolInstallSuccess] =
+  private[core] def installTool(tool: ResolvedTool): Either[ToolInstallError, TerminalToolResult.Completed] =
     val policy = ResolvedPolicy(
       tool.installDir,
       None,
@@ -148,19 +148,19 @@ final class DirectBinaryInstaller(
       tool: ResolvedTool,
       eventContext: InstallerEventContext,
       redactions: SensitiveValueRedactions
-  ): Either[ToolInstallError, ToolInstallSuccess] =
+  ): Either[ToolInstallError, TerminalToolResult.Completed] =
     installDownloadedBinaryOrArchive(policy, tool, eventContext, redactions)
 
   private def terminalResult(
-      result: Either[ToolInstallError, ToolInstallSuccess],
+      result: Either[ToolInstallError, TerminalToolResult.Completed],
       redactions: SensitiveValueRedactions
-  ): TerminalToolResult = result match
-    case Right(success) =>
-      TerminalToolResult.Completed(success.toolName, success.installDir, success.download)
-    case Left(error) => TerminalToolResult.Failed(
-        ToolInstallError.toolName(error),
-        ToolInstallError.render(error, redactions)
-      )
+  ): TerminalToolResult = result.fold(
+    error => TerminalToolResult.Failed(
+      ToolInstallError.toolName(error),
+      ToolInstallError.render(error, redactions)
+    ),
+    identity
+  )
 
   private def toolResultEvent(
       result: TerminalToolResult
@@ -206,7 +206,7 @@ final class DirectBinaryInstaller(
       tool: ResolvedTool,
       eventContext: InstallerEventContext,
       redactions: SensitiveValueRedactions
-  ): Either[ToolInstallError, ToolInstallSuccess] =
+  ): Either[ToolInstallError, TerminalToolResult.Completed] =
     prepareDownloadedBinaryOrArchive(tool, eventContext, redactions).flatMap:
       case (staged, provenance) => completePreparedTool(policy, tool, staged, provenance, eventContext)
 
@@ -312,7 +312,7 @@ final class DirectBinaryInstaller(
       policy: ResolvedPolicy,
       prepared: PreparedToolResult,
       eventContext: InstallerEventContext
-  ): (Vector[String], Either[ToolInstallError, ToolInstallSuccess]) = prepared match
+  ): (Vector[String], Either[ToolInstallError, TerminalToolResult.Completed]) = prepared match
     case PreparedToolResult.Failed(_, error, verbose)                     => verbose -> Left(error)
     case PreparedToolResult.Ready(tool, stagedInstall, download, verbose) => verbose ->
         completePreparedTool(policy, tool, stagedInstall, download, eventContext)
@@ -323,7 +323,7 @@ final class DirectBinaryInstaller(
       stagedInstall: StagedInstall,
       download: UrlProvenance,
       eventContext: InstallerEventContext
-  ): Either[ToolInstallError, ToolInstallSuccess] =
+  ): Either[ToolInstallError, TerminalToolResult.Completed] =
     for
       _ <-
         withPhase(tool, InstallerPhase.ReplacingInstall, eventContext)(replace(tool, stagedInstall))
@@ -333,11 +333,11 @@ final class DirectBinaryInstaller(
       _ <- withPhase(tool, InstallerPhase.CreatingSymlinks, eventContext)(
         SymlinkInstaller.create(policy, tool, commandExecutor, sudoCredentials)
       )
-    yield ToolInstallSuccess(tool.name, tool.installDir, Some(download))
+    yield TerminalToolResult.Completed(tool.name, tool.installDir, Some(download))
 
   private def appendFinalizedResult(
       observed: ObservedInstallResults,
-      finalized: (Vector[String], Either[ToolInstallError, ToolInstallSuccess]),
+      finalized: (Vector[String], Either[ToolInstallError, TerminalToolResult.Completed]),
       redactions: SensitiveValueRedactions,
       terminalObserver: TerminalToolResult => Either[String, Unit],
       eventContext: InstallerEventContext
