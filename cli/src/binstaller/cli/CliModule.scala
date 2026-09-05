@@ -172,20 +172,18 @@ private[cli] abstract class ConfiguredCommand(
     out: PrintWriter
 ) extends Callable[Integer]:
 
-  protected def executeWithOptions(
-      amend: InstallerOptions => InstallerOptions,
-      action: InstallerOptions => InstallerResult
-  ): Integer = executeWithOptions(amend, action, identity)
+  protected def installerOptions: InstallerOptions = root.installerOptions
 
   protected def executeWithOptions(
-      amend: InstallerOptions => InstallerOptions,
+      action: InstallerOptions => InstallerResult
+  ): Integer = executeWithOptions(action, identity)
+
+  protected def executeWithOptions(
       action: InstallerOptions => InstallerResult,
       renderResult: InstallerResult => InstallerResult
-  ): Integer =
-    val options = amend(root.installerOptions)
-    render(renderResult(action(options)))
+  ): Integer = render(renderResult(action(installerOptions)))
 
-  private def render(result: InstallerResult): Integer =
+  protected def render(result: InstallerResult): Integer =
     result.lines.foreach(out.println)
     Integer.valueOf(CliExitCode.of(result.status))
 
@@ -211,7 +209,8 @@ private[cli] abstract class SelectableCommand(
   )
   def addSkippedTool(value: String): Unit = skippedTools = skippedTools :+ value
 
-  protected def selection: ToolSelection = ToolSelection(onlyTools, skippedTools)
+  override protected def installerOptions: InstallerOptions =
+    super.installerOptions.copy(selection = ToolSelection(onlyTools, skippedTools))
 
 /**
  * A selectable command that can also be pinned to a lock file.
@@ -241,8 +240,8 @@ private[cli] abstract class LockAwareCommand(
   )
   def setLockPath(value: String): Unit = lockPath = value
 
-  protected def amendLock(options: InstallerOptions): InstallerOptions =
-    options.copy(lockPath = lockPath, lockedApply = lockedApply)
+  override protected def installerOptions: InstallerOptions =
+    super.installerOptions.copy(lockPath = lockPath, lockedApply = lockedApply)
 
 @Command(
   name = "plan",
@@ -255,8 +254,7 @@ private[cli] final class PlanCommand(
     out: PrintWriter
 ) extends LockAwareCommand(root, out):
 
-  override def call(): Integer =
-    executeWithOptions(options => amendLock(options).copy(selection = selection), service.plan)
+  override def call(): Integer = executeWithOptions(service.plan)
 
 @Command(
   name = "apply",
@@ -290,17 +288,19 @@ private[cli] final class ApplyCommand(
       // knows how this option is spelled.
       err.println(s"--parallelism ${ApplyParallelismError.render(error)}")
       Integer.valueOf(CommandLine.ExitCode.USAGE)
-    case Right(parallelism) => executeWithOptions(
-        options => amendLock(options).copy(selection = selection, applyParallelism = parallelism),
-        options =>
-          val eventRenderer = CliApplyEventRenderer(out, outputStyle)
-          val result        = service.applyWithEvents(options, eventRenderer)
-          eventRenderer.finish()
-          result.copy(lines =
-            CliApplyOutput.colorLines(result.lines, result.renderedTerminalLines, outputStyle) ++
-              eventRenderer.summaryLines
-          )
-      )
+    case Right(parallelism) =>
+      val options = installerOptions.copy(applyParallelism = parallelism)
+      render(runApply(options))
+
+  private def runApply(options: InstallerOptions): InstallerResult =
+    val eventRenderer = CliApplyEventRenderer(out, outputStyle)
+    val result        =
+      try service.applyWithEvents(options, eventRenderer)
+      finally eventRenderer.finish()
+    result.copy(lines =
+      CliApplyOutput.colorLines(result.lines, result.renderedTerminalLines, outputStyle) ++
+        eventRenderer.summaryLines
+    )
 
 @Command(
   name = "versions",
@@ -315,7 +315,6 @@ private[cli] final class VersionsCommand(
 ) extends SelectableCommand(root, out):
 
   override def call(): Integer = executeWithOptions(
-    _.copy(selection = selection),
     service.versions,
     result =>
       if result.status == InstallerRunStatus.Succeeded then
@@ -342,7 +341,5 @@ private[cli] final class LockCommand(
   )
   def setOutputPath(value: String): Unit = outputPath = value
 
-  override def call(): Integer = executeWithOptions(
-    _.copy(selection = selection),
-    options => service.lock(options, LockOptions(outputPath))
-  )
+  override def call(): Integer =
+    executeWithOptions(options => service.lock(options, LockOptions(outputPath)))

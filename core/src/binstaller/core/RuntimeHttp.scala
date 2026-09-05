@@ -8,8 +8,11 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.io.InputStream
 import scala.annotation.tailrec
+import scala.concurrent.duration.DurationLong
 import scala.util.Try
 import java.time.Duration
+import scala.util.Using
+import ox.timeoutEither
 
 private[core] object RuntimeHttpClient:
   val requestTimeout: Duration = Duration.ofSeconds(30)
@@ -29,7 +32,7 @@ private[core] object RuntimeHttpClient:
       response: HttpResponse[InputStream],
       message: String
   ): Either[String, Nothing] =
-    response.body().close()
+    RuntimeHttpBody.closeAfterFailure(response.body())
     Left(message)
 
   def getInputStream(
@@ -82,6 +85,18 @@ private[core] final case class RuntimeHttpResponse(
     response: HttpResponse[InputStream],
     provenance: UrlProvenance
 )
+
+private[core] object RuntimeHttpBody:
+
+  def closeAfterFailure(body: InputStream): Unit =
+    val _ = Try(body.close())
+
+  def readWithDeadline[E, A](
+      body: InputStream,
+      timeout: Duration,
+      timeoutFailure: E
+  )(read: InputStream => Either[E, A]): Either[E, A] = Using.resource(body): input =>
+    timeoutEither(timeout.toNanos.nanos, timeoutFailure)(read(input))
 
 private[core] object RuntimeUrl:
 

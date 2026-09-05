@@ -261,30 +261,36 @@ private[config] object ManifestDecoder:
       DownloadSpec(url, filename, checksum, archive)
 
   private def optionalChecksum(map: YamlMap, path: String): DecodeResult[Option[ChecksumSpec]] =
-    optionalBlock(map, "checksum", path, Set("algorithm", "value", "discover")):
-      (checksumMap, acc) =>
-        val algorithm = acc(enumValue(
-          requiredString(checksumMap, s"$path.algorithm"),
-          s"$path.algorithm",
-          ChecksumAlgorithm.values.toVector,
-          ChecksumAlgorithm.Sha256,
-          _.value
-        ))
-        val rawChecksum = acc(optionalString(checksumMap, "value", s"$path.value"))
-        val discover    = acc(optionalChecksumDiscovery(checksumMap, s"$path.discover"))
-        // The raw Option decides the "value or discover" shape rules; parsing happens after, so a
-        // malformed digest is reported as a bad digest rather than as a missing one.
-        acc.report(checksumShapeErrors(path, rawChecksum, discover))
-        val checksum = rawChecksum.flatMap: value =>
-          Sha256Digest.fromString(value) match
-            case Right(digest) => Some(digest)
-            case Left(_)       =>
-              acc.report(Vector(ValidationError(
-                s"$path.value",
-                "sha256 checksum must be 64 hexadecimal characters"
-              )))
-              None
-        ChecksumSpec(algorithm, checksum, discover)
+    map.get("checksum") match
+      case None        => DecodeResult.valid(None)
+      case Some(value) => DecodeResult.accumulate: acc =>
+          val checksumMap = acc(asMap(value, path))
+          acc.report(unknownKeyErrors(checksumMap, path, Set("algorithm", "value", "discover")))
+          val algorithm = acc(enumValue(
+            requiredString(checksumMap, s"$path.algorithm"),
+            s"$path.algorithm",
+            ChecksumAlgorithm.values.toVector,
+            ChecksumAlgorithm.Sha256,
+            _.value
+          ))
+          val rawChecksum = acc(optionalString(checksumMap, "value", s"$path.value"))
+          val discover    = acc(optionalChecksumDiscovery(checksumMap, s"$path.discover"))
+          // The raw Option decides the "value or discover" shape rules; parsing happens after, so a
+          // malformed digest is reported as a bad digest rather than as a missing one.
+          acc.report(checksumShapeErrors(path, rawChecksum, discover))
+          val literal = rawChecksum.flatMap: value =>
+            Sha256Digest.fromString(value) match
+              case Right(digest) => Some(digest)
+              case Left(_)       =>
+                acc.report(Vector(ValidationError(
+                  s"$path.value",
+                  "sha256 checksum must be 64 hexadecimal characters"
+                )))
+                None
+          (rawChecksum, literal, discover) match
+            case (Some(_), Some(digest), None) => Some(ChecksumSpec(algorithm, digest))
+            case (None, _, Some(source))       => Some(ChecksumSpec.discovery(algorithm, source))
+            case _                             => None
 
   private def optionalChecksumDiscovery(
       map: YamlMap,
@@ -448,13 +454,13 @@ private[config] object ManifestDecoder:
    * are still accumulated and reported in the same pass.
    */
   private def requiredToolName(map: YamlMap, path: String): DecodeResult[ToolName] =
-    DecodeResult.accumulate: acc =>
-      val raw = acc(requiredString(map, path))
+    val decoded = requiredString(map, path)
+    if decoded.errors.nonEmpty then DecodeResult(ToolName.invalidSentinel, decoded.errors)
+    else
+      val raw = decoded.value
       ToolName.fromString(raw) match
-        case Right(name)   => name
-        case Left(message) =>
-          acc.report(Vector(ValidationError(path, message)))
-          ToolName.invalidSentinel
+        case Right(name)   => DecodeResult.valid(name)
+        case Left(message) => DecodeResult.invalid(ToolName.invalidSentinel, path, message)
 
   private def unknownKeyErrors(
       map: YamlMap,

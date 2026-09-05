@@ -18,7 +18,12 @@ object VerboseOutput:
   /** Convert a boolean CLI flag into [[VerboseOutput]]. */
   def fromFlag(value: Boolean): VerboseOutput = if value then Enabled else Disabled
 
-/** Runtime options shared by plan, apply, versions, and lock entrypoints. */
+/**
+ * Legacy CLI-shaped request shared by the rendered command entrypoints.
+ *
+ * Embedded callers resolving plans or writing locks can use [[PlanRequest]] and [[LockRequest]],
+ * which contain only inputs relevant to those operations and model profile origin explicitly.
+ */
 final case class InstallerOptions(
     configPath: String,
     statePath: Option[String],

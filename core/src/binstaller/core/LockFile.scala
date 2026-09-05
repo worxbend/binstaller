@@ -1,16 +1,8 @@
 package binstaller.core
 
-import binstaller.config.Diagnostics
 import binstaller.config.ToolName
 
-import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
-import java.nio.file.StandardOpenOption
-import java.util.UUID
-import scala.util.Failure
-import scala.util.Success
-import scala.util.Try
 import upickle.default.*
 
 import binstaller.core.ToolNameCodec.given
@@ -152,35 +144,15 @@ private[core] object NioLockFileStore extends LockFileStore:
 
   def load(path: Path): Either[LockFileError, LockFile] =
     val normalized = path.toAbsolutePath.normalize()
-    if !Files.exists(normalized) then Left(LockFileError.Missing(normalized))
-    else
-      Try(read[LockFile](Files.readString(normalized))) match
-        case Success(lockFile)                  => Right(lockFile)
-        case Failure(error: upickle.core.Abort) =>
-          Left(LockFileError.DecodeFailed(normalized, Diagnostics.describe(error)))
-        case Failure(error) =>
-          Left(LockFileError.ReadFailed(normalized, Diagnostics.describe(error)))
+    PersistedJson.load[LockFile](normalized) match
+      case Left(PersistedJsonReadError.DecodeFailed(message)) =>
+        Left(LockFileError.DecodeFailed(normalized, message))
+      case Left(PersistedJsonReadError.ReadFailed(message)) =>
+        Left(LockFileError.ReadFailed(normalized, message))
+      case Right(Some(lockFile)) => Right(lockFile)
+      case Right(None)           => Left(LockFileError.Missing(normalized))
 
   def save(path: Path, lockFile: LockFile): Either[LockFileError, Unit] =
     val normalized = path.toAbsolutePath.normalize()
-    val parent     = Option(normalized.getParent).getOrElse(Path.of("").toAbsolutePath.normalize())
-    val tmp        = parent.resolve(s".${normalized.getFileName}.tmp-${UUID.randomUUID()}")
-    Try:
-      Files.createDirectories(parent)
-      val _ = Files.writeString(
-        tmp,
-        write(lockFile, indent = 2),
-        StandardOpenOption.CREATE_NEW,
-        StandardOpenOption.WRITE
-      )
-      val _ = Files.move(
-        tmp,
-        normalized,
-        StandardCopyOption.ATOMIC_MOVE,
-        StandardCopyOption.REPLACE_EXISTING
-      )
-    match
-      case Success(_)     => Right(())
-      case Failure(error) =>
-        val _ = Files.deleteIfExists(tmp)
-        Left(LockFileError.WriteFailed(normalized, Diagnostics.describe(error)))
+    PersistedJson.writeAtomically(normalized, write(lockFile, indent = 2))
+      .left.map(message => LockFileError.WriteFailed(normalized, message))

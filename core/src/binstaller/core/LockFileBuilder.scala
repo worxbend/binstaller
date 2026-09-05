@@ -10,9 +10,11 @@ private[core] object LockFileBuilder:
   def build(
       prepared: PreparedPlan,
       metadataClient: BinaryMetadataClient
-  ): Either[LockBuildError, LockFile] = collectEither(
-    prepared.plan.tools.map(tool => toolEntry(tool, metadataClient))
-  ).map: tools =>
+  ): Either[LockBuildError, LockFile] = prepared.plan.tools.foldLeft(
+    Right(Vector.empty): Either[LockBuildError, Vector[LockFileTool]]
+  ): (collected, tool) =>
+    collected.flatMap(tools => toolEntry(tool, metadataClient).map(tools :+ _))
+  .map: tools =>
     LockFile(
       LockFile.schemaVersion,
       prepared.profileName,
@@ -59,13 +61,3 @@ private[core] object LockFileBuilder:
   ): (Option[String], Option[UrlProvenance], Boolean) = version match
     case ResolvedVersion.Concrete(value, provenance) => (Some(value), provenance, false)
     case ResolvedVersion.DynamicLatestUrl(_)         => (None, None, true)
-
-  private def collectEither[A](
-      values: Vector[Either[LockBuildError, A]]
-  ): Either[LockBuildError, Vector[A]] = values.foldLeft(
-    Right(Vector.empty): Either[LockBuildError, Vector[A]]
-  ): (acc, next) =>
-    for
-      current <- acc
-      value   <- next
-    yield current :+ value

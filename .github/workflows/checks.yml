@@ -1,0 +1,58 @@
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Java
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Cache Mill and dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/Library/Caches/Coursier
+            ~/.cache/mill
+            ~/.ivy2/cache
+          key: ${{ runner.os }}-${{ runner.arch }}-mill-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-mill-
+
+      - name: Check formatting
+        run: ./mill mill.scalalib.scalafmt/checkFormatAll
+
+      - name: Compile with warnings as errors
+        run: ./mill __.compile
+
+      - name: Run tests
+        run: ./mill __.test
+
+      - name: Smoke test CLI
+        run: ./mill app.run --help

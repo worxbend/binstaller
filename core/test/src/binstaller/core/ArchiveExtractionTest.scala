@@ -133,6 +133,73 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
         case _ => false)
       assert(Files.readString(existingFile) == "existing")
 
+    test("normalized duplicate explicit sources are rejected before replacement"):
+      val tempRoot     = tempDirectory("core-zip-duplicate-source")
+      val installDir   = tempRoot.resolve("alpha")
+      val existingFile = installDir.resolve("bin/alpha")
+      Files.createDirectories(existingFile.getParent)
+      Files.writeString(existingFile, "existing")
+      val installer = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success(zipArchive(Vector("pkg/alpha" -> "replacement"))),
+        InstallFileSystem.nio
+      )
+
+      val result = installer.installTool(archiveTool(
+        installDir,
+        ArchiveType.Zip,
+        files = Vector("pkg/alpha" -> "bin/alpha", "pkg/./alpha" -> "copy/alpha")
+      ))
+
+      assert(result.left.exists:
+        case ToolInstallError.ArchiveExtractionFailed(_, message) =>
+          message.contains("duplicate archive source")
+        case _ => false)
+      assert(Files.readString(existingFile) == "existing")
+
+    test("normalized duplicate directory sources are rejected before replacement"):
+      val tempRoot     = tempDirectory("core-zip-duplicate-directory-source")
+      val installDir   = tempRoot.resolve("alpha")
+      val existingFile = installDir.resolve("bin/alpha")
+      Files.createDirectories(existingFile.getParent)
+      Files.writeString(existingFile, "existing")
+      val installer = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success(zipArchive(Vector("pkg/alpha" -> "replacement"))),
+        InstallFileSystem.nio
+      )
+
+      val result = installer.installTool(archiveTool(
+        installDir,
+        ArchiveType.Zip,
+        directories = Vector("pkg" -> "bin", "pkg/./" -> "copy")
+      ))
+
+      assert(result.left.exists:
+        case ToolInstallError.ArchiveExtractionFailed(_, message) =>
+          message.contains("duplicate archive source: pkg")
+        case _ => false)
+      assert(Files.readString(existingFile) == "existing")
+      assert(!hasStagedInstall(tempRoot, "alpha"))
+
+    test("the same normalized source cannot be declared as both a file and a directory"):
+      val tempRoot  = tempDirectory("core-zip-conflicting-source")
+      val installer = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success(zipArchive(Vector("pkg/alpha" -> "replacement"))),
+        InstallFileSystem.nio
+      )
+      val result = installer.installTool(archiveTool(
+        tempRoot.resolve("alpha"),
+        ArchiveType.Zip,
+        files = Vector("pkg/alpha" -> "bin/alpha"),
+        directories = Vector("pkg/./alpha" -> "copy")
+      ))
+
+      assert(result.left.exists:
+        case ToolInstallError.ArchiveExtractionFailed(_, message) =>
+          message.contains("duplicate archive source: pkg/alpha")
+        case _ => false)
+      assert(!Files.exists(tempRoot.resolve("alpha")))
+      assert(!hasStagedInstall(tempRoot, "alpha"))
+
     test("tar.gz hardlink metadata is rejected before replacement"):
       val tempRoot     = tempDirectory("core-targz-hardlink")
       val installDir   = tempRoot.resolve("alpha")
@@ -182,6 +249,41 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
     test("archive extraction enforces an aggregate expanded-byte budget"):
       assert(ArchiveExtractor.validateExtractedSize(ArchiveExtractor.maxExtractedBytes).isRight)
       assert(ArchiveExtractor.validateExtractedSize(ArchiveExtractor.maxExtractedBytes + 1).isLeft)
+
+    test("file and directory fan-out charges both disk copies but inflates once"):
+      val tempRoot = tempDirectory("core-archive-fanout-budget")
+      val artifact = tempRoot.resolve("alpha.tar.gz")
+      val staging  = tempRoot.resolve("stage")
+      val payload  = "tool-bytes".getBytes(StandardCharsets.UTF_8)
+      Files.write(artifact, tarGzArchive(Vector("pkg/tool" -> "tool-bytes")))
+      Files.createDirectory(staging)
+      val archive = archiveTool(
+        tempRoot.resolve("install"),
+        ArchiveType.TarGz,
+        files = Vector("pkg/tool" -> "bin/alpha"),
+        directories = Vector("pkg" -> "share")
+      ).download.archive.get
+      val limits = ArchiveExtractionLimits(
+        maxExtractedBytes = payload.length.toLong * 2L - 1L,
+        maxInflatedBytes = payload.length.toLong,
+        maxEntries = 10,
+        timeBudgetMillis = 5_000L
+      )
+
+      val result = ArchiveExtractor.extractFile(archive, artifact, staging, limits)
+
+      assert(result.left.exists(_.contains("extracted byte limit")))
+      assert(!result.left.exists(_.contains("inflated byte limit")))
+      val sufficientStaging = Files.createDirectory(tempRoot.resolve("sufficient-stage"))
+      val sufficient        = ArchiveExtractor.extractFile(
+        archive,
+        artifact,
+        sufficientStaging,
+        limits.copy(maxExtractedBytes = payload.length.toLong * 2L)
+      )
+      assert(sufficient.isRight)
+      assert(Files.readString(sufficientStaging.resolve("bin/alpha")) == "tool-bytes")
+      assert(Files.readString(sufficientStaging.resolve("share/tool")) == "tool-bytes")
 
     test("tar.gz unplanned member exceeding the byte budget is rejected during the single pass"):
       // Regression guard for the decompression-bomb DoS: an unplanned member declaring more bytes

@@ -153,7 +153,7 @@ private[core] object CommandFailureDetails:
     omitted ++
       lines.takeRight(maxRenderedLines).map(line => s"  $label: ${RenderSafety.display(line)}")
 
-/** Boundary for the few remaining process executions: sudo symlinks and tar.xz fallback. */
+/** Boundary for process executions used to create sudo symlinks. */
 trait CommandExecutor:
   /** Run a structured command, returning expected process failures as data. */
   def run(spec: CommandSpec): Either[CommandExecutionError, Unit]
@@ -176,45 +176,57 @@ private[core] final class ProcessCommandExecutor(timeout: Duration) extends Comm
     val builder = ProcessBuilder(spec.argv.asJava)
     val _       = builder.directory(spec.cwd.toFile)
     val env     = builder.environment()
-    // Commands receive only the modeled environment. Parent secrets must not leak into sudo/tar
+    // Commands receive only the modeled environment. Parent secrets must not leak into sudo
     // process boundaries or later diagnostics.
     env.clear()
     spec.env.foreach:
       case (name, value) => val _ = env.put(name, value)
     val process = builder.start()
-    Using.resource(process.getOutputStream)(spec.input.writeTo)
-    supervised:
-      val stdout = fork(readBounded(process.getInputStream))
-      val stderr = fork(readBounded(process.getErrorStream))
-      if process.waitFor(timeout.toMillis, TimeUnit.MILLISECONDS) then
-        val exit   = process.exitValue()
+    try
+      Using.resource(process.getOutputStream)(spec.input.writeTo)
+      supervised:
+        val stdout  = fork(readBounded(process.getInputStream))
+        val stderr  = fork(readBounded(process.getErrorStream))
+        val outcome =
+          try
+            if process.waitFor(timeout.toMillis, TimeUnit.MILLISECONDS) then
+              Some(process.exitValue())
+            else None
+          finally destroyProcessTree(process)
+
         val output = spec.input.redact(CommandOutput(stdout.join(), stderr.join()))
-        if exit == 0 then Right(())
-        else
-          Left(
-            CommandExecutionError(
-              spec,
-              spec.input.redact(s"command exited with status $exit"),
-              Some(exit),
-              output
+        outcome match
+          case Some(0)    => Right(())
+          case Some(exit) => Left(
+              CommandExecutionError(
+                spec,
+                spec.input.redact(s"command exited with status $exit"),
+                Some(exit),
+                output
+              )
             )
-          )
-      else
-        val _      = process.destroyForcibly()
-        val _      = process.waitFor(5, TimeUnit.SECONDS)
-        val output = spec.input.redact(CommandOutput(stdout.join(), stderr.join()))
-        Left(
-          CommandExecutionError(
-            spec,
-            spec.input.redact(s"command timed out after ${timeout.toSeconds}s"),
-            None,
-            output
-          )
-        )
+          case None => Left(
+              CommandExecutionError(
+                spec,
+                spec.input.redact(s"command timed out after ${timeout.toSeconds}s"),
+                None,
+                output
+              )
+            )
+    finally destroyProcessTree(process)
   match
     case Success(result) => result
     case Failure(error)  =>
       Left(CommandExecutionError(spec, spec.input.redact(Diagnostics.describe(error)), None))
+
+  private def destroyProcessTree(process: Process): Unit =
+    val handle      = process.toHandle
+    val descendants = Try:
+      Using.resource(handle.descendants())(_.iterator().asScala.toVector)
+    .getOrElse(Vector.empty)
+    descendants.reverseIterator.foreach: descendant =>
+      val _ = Try(descendant.destroyForcibly())
+    val _ = Try(handle.destroyForcibly())
 
   private def readBounded(input: InputStream): String = Using.resource(input): stream =>
     val output  = ByteArrayOutputStream()

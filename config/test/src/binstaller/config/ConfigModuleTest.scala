@@ -27,6 +27,26 @@ object ConfigModuleTest extends TestSuite:
       assert(Sha256Digest.fromString(upper).map(_.value) == Right(upper.toLowerCase))
       assert(Sha256Digest.fromString("not-a-digest").isLeft)
 
+    test("literal checksum construction exposes only a literal source"):
+      val value    = digest("a" * 64)
+      val checksum = ChecksumSpec(ChecksumAlgorithm.Sha256, value)
+
+      assert(checksum.source == ChecksumSource.Literal(value))
+      assert(checksum.value.contains(value))
+      assert(checksum.discover.isEmpty)
+
+    test("discovery checksum construction exposes only a discovery source"):
+      val source = ChecksumDiscoverySpec(
+        ChecksumDiscoveryKind.Sha256Sum,
+        "https://example.invalid/SHA256SUMS",
+        Some("alpha")
+      )
+      val checksum = ChecksumSpec.discovery(ChecksumAlgorithm.Sha256, source)
+
+      assert(checksum.source == ChecksumSource.Discovery(source))
+      assert(checksum.value.isEmpty)
+      assert(checksum.discover.contains(source))
+
     test("config example loads into typed manifest"):
       val profile = exampleProfile
 
@@ -164,6 +184,35 @@ object ConfigModuleTest extends TestSuite:
       assert(messages.contains("duplicate tool name 'alpha'"))
       assert(messages.contains("duplicate tool name 'beta'"))
 
+    test("validated profile construction rejects duplicate tool names"):
+      val profile       = exampleProfile
+      val duplicateSpec = profile.spec.copy(
+        plan = profile.spec.plan :+ profile.spec.plan.head
+      )
+      val errors = profileValidationErrors(profile, duplicateSpec)
+
+      assert(errors.exists(_.message.contains("duplicate tool name 'yazi'")))
+
+    test("validated profile construction rejects unknown version references"):
+      val profile            = exampleProfile
+      val first              = profile.spec.plan.head
+      val unknownVersionSpec = profile.spec.copy(
+        plan = first.copy(spec = first.spec.copy(versionRef = "missing")) +:
+          profile.spec.plan.tail
+      )
+      val errors = profileValidationErrors(profile, unknownVersionSpec)
+
+      assert(errors.exists(errorAt("spec.plan[0].spec.versionRef")))
+
+    test("validated profile construction rejects forbidden sudo symlinks"):
+      val profile           = exampleProfile
+      val forbiddenSudoSpec = profile.spec.copy(
+        policy = profile.spec.policy.copy(allowSudoSymlinks = PolicyOverride.Disabled)
+      )
+      val errors = profileValidationErrors(profile, forbiddenSudoSpec)
+
+      assert(errors.exists(_.path.endsWith(".sudo")))
+
     test("tool names must be non-empty and path-safe"):
       val errors = validationErrors(unsafeToolNamesYaml)
 
@@ -175,6 +224,28 @@ object ConfigModuleTest extends TestSuite:
       assert(errors.exists(_.message.contains("traversal")))
       assert(errors.exists(_.message.contains("control")))
       assert(errors.exists(_.message.contains("path separators")))
+
+    test("a blank tool name produces only its prerequisite string error"):
+      val errors = validationErrors(
+        policyModeYaml("").replace("    - name: alpha", "    - name: \"\"")
+      )
+
+      assert(errors == Vector(ValidationError(
+        "spec.plan[0].name",
+        "required string must not be empty"
+      )))
+
+    test("distinct invalid tool names do not produce a sentinel duplicate"):
+      val errors = validationErrors(unsafeToolNamesYaml)
+
+      assert(!errors.exists(_.message.contains("duplicate tool name '<invalid>'")))
+
+    test("the sentinel spelling remains a valid duplicate tool name"):
+      val errors = validationErrors(
+        duplicateNamesYaml.replace("    - name: alpha", "    - name: <invalid>")
+      )
+
+      assert(errors.exists(_.message.contains("duplicate tool name '<invalid>'")))
 
     test("unknown version refs report tool name and field path"):
       val errors = validationErrors(unknownVersionYaml)
@@ -281,6 +352,12 @@ object ConfigModuleTest extends TestSuite:
         case Left(ConfigLoadError.ParseFailed(message)) => assert(message.nonEmpty)
         case result => abort(s"expected a parse failure, got $result")
 
+    test("invalid filesystem path strings return a parse failure"):
+      ConfigModule.load("config\u0000.yaml") match
+        case Left(ConfigLoadError.ParseFailed(message)) =>
+          assert(message.startsWith("invalid config path:"))
+        case result => abort(s"expected an invalid-path parse failure, got $result")
+
     test("deeply nested YAML fails as a parse error instead of overflowing the stack"):
       val depth  = 50000
       val nested = ("[" * depth) + ("]" * depth)
@@ -319,6 +396,18 @@ object ConfigModuleTest extends TestSuite:
       case Left(ConfigLoadError.ValidationFailed(errors)) => errors
       case Left(error)    => abort(s"expected validation errors, got $error")
       case Right(profile) => abort(s"expected validation errors, got $profile")
+
+  private def profileValidationErrors(
+      profile: BinaryDistributionProfile,
+      spec: ProfileSpec
+  ): Vector[ValidationError] = BinaryDistributionProfile.validated(
+    profile.apiVersion,
+    profile.kind,
+    profile.metadata,
+    spec
+  ) match
+    case Left(errors)     => errors
+    case Right(validated) => abort(s"expected profile validation errors, got $validated")
 
   private def exampleProfile: BinaryDistributionProfile = ConfigModule.load(exampleConfigPath) match
     case Right(profile) => profile

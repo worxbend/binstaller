@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import upickle.default.read
+import upickle.default.write
 
 /** The `versions` and `lock` commands, checksum discovery, and locked apply. */
 object VersionsAndLockTest extends TestSuite with CoreTestSupport:
@@ -201,6 +202,35 @@ object VersionsAndLockTest extends TestSuite with CoreTestSupport:
       assert(!Files.exists(tempRoot.resolve("lock.state.json")))
       assert(!Files.exists(tempRoot.resolve("apps")))
 
+    test("lock building stops metadata requests after the first failure"):
+      val tempRoot = tempDirectory("core-lock-short-circuit")
+      val config   = writeConfig(tempRoot, lockYaml(tempRoot))
+      val lockPath = tempRoot.resolve("failed.lock.json")
+      val metadata = RecordingBinaryMetadataClient: url =>
+        if url.endsWith("alpha-1.0.0") then Left(BinaryMetadataError(url, "metadata unavailable"))
+        else
+          Right(BinaryMetadata(
+            Some(1L),
+            UrlProvenance.direct(url),
+            Some(Sha256Digest.trusted("a" * 64))
+          ))
+      val service = BinaryInstallerService.resolving(
+        LockHttpTextClient("2.0.0", betaVersionProvenance),
+        DirectBinaryInstaller(
+          FakeBinaryDownloadClient.failure("lock must not download"),
+          InstallFileSystem.nio
+        ),
+        ApplyStateStore.nio(tempRoot),
+        metadata,
+        LockFileStore.nio
+      )
+
+      val result = service.lock(applyOptions(config), LockOptions(lockPath.toString))
+
+      assert(result.status == InstallerRunStatus.Failed)
+      assert(metadata.urls == Vector("https://example.invalid/alpha-1.0.0"))
+      assert(!Files.exists(lockPath))
+
     test("discovered checksum succeeds and is visible in plan versions and lock output"):
       val tempRoot        = tempDirectory("core-checksum-discovered")
       val artifactBytes   = "alpha-binary".getBytes(StandardCharsets.UTF_8)
@@ -362,6 +392,76 @@ object VersionsAndLockTest extends TestSuite with CoreTestSupport:
       assert(!Files.exists(tempRoot.resolve("apps")))
       assert(!Files.exists(tempRoot.resolve("lock.state.json")))
 
+    test("locked apply rejects a concrete version marked dynamic before side effects"):
+      val tempRoot = tempDirectory("core-locked-concrete-dynamic")
+      val config   = writeConfig(tempRoot, lockYaml(tempRoot))
+      val lockPath = tempRoot.resolve("binstaller.lock.json")
+      val current  = currentLockFile(config, dynamicSize = Some(33L))
+      writeLock(
+        lockPath,
+        current.copy(tools = current.tools.map:
+          case tool if tool.name.value == "alpha" => tool.copy(dynamicSource = true)
+          case tool                               => tool)
+      )
+      val delegate = lockMetadataClient(Some(33L))
+      val metadata = RecordingBinaryMetadataClient(delegate.metadata)
+      val service  = BinaryInstallerService.resolving(
+        LockHttpTextClient("2.0.0", betaVersionProvenance),
+        DirectBinaryInstaller(
+          FakeBinaryDownloadClient.failure("locked apply must not download"),
+          InstallFileSystem.nio
+        ),
+        ApplyStateStore.nio(tempRoot),
+        metadata,
+        LockFileStore.nio
+      )
+
+      val result = service.apply(applyOptions(config).copy(
+        lockPath = lockPath.toString,
+        lockedApply = LockedApplyMode.Enabled
+      ))
+
+      assert(result.status == InstallerRunStatus.Failed)
+      assert(result.lines.exists(_.contains("unexpected concrete version fields")))
+      assert(metadata.urls.isEmpty)
+      assert(!Files.exists(tempRoot.resolve("apps")))
+      assert(!Files.exists(tempRoot.resolve("lock.state.json")))
+
+    test("locked apply rejects dynamic version concrete fields before side effects"):
+      val tempRoot = tempDirectory("core-locked-dynamic-fields")
+      val config   = writeConfig(tempRoot, lockYaml(tempRoot))
+      val lockPath = tempRoot.resolve("binstaller.lock.json")
+      val current  = currentLockFile(config, dynamicSize = Some(33L))
+      writeLock(
+        lockPath,
+        current.copy(tools = current.tools.map:
+          case tool if tool.name.value == "gamma" => tool.copy(resolvedVersion = Some("latest"))
+          case tool                               => tool)
+      )
+      val delegate = lockMetadataClient(Some(33L))
+      val metadata = RecordingBinaryMetadataClient(delegate.metadata)
+      val service  = BinaryInstallerService.resolving(
+        LockHttpTextClient("2.0.0", betaVersionProvenance),
+        DirectBinaryInstaller(
+          FakeBinaryDownloadClient.failure("locked apply must not download"),
+          InstallFileSystem.nio
+        ),
+        ApplyStateStore.nio(tempRoot),
+        metadata,
+        LockFileStore.nio
+      )
+
+      val result = service.apply(applyOptions(config).copy(
+        lockPath = lockPath.toString,
+        lockedApply = LockedApplyMode.Enabled
+      ))
+
+      assert(result.status == InstallerRunStatus.Failed)
+      assert(result.lines.exists(_.contains("unexpected concrete version fields")))
+      assert(metadata.urls.isEmpty)
+      assert(!Files.exists(tempRoot.resolve("apps")))
+      assert(!Files.exists(tempRoot.resolve("lock.state.json")))
+
     test("locked apply rejects stale manifest fingerprint before install"):
       val tempRoot  = tempDirectory("core-locked-stale")
       val config    = writeConfig(tempRoot, lockYaml(tempRoot))
@@ -478,6 +578,20 @@ object VersionsAndLockTest extends TestSuite with CoreTestSupport:
       assert(result.status == InstallerRunStatus.Failed)
       assert(result.lines.exists(_.contains("is missing")))
       assert(!Files.exists(installDir))
+
+    test("nested unknown lock checksum source is classified as a decode failure"):
+      val tempRoot = tempDirectory("core-lock-decode")
+      val config   = writeConfig(tempRoot, lockYaml(tempRoot))
+      val lockPath = tempRoot.resolve("corrupt.lock.json")
+      val encoded  = write(currentLockFile(config, dynamicSize = Some(33L)), indent = 2)
+      val corrupt  = encoded.replace("\"configured\"", "\"unknown-checksum-source\"")
+      assert(corrupt != encoded)
+      Files.writeString(lockPath, corrupt)
+
+      LockFileStore.nio.load(lockPath) match
+        case Left(LockFileError.DecodeFailed(_, message)) =>
+          assert(message.contains("unknown-checksum-source"))
+        case other => abort(s"expected lock decode failure, got $other")
 
     test("locked apply verifies digest against bytes from the installation GET"):
       val tempRoot     = tempDirectory("core-locked-get-digest")

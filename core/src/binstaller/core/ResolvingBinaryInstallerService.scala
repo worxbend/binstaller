@@ -14,6 +14,10 @@ private[core] object InstallerRunStatistics:
     skipped = result.skippedTools
   )
 
+private[core] enum LegacyLockValidationError:
+  case InvalidPath(error: LockCommandError)
+  case ValidationFailed(error: LockedApplyError)
+
 private[core] final class ResolvingBinaryInstallerService(
     httpTextClient: HttpTextClient,
     resolutionOptions: ResolutionOptions,
@@ -22,7 +26,16 @@ private[core] final class ResolvingBinaryInstallerService(
     metadataClient: BinaryMetadataClient,
     lockFileStore: LockFileStore,
     profileSource: ProfileSource
-) extends BinaryInstallerService:
+) extends BinaryInstaller:
+
+  def plan(request: PlanRequest): Either[ResolvePlanError, ResolvedPlan] =
+    resolveSelectedPreparedPlan(request).map(_.plan)
+
+  def lock(request: LockRequest): Either[LockCommandError, LockReport] =
+    resolveSelectedPreparedPlan(request)
+      .left
+      .map(LockCommandError.ResolutionFailed.apply)
+      .flatMap(prepared => writeLock(prepared, request.outputPath))
 
   def planWithEvents(
       options: InstallerOptions,
@@ -45,7 +58,7 @@ private[core] final class ResolvingBinaryInstallerService(
         prepared <- resolveSelectedPreparedPlan(options)
           .left.map(error => failed(renderError(error), eventContext))
         lockedProvenance <- validateLockIfRequested(options, prepared)
-          .left.map(error => failed(renderLockedApplyError(error), eventContext))
+          .left.map(error => failed(renderLegacyLockValidationError(error), eventContext))
       yield
         val lockedPrepared = lockedProvenance.fold(prepared)(applyLockedChecksums(prepared, _))
         val statePath      = configuredStatePath(options, lockedPrepared.plan)
@@ -70,28 +83,16 @@ private[core] final class ResolvingBinaryInstallerService(
     resolveSelectedPreparedPlan(options).fold(renderError, renderVersions)
 
   def lock(options: InstallerOptions, lockOptions: LockOptions): InstallerResult =
-    resolveSelectedPreparedPlan(options) match
-      case Left(error)     => renderError(error)
-      case Right(prepared) => LockFileBuilder.build(prepared, metadataClient) match
-          case Left(error) => InstallerResult(
-              Vector(s"lock inspection failed for tool '${error.toolName}': ${error.message}"),
-              InstallerRunStatus.Failed
-            )
-          case Right(lockFile) =>
-            val path = Path.of(lockOptions.outputPath)
-            lockFileStore.save(path, lockFile) match
-              case Right(()) => InstallerResult(
-                  Vector(
-                    s"wrote lock file: ${path.toAbsolutePath.normalize()}",
-                    s"profile: ${prepared.profileName}",
-                    s"manifest fingerprint: ${prepared.manifestFingerprint}",
-                    s"tools: ${lockFile.tools.size}",
-                    s"checksums: ${LockFileChecksum.summary(lockFile.tools)}"
-                  ),
-                  InstallerRunStatus.Succeeded
-                )
-              case Left(error) =>
-                InstallerResult(Vector(LockFileError.render(error)), InstallerRunStatus.Failed)
+    val result = LegacyPathParser
+      .parse(lockOptions.outputPath)
+      .left
+      .map(invalid => LockCommandError.InvalidPath(invalid.path, invalid.message))
+      .flatMap: outputPath =>
+        resolveSelectedPreparedPlan(options)
+          .left
+          .map(LockCommandError.ResolutionFailed.apply)
+          .flatMap(prepared => writeLock(prepared, outputPath))
+    result.fold(renderLockCommandError, renderLockReport)
 
   private def renderSelectedPlanWithEvents(
       options: InstallerOptions,
@@ -103,7 +104,7 @@ private[core] final class ResolvingBinaryInstallerService(
         prepared <- resolveSelectedPreparedPlan(options)
           .left.map(error => failed(renderError(error), eventContext))
         lockedProvenance <- validateLockIfRequested(options, prepared)
-          .left.map(error => failed(renderLockedApplyError(error), eventContext))
+          .left.map(error => failed(renderLegacyLockValidationError(error), eventContext))
       yield
         // A pure lookup over options and the resolved policy, so computing it after the lock check
         // rather than before changes nothing observable.
@@ -120,9 +121,38 @@ private[core] final class ResolvingBinaryInstallerService(
     ToolSelector.select(prepared.plan, options.selection).map: selected =>
       prepared.copy(plan = selected)
 
+  private def resolveSelectedPreparedPlan(
+      request: PlanRequest
+  ): Either[ResolvePlanError, PreparedPlan] =
+    resolveSelectedPreparedPlan(request.profile, request.selection)
+
+  private def resolveSelectedPreparedPlan(
+      request: LockRequest
+  ): Either[ResolvePlanError, PreparedPlan] =
+    resolveSelectedPreparedPlan(request.profile, request.selection)
+
+  private def resolveSelectedPreparedPlan(
+      profileInput: ProfileInput,
+      selection: ToolSelection
+  ): Either[ResolvePlanError, PreparedPlan] = resolveFromProfileInput(profileInput).flatMap:
+    prepared =>
+      ToolSelector.select(prepared.plan, selection).map: selected =>
+        prepared.copy(plan = selected)
+
   private def resolveFromOptions(
       options: InstallerOptions
-  ): Either[ResolvePlanError, PreparedPlan] = profileSource.load(options.configPath) match
+  ): Either[ResolvePlanError, PreparedPlan] = prepare(profileSource.load(options.configPath))
+
+  private def resolveFromProfileInput(
+      profileInput: ProfileInput
+  ): Either[ResolvePlanError, PreparedPlan] = prepare(profileSource.load(profileInput))
+
+  private def prepare(
+      loadedProfile: Either[
+        binstaller.config.ConfigLoadError,
+        binstaller.config.BinaryDistributionProfile
+      ]
+  ): Either[ResolvePlanError, PreparedPlan] = loadedProfile match
     case Left(error)    => Left(ResolvePlanError.ConfigLoadFailed(error))
     case Right(profile) => PlanResolver.resolve(profile, resolutionOptions, httpTextClient).map:
         plan =>
@@ -132,6 +162,29 @@ private[core] final class ResolvingBinaryInstallerService(
             ManifestFingerprint.profile(profile),
             plan
           )
+
+  private def writeLock(
+      prepared: PreparedPlan,
+      outputPath: Path
+  ): Either[LockCommandError, LockReport] =
+    buildLock(prepared).flatMap(lockFile => saveLock(outputPath, lockFile))
+
+  private def buildLock(prepared: PreparedPlan): Either[LockCommandError, LockFile] =
+    LockFileBuilder
+      .build(prepared, metadataClient)
+      .left
+      .map(error => LockCommandError.InspectionFailed(error.toolName, error.message))
+
+  private def saveLock(
+      outputPath: Path,
+      lockFile: LockFile
+  ): Either[LockCommandError, LockReport] =
+    val normalizedPath = outputPath.toAbsolutePath.normalize()
+    lockFileStore
+      .save(normalizedPath, lockFile)
+      .left
+      .map(LockCommandError.SaveFailed.apply)
+      .map(_ => LockReport(normalizedPath, lockFile))
 
   private def configuredStatePath(
       options: InstallerOptions,
@@ -207,14 +260,45 @@ private[core] final class ResolvingBinaryInstallerService(
   private def renderError(error: ResolvePlanError): InstallerResult =
     InstallerResult(ResolvePlanError.renderLines(error), InstallerRunStatus.Failed)
 
+  private def renderLockCommandError(error: LockCommandError): InstallerResult =
+    InstallerResult(LockCommandError.renderLines(error), InstallerRunStatus.Failed)
+
+  private def renderLockReport(report: LockReport): InstallerResult = InstallerResult(
+    Vector(
+      s"wrote lock file: ${report.path}",
+      s"profile: ${report.lockFile.profileName}",
+      s"manifest fingerprint: ${report.lockFile.manifestFingerprint}",
+      s"tools: ${report.lockFile.tools.size}",
+      s"checksums: ${LockFileChecksum.summary(report.lockFile.tools)}"
+    ),
+    InstallerRunStatus.Succeeded
+  )
+
   private def validateLockIfRequested(
       options: InstallerOptions,
       prepared: PreparedPlan
-  ): Either[LockedApplyError, Option[LockedApplyProvenance]] = options.lockedApply match
+  ): Either[LegacyLockValidationError, Option[LockedApplyProvenance]] = options.lockedApply match
     case LockedApplyMode.Disabled => Right(None)
-    case LockedApplyMode.Enabled  => LockedApplyValidator
-        .validate(prepared, Path.of(options.lockPath), lockFileStore, metadataClient)
-        .map(Some(_))
+    case LockedApplyMode.Enabled  => LegacyPathParser
+        .parse(options.lockPath)
+        .left
+        .map: invalid =>
+          LegacyLockValidationError.InvalidPath(
+            LockCommandError.InvalidPath(invalid.path, invalid.message)
+          )
+        .flatMap: path =>
+          LockedApplyValidator
+            .validate(prepared, path, lockFileStore, metadataClient)
+            .left
+            .map(LegacyLockValidationError.ValidationFailed.apply)
+            .map(Some(_))
+
+  private def renderLegacyLockValidationError(
+      error: LegacyLockValidationError
+  ): InstallerResult = error match
+    case LegacyLockValidationError.InvalidPath(lockError) => renderLockCommandError(lockError)
+    case LegacyLockValidationError.ValidationFailed(lockedApplyError) =>
+      renderLockedApplyError(lockedApplyError)
 
   private def renderLockedApplyError(error: LockedApplyError): InstallerResult =
     InstallerResult(LockedApplyError.renderLines(error), InstallerRunStatus.Failed)

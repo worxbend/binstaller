@@ -17,12 +17,16 @@ private[cli] object CliVersionsOutput:
   def colorLines(
       result: InstallerResult,
       outputStyle: CliOutputStyle = CliOutputStyle.Ansi
-  ): Vector[String] = result.lines match
-    case title +: _ if result.versionRows.nonEmpty =>
-      boldColor(title, fansi.Color.Magenta, outputStyle) +:
-        colorTable(result.versionRows, outputStyle)
-    case title +: _ => boldColor(title, fansi.Color.Magenta, outputStyle) +: result.lines.drop(1)
-    case empty      => empty
+  ): Vector[String] =
+    if !outputStyle.supportsAnsi then result.lines
+    else
+      result.lines match
+        case title +: _ if result.versionRows.nonEmpty =>
+          boldColor(title, fansi.Color.Magenta, outputStyle) +:
+            colorTable(result.versionRows, outputStyle)
+        case title +: _ => boldColor(title, fansi.Color.Magenta, outputStyle) +:
+            result.lines.drop(1)
+        case empty => empty
 
   private def colorTable(
       rows: Vector[VersionSummaryRow],

@@ -304,6 +304,7 @@ app  ──▶ cli ──▶ core ──▶ config
 | 🌐 [**Website**](https://worxbend.github.io/binstaller/) | Feature tour, screenshots and quick start. |
 | 📚 [**Wiki**](https://github.com/worxbend/binstaller/wiki) | Getting started, recipes, troubleshooting, FAQ. |
 | 🏗️ [Architecture](docs/architecture.md) | Module graph, data flow, event contract. |
+| 🧩 [Developer API](docs/developer-api.md) | Typed plan and lock API, lifecycle, injection. |
 | 📄 [Manifest reference](docs/manifest-reference.md) | Profile shape, policy, versions, downloads, archives, symlinks. |
 | 🔐 [Security model](docs/security.md) | Trust boundaries, checksums, archive safety, sudo policy, known risks. |
 | 🧪 [Testing guide](docs/testing.md) | Project-native checks and test patterns. |

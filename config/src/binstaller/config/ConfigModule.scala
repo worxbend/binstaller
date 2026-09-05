@@ -1,13 +1,20 @@
 package binstaller.config
 
 import java.nio.file.Path
+import scala.util.Try
 
 /** Public entrypoint for loading binstaller YAML profiles into typed manifest models. */
 object ConfigModule:
 
   /** Load and validate a profile from a filesystem path string. */
   def load(path: String): Either[ConfigLoadError, BinaryDistributionProfile] =
-    ConfigLoader.load(Path.of(path))
+    Try(Path.of(path)).toEither
+      .left.map(error =>
+        ConfigLoadError.ParseFailed(
+          s"invalid config path: ${Diagnostics.describe(error)}"
+        )
+      )
+      .flatMap(ConfigLoader.load)
 
   /** Load and validate a profile from a filesystem path. */
   def load(path: Path): Either[ConfigLoadError, BinaryDistributionProfile] = ConfigLoader.load(path)
@@ -26,12 +33,26 @@ enum ConfigLoadError:
 final case class ValidationError(path: String, message: String)
 
 /** Root manifest for the supported binary-distribution profile schema. */
-final case class BinaryDistributionProfile(
+final case class BinaryDistributionProfile private[config] (
     apiVersion: ApiVersion,
     kind: ManifestKind,
     metadata: ManifestMetadata,
     spec: ProfileSpec
 )
+
+/** Validated construction for profiles supplied without the YAML loader. */
+object BinaryDistributionProfile:
+
+  /** Build a profile only when its cross-field invariants hold. */
+  def validated(
+      apiVersion: ApiVersion,
+      kind: ManifestKind,
+      metadata: ManifestMetadata,
+      spec: ProfileSpec
+  ): Either[Vector[ValidationError], BinaryDistributionProfile] =
+    val profile = BinaryDistributionProfile(apiVersion, kind, metadata, spec)
+    val errors  = ProfileValidator.validate(profile)
+    if errors.isEmpty then Right(profile) else Left(errors)
 
 /** Supported manifest API versions. */
 enum ApiVersion(val value: String):
@@ -138,19 +159,39 @@ final case class DownloadSpec(
     archive: Option[ArchiveSpec]
 )
 
-/** Declared checksum value or typed discovery source. Current validation supports SHA-256 only. */
+/** The one source from which an expected checksum is obtained. */
+enum ChecksumSource:
+  case Literal(value: Sha256Digest)
+  case Discovery(spec: ChecksumDiscoverySpec)
+
+/** Declared checksum source. Current validation supports SHA-256 only. */
 final case class ChecksumSpec(
     algorithm: ChecksumAlgorithm,
-    value: Option[Sha256Digest],
-    discover: Option[ChecksumDiscoverySpec]
-)
+    source: ChecksumSource
+):
 
-/** Backward-compatible constructors for literal checksum declarations. */
+  /** Literal checksum value, when this declaration pins one directly. */
+  def value: Option[Sha256Digest] = source match
+    case ChecksumSource.Literal(value) => Some(value)
+    case ChecksumSource.Discovery(_)   => None
+
+  /** Discovery declaration, when the checksum comes from a published checksum file. */
+  def discover: Option[ChecksumDiscoverySpec] = source match
+    case ChecksumSource.Literal(_)        => None
+    case ChecksumSource.Discovery(source) => Some(source)
+
+/** Constructors for valid checksum declarations. */
 object ChecksumSpec:
 
-  /** Build a literal checksum declaration. */
+  /** Build a literal checksum declaration, preserving the original two-argument API. */
   def apply(algorithm: ChecksumAlgorithm, value: Sha256Digest): ChecksumSpec =
-    ChecksumSpec(algorithm, Some(value), None)
+    ChecksumSpec(algorithm, ChecksumSource.Literal(value))
+
+  /** Build a checksum declaration backed by a published checksum file. */
+  def discovery(
+      algorithm: ChecksumAlgorithm,
+      source: ChecksumDiscoverySpec
+  ): ChecksumSpec = ChecksumSpec(algorithm, ChecksumSource.Discovery(source))
 
 /** Supported checksum algorithms. */
 enum ChecksumAlgorithm(val value: String):

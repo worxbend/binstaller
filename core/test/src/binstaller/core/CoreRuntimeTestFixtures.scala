@@ -224,6 +224,18 @@ private[core] final class RoutingBinaryMetadataClient(results: Map[String, Binar
     .get(url)
     .toRight(BinaryMetadataError(url, s"unexpected URL $url"))
 
+private[core] final class RecordingBinaryMetadataClient(
+    response: String => Either[BinaryMetadataError, BinaryMetadata]
+) extends BinaryMetadataClient:
+
+  private var requestedUrls: Vector[String] = Vector.empty
+
+  def urls: Vector[String] = requestedUrls
+
+  def metadata(url: String): Either[BinaryMetadataError, BinaryMetadata] =
+    requestedUrls = requestedUrls :+ url
+    response(url)
+
 private[core] final class RecordingInstallerEventObserver extends InstallerEventObserver:
 
   private var recordedEvents: Vector[InstallerEvent] = Vector.empty
@@ -424,15 +436,19 @@ private[core] final class PasswordPromptCommandExecutor extends CommandExecutor:
 private[core] final class RecordingInstallFileSystem(
     stageFailure: Option[String] = None,
     modeFailure: Option[String] = None,
-    stagedFiles: Vector[String] = Vector("bin/alpha")
+    stagedFiles: Vector[String] = Vector("bin/alpha"),
+    discardFailure: Option[RuntimeException] = None
 ) extends InstallFileSystem:
 
   private var modes: Vector[ExecutableModeRequest] = Vector.empty
   private var replacements: Int                    = 0
+  private var discards: Int                        = 0
 
   def recordedModes: Vector[ExecutableModeRequest] = modes
 
   def replaceCalls: Int = replacements
+
+  def discardCalls: Int = discards
 
   def stageDirectBinaryFromFile(
       installDir: Path,
@@ -479,7 +495,9 @@ private[core] final class RecordingInstallFileSystem(
       Files.writeString(target, "installed")
     Right(())
 
-  def discardStaged(stagedInstall: StagedInstall): Unit = ()
+  def discardStaged(stagedInstall: StagedInstall): Unit =
+    discards = discards + 1
+    discardFailure.foreach(throw _)
 
   private def stageSuccess(
       installDir: Path

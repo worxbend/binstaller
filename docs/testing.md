@@ -35,6 +35,19 @@ App smokes:
 
 Use `./mill mill.scalalib.scalafmt/reformatAll` to repair formatting.
 
+Compilation treats warnings as errors, including unused declarations and discarded
+values. Fix the cause of a warning in the affected code; keep the same gate for
+production code, tests, and examples.
+
+The `Checks` workflow runs formatting, compilation, tests, and the CLI help smoke
+test on Linux and macOS for pull requests and pushes to `main`.
+
+When changing config models, test both YAML decoding and
+`BinaryDistributionProfile.validated(...)`. Checksum declarations should cover
+both exclusive `ChecksumSource` cases. CLI tests should assert that typed output
+adapters preserve plain core output and that command-level option inheritance
+reaches every supported command.
+
 ## Mill Output
 
 For long Mill commands, stream and save output with `tee`:
@@ -55,9 +68,10 @@ Core and CLI tests avoid live downloads by injecting `BinaryDownloadClient` and
 - A fake text client returns a pinned resolver value for `http-text` versions.
 - Routing text clients also cover GitHub latest-release metadata used by
   `versions` for release-download URLs.
-- A fake binary client returns bytes or a typed `BinaryDownloadError`.
-- Progress tests override `download(url, observer)` and emit started,
-  advanced, and finished events before returning bytes.
+- A fake binary client returns a temporary-file artifact or a typed
+  `BinaryDownloadError`.
+- Progress tests implement `downloadArtifactWithProvenance(url, observer)` and
+  emit started, advanced, and finished events before returning the artifact.
 - Routing clients map URLs to bytes so multi-tool apply tests can prove
   continue-on-error and state behavior.
 
@@ -72,8 +86,8 @@ Archive tests build small in-memory artifacts:
   duplicate-member regressions.
 - `tar.gz` tests write minimal ustar headers through `GZIPOutputStream` and vary
   entry type flags to cover files, directories, links, and unsupported metadata.
-- `tar.xz` tests inject a fake archive command executor instead of depending on
-  system `tar`.
+- `tar.xz` tests compress tar fixtures with `XZOutputStream` and exercise the
+  in-process extractor without depending on system `tar`.
 
 Keep archive tests small, deterministic, and focused on path safety, metadata
 rejection, mapping behavior, and previous-install preservation.

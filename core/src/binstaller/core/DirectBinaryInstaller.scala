@@ -9,9 +9,11 @@ import binstaller.config.ToolName
 
 import java.nio.file.Path
 import java.time.Duration
+import java.util.concurrent.ConcurrentLinkedQueue
 import ox.channels.BufferCapacity
 import ox.flow.Flow
 import ox.supervised
+import scala.jdk.CollectionConverters.*
 
 private[core] final case class ObservedInstallResults(
     lines: Vector[String],
@@ -116,22 +118,40 @@ final class DirectBinaryInstaller(
   ): ObservedInstallResults =
     if tools.isEmpty then ObservedInstallResults(Vector.empty, Vector.empty, None)
     else
-      supervised:
-        given BufferCapacity = BufferCapacity(applyParallelism.value)
-        val serializedEvents = eventContext.serialized
-        val preparedResults  = Flow
-          .fromIterable(tools)
-          .mapPar(applyParallelism.value): tool =>
-            prepareTool(tool, redactions, verboseOutput, serializedEvents)
-          .runToList()
-          .toVector
-        finalizePreparedResults(
-          policy,
-          preparedResults,
-          redactions,
-          terminalObserver,
-          serializedEvents
-        )
+      val ownedStages = ConcurrentLinkedQueue[StagedInstall]()
+      try supervised:
+          given BufferCapacity = BufferCapacity(applyParallelism.value)
+          val serializedEvents = eventContext.serialized
+          val preparedResults  = Flow
+            .fromIterable(tools)
+            .mapPar(applyParallelism.value): tool =>
+              prepareTool(
+                tool,
+                redactions,
+                verboseOutput,
+                serializedEvents,
+                staged => {
+                  val _ = ownedStages.add(staged)
+                }
+              )
+            .runToList()
+            .toVector
+          finalizePreparedResults(
+            policy,
+            preparedResults,
+            redactions,
+            terminalObserver,
+            serializedEvents
+          )
+      finally
+        // Supervision has joined every preparation task before cleanup, including cancellation
+        // before runToList returns. Cleanup is best effort: an I/O error while walking one staged
+        // tree must not prevent attempts for the remaining trees or mask the original failure.
+        ownedStages.iterator().asScala.foreach(discardOwnedStage)
+
+  private def discardOwnedStage(stagedInstall: StagedInstall): Unit =
+    try fileSystem.discardStaged(stagedInstall)
+    catch case scala.util.control.NonFatal(_) => ()
 
   /**
    * Install a single tool without sudo symlink support. Core-internal (tests/helpers): it takes a
@@ -219,23 +239,25 @@ final class DirectBinaryInstaller(
   ): Either[ToolInstallError, TerminalToolResult.Completed] =
     prepareDownloadedBinaryOrArchive(tool, eventContext, redactions).flatMap:
       case (staged, provenance) =>
-        completePreparedTool(policy, tool, staged, provenance, eventContext)
+        try completePreparedTool(policy, tool, staged, provenance, eventContext)
+        finally discardOwnedStage(staged)
 
   private def prepareTool(
       tool: ResolvedTool,
       redactions: SensitiveValueRedactions,
       verboseOutput: VerboseOutput,
-      eventContext: InstallerEventContext
+      eventContext: InstallerEventContext,
+      ownStage: StagedInstall => Unit
   ): PreparedToolResult =
     val verbose = verboseLines(tool, verboseOutput, redactions)
-    // Keep this total: a thrown fork aborts Flow.runToList before finalize runs, so sibling staged
-    // installs would never be discarded. Converting a throw into a Failed result preserves cleanup.
+    // Nonfatal per-tool failures remain data for continue-on-error and ordered reporting.
+    // Cancellation escapes to the enclosing scope, which owns every staged install.
     try
       verbose.foreach(line =>
         eventContext.emit(InstallerEvent.LogLine(Some(tool.name), line, _))
       )
       eventContext.emit(InstallerEvent.ToolStarted(tool.name, InstallerPhase.Downloading, _))
-      prepareDownloadedBinaryOrArchive(tool, eventContext, redactions) match
+      prepareDownloadedBinaryOrArchive(tool, eventContext, redactions, ownStage) match
         case Right((stagedInstall, provenance)) =>
           PreparedToolResult.Ready(tool, stagedInstall, provenance, verbose)
         case Left(error) => PreparedToolResult.Failed(tool.name, error, verbose)
@@ -251,7 +273,8 @@ final class DirectBinaryInstaller(
   private def prepareDownloadedBinaryOrArchive(
       tool: ResolvedTool,
       eventContext: InstallerEventContext,
-      redactions: SensitiveValueRedactions
+      redactions: SensitiveValueRedactions,
+      ownStage: StagedInstall => Unit = _ => ()
   ): Either[ToolInstallError, (StagedInstall, UrlProvenance)] = download(
     tool,
     eventContext,
@@ -269,7 +292,8 @@ final class DirectBinaryInstaller(
           verifyChecksum(tool, artifact.sha256)
         )
         staged <- withPhase(tool, InstallerPhase.Staging, eventContext)(stage(tool, artifact.path))
-        _      <- prepareStagedInstall(tool, staged, eventContext)
+        _ = ownStage(staged)
+        _ <- prepareStagedInstall(tool, staged, eventContext)
       yield staged -> artifact.provenance
     finally artifact.discard()
 
@@ -278,19 +302,21 @@ final class DirectBinaryInstaller(
       stagedInstall: StagedInstall,
       eventContext: InstallerEventContext
   ): Either[ToolInstallError, Unit] =
-    val result =
-      for
-        _ <- withPhase(tool, InstallerPhase.VerifyingExecutables, eventContext)(
-          verifyExecutablesUnder(tool, stagedInstall.stagingDir)
-        )
-        _ <- withPhase(tool, InstallerPhase.ApplyingModes, eventContext)(
-          applyModes(tool, stagedInstall)
-        )
-      yield ()
-
-    result.left.map: error =>
-      fileSystem.discardStaged(stagedInstall)
-      error
+    var prepared = false
+    try
+      val result =
+        for
+          _ <- withPhase(tool, InstallerPhase.VerifyingExecutables, eventContext)(
+            verifyExecutablesUnder(tool, stagedInstall.stagingDir)
+          )
+          _ <- withPhase(tool, InstallerPhase.ApplyingModes, eventContext)(
+            applyModes(tool, stagedInstall)
+          )
+        yield ()
+      prepared = result.isRight
+      result
+    finally
+      if !prepared then discardOwnedStage(stagedInstall)
 
   private def finalizePreparedResults(
       policy: ResolvedPolicy,
@@ -322,7 +348,7 @@ final class DirectBinaryInstaller(
     results.exists(_.isInstanceOf[TerminalToolResult.Failed])
 
   private def discardPrepared(prepared: PreparedToolResult): Unit = prepared match
-    case PreparedToolResult.Ready(_, stagedInstall, _, _) => fileSystem.discardStaged(stagedInstall)
+    case PreparedToolResult.Ready(_, stagedInstall, _, _) => discardOwnedStage(stagedInstall)
     case PreparedToolResult.Failed(_, _, _)               => ()
 
   private def finalizePrepared(

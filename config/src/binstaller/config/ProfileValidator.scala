@@ -2,10 +2,13 @@ package binstaller.config
 
 private[config] object ProfileValidator:
 
-  def validate(profile: BinaryDistributionProfile): Vector[ValidationError] =
-    metadataNameErrors(profile) ++ duplicateToolNameErrors(profile) ++
-      unknownVersionRefErrors(profile) ++
-      sudoSymlinkErrors(profile)
+  def validate(
+      profile: BinaryDistributionProfile,
+      failedDecoderPaths: Set[String] = Set.empty
+  ): Vector[ValidationError] = metadataNameErrors(profile) ++
+    duplicateToolNameErrors(profile, failedDecoderPaths) ++
+    unknownVersionRefErrors(profile) ++
+    sudoSymlinkErrors(profile)
 
   private def metadataNameErrors(profile: BinaryDistributionProfile): Vector[ValidationError] =
     unsafeToolNameMessage(profile.metadata.name)
@@ -18,8 +21,11 @@ private[config] object ProfileValidator:
     ToolName.fromString(value).left.toOption
 
   private def duplicateToolNameErrors(
-      profile: BinaryDistributionProfile
-  ): Vector[ValidationError] = profile.spec.plan
+      profile: BinaryDistributionProfile,
+      failedDecoderPaths: Set[String]
+  ): Vector[ValidationError] = profile.spec.plan.zipWithIndex
+    .filterNot((_, index) => failedDecoderPaths.contains(s"spec.plan[$index].name"))
+    .map((entry, _) => entry)
     .groupBy(_.name)
     .toVector
     .collect:

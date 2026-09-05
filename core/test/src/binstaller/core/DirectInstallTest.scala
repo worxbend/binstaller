@@ -9,6 +9,11 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import ox.forkCancellable
+import ox.unsupervised
 import scala.jdk.CollectionConverters.*
 import scala.util.Using
 
@@ -141,6 +146,31 @@ object DirectInstallTest extends TestSuite with CoreTestSupport:
         ))
       assert(fileSystem.replaceCalls == 0)
       assert(Files.readString(existingFile) == "existing")
+
+    test("mode application failure survives a throwing staged cleanup"):
+      val tempRoot   = tempDirectory("core-mode-cleanup")
+      val installDir = tempRoot.resolve("alpha")
+      val fileSystem = RecordingInstallFileSystem(
+        modeFailure = Some("permission denied"),
+        discardFailure = Some(IllegalStateException("discard failed"))
+      )
+      val installer = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success("replacement".getBytes),
+        fileSystem
+      )
+
+      val result = installer.installTool(directTool(installDir))
+
+      assert(result ==
+        Left(
+          ToolInstallError.ModeApplicationFailed(
+            toolName("alpha"),
+            "bin/alpha",
+            "0755",
+            "permission denied"
+          )
+        ))
+      assert(fileSystem.discardCalls >= 1)
 
     test("apply renders expected executor failures without throwing"):
       val tempRoot = tempDirectory("core-cli-error")
@@ -284,17 +314,210 @@ object DirectInstallTest extends TestSuite with CoreTestSupport:
       assert(Files.readString(installDir.resolve("bin/alpha")) == "tool-bytes")
       assert(Files.readString(installDir.resolve("share/tool")) == "tool-bytes")
 
-    test("process command executor times out long-running commands"):
-      val tempRoot = tempDirectory("core-process-timeout")
-      val executor = CommandExecutor.processWithTimeout(Duration.ofMillis(100))
+    test("observer failure during staged verification discards the staged install"):
+      val tempRoot                         = tempDirectory("core-stage-observer")
+      val installDir                       = tempRoot.resolve("alpha")
+      val failed                           = AtomicBoolean(false)
+      val observer: InstallerEventObserver = event =>
+        event match
+          case InstallerEvent.ToolPhaseChanged(_, InstallerPhase.VerifyingExecutables, _)
+              if failed.compareAndSet(false, true) => throw IllegalStateException("observer failed")
+          case _ => ()
+      val installer = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success("alpha".getBytes(StandardCharsets.UTF_8)),
+        InstallFileSystem.nio
+      )
+      val plan = ResolvedPlan(
+        ResolvedPolicy.restricted(tempRoot.toString),
+        Vector(directTool(installDir)),
+        SensitiveValueRedactions.empty
+      )
+
+      val result = installer.installPlanWithObserver(
+        plan,
+        VerboseOutput.Disabled,
+        _ => Right(()),
+        InstallerEventContext.start(observer)
+      )
+
+      assert(result.status == InstallerRunStatus.Failed)
+      assert(!hasStagedInstall(tempRoot, "alpha"))
+
+    test("failure before first replacement discards every prepared stage"):
+      val tempRoot = tempDirectory("core-stage-batch")
+      val alpha    = directTool(tempRoot.resolve("alpha"))
+      val beta     = alpha.copy(
+        name = toolName("beta"),
+        installDir = tempRoot.resolve("beta").toString,
+        download = alpha.download.copy(url = "https://example.invalid/beta", filename = "beta"),
+        executables = Vector(ResolvedExecutable("bin/beta", None))
+      )
+      val observer: InstallerEventObserver = event =>
+        event match
+          case InstallerEvent.ToolPhaseChanged(_, InstallerPhase.ReplacingInstall, _) =>
+            throw IllegalStateException("observer failed before replacement")
+          case _ => ()
+      val installer = DirectBinaryInstaller(
+        RoutingBinaryDownloadClient.success,
+        InstallFileSystem.nio
+      )
+      val plan = ResolvedPlan(
+        ResolvedPolicy.restricted(tempRoot.toString),
+        Vector(alpha, beta),
+        SensitiveValueRedactions.empty
+      )
+
+      val thrown = assertThrows[IllegalStateException]:
+        val _ = installer.installPlanWithObserver(
+          plan,
+          VerboseOutput.Disabled,
+          _ => Right(()),
+          InstallerEventContext.start(observer),
+          parallelism(2)
+        )
+
+      assert(thrown.getMessage.contains("observer failed before replacement"))
+      assert(!hasStagedInstall(tempRoot, "alpha"))
+      assert(!hasStagedInstall(tempRoot, "beta"))
+      assert(!Files.exists(tempRoot.resolve("alpha")))
+      assert(!Files.exists(tempRoot.resolve("beta")))
+
+    test("stage cleanup attempts every stage without masking a replacement observer failure"):
+      val tempRoot = tempDirectory("core-stage-cleanup-errors")
+      val alpha    = directTool(tempRoot.resolve("alpha"))
+      val beta     = alpha.copy(
+        name = toolName("beta"),
+        installDir = tempRoot.resolve("beta").toString,
+        download = alpha.download.copy(url = "https://example.invalid/beta", filename = "beta"),
+        executables = Vector(ResolvedExecutable("bin/beta", None))
+      )
+      val fileSystem = RecordingInstallFileSystem(
+        discardFailure = Some(IllegalStateException("discard failed"))
+      )
+      val observer: InstallerEventObserver = event =>
+        event match
+          case InstallerEvent.ToolPhaseChanged(_, InstallerPhase.ReplacingInstall, _) =>
+            throw IllegalArgumentException("replacement observer failed")
+          case _ => ()
+      val installer = DirectBinaryInstaller(RoutingBinaryDownloadClient.success, fileSystem)
+      val plan      = ResolvedPlan(
+        ResolvedPolicy.restricted(tempRoot.toString),
+        Vector(alpha, beta),
+        SensitiveValueRedactions.empty
+      )
+
+      val thrown = assertThrows[IllegalArgumentException]:
+        val _ = installer.installPlanWithObserver(
+          plan,
+          VerboseOutput.Disabled,
+          _ => Right(()),
+          InstallerEventContext.start(observer),
+          parallelism(2)
+        )
+
+      assert(thrown.getMessage == "replacement observer failed")
+      assert(fileSystem.discardCalls >= 2)
+
+    test("cancelling parallel preparation discards ready stages and preserves existing installs"):
+      val tempRoot = tempDirectory("core-stage-cancel")
+      val artifact = tempRoot.resolve("download.artifact")
+      val alpha    = directTool(tempRoot.resolve("alpha"))
+      val beta     = alpha.copy(
+        name = toolName("beta"),
+        installDir = tempRoot.resolve("beta").toString,
+        download = alpha.download.copy(url = "https://example.invalid/beta", filename = "beta"),
+        executables = Vector(ResolvedExecutable("bin/beta", None))
+      )
+      Vector(alpha, beta).foreach: tool =>
+        val executable = Path.of(tool.installDir).resolve(tool.executables.head.path)
+        Files.createDirectories(executable.getParent)
+        Files.writeString(executable, "existing")
+        ()
+      val betaStarted = CountDownLatch(1)
+      val client      = new BinaryDownloadClient:
+        def downloadArtifactWithProvenance(
+            url: String,
+            progressObserver: BinaryDownloadProgressObserver
+        ): Either[BinaryDownloadError, BinaryDownloadArtifact] =
+          if url == alpha.download.url then
+            Files.writeString(artifact, "replacement")
+            Right(BinaryDownloadArtifact(
+              artifact,
+              UrlProvenance.direct(url),
+              digest(Sha256.digest("replacement".getBytes(StandardCharsets.UTF_8))),
+              "replacement".length.toLong
+            ))
+          else
+            betaStarted.countDown()
+            Thread.sleep(30_000L)
+            Left(BinaryDownloadError(url, "expected cancellation"))
+      val installer = DirectBinaryInstaller(client, InstallFileSystem.nio)
+      val plan      = ResolvedPlan(
+        ResolvedPolicy.restricted(tempRoot.toString),
+        Vector(alpha, beta),
+        SensitiveValueRedactions.empty
+      )
+
+      val cancelled = unsupervised:
+        val running = forkCancellable(installer.installPlanWithObserver(
+          plan,
+          VerboseOutput.Disabled,
+          _ => Right(()),
+          InstallerEventContext.start(InstallerEventObserver.none),
+          parallelism(2)
+        ))
+        assert(betaStarted.await(2, TimeUnit.SECONDS))
+        // Artifact disposal happens after alpha has finished verification and mode application.
+        assert(eventually(Duration.ofSeconds(2))(
+          hasStagedInstall(tempRoot, "alpha") && !Files.exists(artifact)
+        ))
+        running.cancel()
+
+      assert(cancelled.left.exists(_.isInstanceOf[InterruptedException]))
+      assert(!hasStagedInstall(tempRoot, "alpha"))
+      assert(!hasStagedInstall(tempRoot, "beta"))
+      assert(!Files.exists(artifact))
+      assert(Files.readString(tempRoot.resolve("alpha/bin/alpha")) == "existing")
+      assert(Files.readString(tempRoot.resolve("beta/bin/beta")) == "existing")
+
+    test("process timeout promptly destroys descendants that retain process pipes"):
+      val tempRoot  = tempDirectory("core-process-timeout")
+      val childFile = tempRoot.resolve("child.pid")
+      val executor  = CommandExecutor.processWithTimeout(Duration.ofMillis(150))
+      val startedAt = System.nanoTime()
 
       val result = executor.run(CommandSpec(
-        Vector("sh", "-c", "sleep 2"),
+        Vector("sh", "-c", "sleep 30 & child=$!; echo $child > child.pid; wait"),
         tempRoot,
         Map("PATH" -> sys.env.getOrElse("PATH", "/usr/bin:/bin"))
       ))
+      val elapsed  = Duration.ofNanos(System.nanoTime() - startedAt)
+      val childPid = Files.readString(childFile).trim.toLong
 
       assert(result.left.exists(_.message.contains("timed out")))
+      assert(elapsed.compareTo(Duration.ofSeconds(2)) < 0)
+      assert(processIsDead(childPid))
+
+    test("cancelling process execution propagates interruption and destroys descendants"):
+      val tempRoot  = tempDirectory("core-process-cancel")
+      val childFile = tempRoot.resolve("child.pid")
+      val executor  = CommandExecutor.processWithTimeout(Duration.ofSeconds(30))
+      val spec      = CommandSpec(
+        Vector("sh", "-c", "sleep 30 & child=$!; echo $child > child.pid; wait"),
+        tempRoot,
+        Map("PATH" -> sys.env.getOrElse("PATH", "/usr/bin:/bin"))
+      )
+      val startedAt = System.nanoTime()
+      val cancelled = unsupervised:
+        val running = forkCancellable(executor.run(spec))
+        assert(eventually(Duration.ofSeconds(2))(Files.exists(childFile)))
+        running.cancel()
+      val elapsed  = Duration.ofNanos(System.nanoTime() - startedAt)
+      val childPid = Files.readString(childFile).trim.toLong
+
+      assert(cancelled.left.exists(_.isInstanceOf[InterruptedException]))
+      assert(elapsed.compareTo(Duration.ofSeconds(2)) < 0)
+      assert(processIsDead(childPid))
 
     test("process command executor captures stdout and stderr on failure"):
       val tempRoot = tempDirectory("core-process-output")
@@ -441,3 +664,11 @@ object DirectInstallTest extends TestSuite with CoreTestSupport:
 
       assert(rendered.contains("verify executable: missing bin/alpha"))
       assert(rendered.contains("suggestion: check spec.plan[].spec.executables[].path"))
+
+  private def eventually(timeout: Duration)(condition: => Boolean): Boolean =
+    val deadline = System.nanoTime() + timeout.toNanos
+    while !condition && System.nanoTime() < deadline do Thread.sleep(10L)
+    condition
+
+  private def processIsDead(pid: Long): Boolean = eventually(Duration.ofSeconds(2)):
+    ProcessHandle.of(pid).isEmpty || !ProcessHandle.of(pid).get().isAlive

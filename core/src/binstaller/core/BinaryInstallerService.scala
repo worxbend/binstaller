@@ -5,7 +5,7 @@ package binstaller.core
  *
  * Everything a caller needs is four commands, each taking an [[InstallerOptions]] describing which
  * manifest to read and how to behave, and each returning an [[InstallerResult]] with the rendered
- * output lines and a process exit code:
+ * output lines and a typed run status:
  *
  *   - [[plan]] resolves the manifest and renders what would happen. It writes nothing.
  *   - [[apply]] performs the install.
@@ -65,7 +65,7 @@ trait BinaryInstallerService:
 object BinaryInstallerService:
 
   /** Create the production resolving service with the default installer and cwd state store. */
-  def resolving(httpTextClient: HttpTextClient): BinaryInstallerService =
+  def resolving(httpTextClient: HttpTextClient): BinaryInstaller =
     resolving(httpTextClient, DirectBinaryInstaller.default)
 
   /**
@@ -75,7 +75,7 @@ object BinaryInstallerService:
   def resolving(
       httpTextClient: HttpTextClient,
       resolutionOptions: ResolutionOptions
-  ): BinaryInstallerService = resolving(
+  ): BinaryInstaller = resolving(
     httpTextClient,
     DirectBinaryInstaller.default,
     resolutionOptions = resolutionOptions
@@ -85,8 +85,7 @@ object BinaryInstallerService:
   def resolving(
       httpTextClient: HttpTextClient,
       sudoCredentials: SudoCredentialProvider
-  ): BinaryInstallerService =
-    resolving(httpTextClient, DirectBinaryInstaller.default(sudoCredentials))
+  ): BinaryInstaller = resolving(httpTextClient, DirectBinaryInstaller.default(sudoCredentials))
 
   /**
    * Create a resolving service with an injected installer and optionally-overridden state, lock
@@ -104,7 +103,7 @@ object BinaryInstallerService:
       lockFileStore: LockFileStore = LockFileStore.nio,
       resolutionOptions: ResolutionOptions = ResolutionOptions.fromEnvironment(),
       profileSource: ProfileSource = ProfileSource.yamlFile
-  ): BinaryInstallerService = ResolvingBinaryInstallerService(
+  ): BinaryInstaller = ResolvingBinaryInstallerService(
     httpTextClient,
     resolutionOptions,
     installer,

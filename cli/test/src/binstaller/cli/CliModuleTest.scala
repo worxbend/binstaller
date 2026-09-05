@@ -1,6 +1,8 @@
 package binstaller.cli
 
 import binstaller.config.Sha256Digest
+import binstaller.config.ToolName
+import binstaller.core.ApplyParallelism
 import binstaller.core.BinaryInstallerService
 import binstaller.core.BinaryDownloadArtifact
 import binstaller.core.BinaryDownloadClient
@@ -8,12 +10,14 @@ import binstaller.core.BinaryDownloadError
 import binstaller.core.BinaryDownloadProgress
 import binstaller.core.BinaryDownloadProgressObserver
 import binstaller.core.DirectBinaryInstaller
+import binstaller.core.DownloadProgressStatus
 import binstaller.core.HttpTextClient
 import binstaller.core.HttpTextError
 import binstaller.core.HttpTextResponse
 import binstaller.core.HostPlatform
 import binstaller.core.InstallFileSystem
 import binstaller.core.InstallerEventObserver
+import binstaller.core.InstallerEvent
 import binstaller.core.InstallerOptions
 import binstaller.core.InstallerResult
 import binstaller.core.NewerVersionStatus
@@ -23,6 +27,7 @@ import binstaller.core.LockedApplyMode
 import binstaller.core.LockOptions
 import binstaller.core.ResetState
 import binstaller.core.ResolutionOptions
+import binstaller.core.ToolSelection
 import binstaller.core.ApplyStateStore
 import binstaller.core.UrlProvenance
 import binstaller.core.UrlRedirectHop
@@ -33,6 +38,7 @@ import java.io.PrintWriter
 import java.io.StringWriter
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -144,6 +150,54 @@ object CliModuleTest extends TestSuite:
       assert(result.exitCode == 0)
       assert(service.lockInstallerOptions.exists(_.configPath == defaultConfigPath))
 
+    test("command hierarchy forwards the options owned by each command level"):
+      val selectedOptions = InstallerOptions(
+        configPath = "profile.yaml",
+        statePath = None,
+        resetState = ResetState.Disabled,
+        verboseOutput = binstaller.core.VerboseOutput.Disabled,
+        selection = ToolSelection(Vector("alpha"), Vector("beta"))
+      )
+      val commonArgs = Vector(
+        "--config",
+        "profile.yaml",
+        "--only",
+        "alpha",
+        "--skip",
+        "beta"
+      )
+      val lockedOptions = selectedOptions.copy(
+        lockPath = "custom.lock.json",
+        lockedApply = LockedApplyMode.Enabled
+      )
+      val cases = Vector(
+        CommandOptionsCase(
+          Vector("plan") ++ commonArgs ++ Vector("--locked", "--lock-file", "custom.lock.json"),
+          _.planOptions,
+          lockedOptions
+        ),
+        CommandOptionsCase(
+          Vector("apply") ++ commonArgs ++ Vector(
+            "--locked",
+            "--lock-file",
+            "custom.lock.json",
+            "--parallelism",
+            "8"
+          ),
+          _.applyOptions,
+          lockedOptions.copy(applyParallelism = positiveParallelism(8))
+        ),
+        CommandOptionsCase(Vector("versions") ++ commonArgs, _.versionsOptions, selectedOptions),
+        CommandOptionsCase(Vector("lock") ++ commonArgs, _.lockInstallerOptions, selectedOptions)
+      )
+
+      cases.foreach: commandCase =>
+        val service = RecordingInstallerService()
+        val result  = runCli(commandCase.args, service)
+
+        assert(result.exitCode == 0)
+        assert(commandCase.recordedOptions(service).contains(commandCase.expectedOptions))
+
     test("apply forwards state override and reset-state"):
       val service = RecordingInstallerService()
       val result  = runCli(
@@ -161,34 +215,6 @@ object CliModuleTest extends TestSuite:
       assert(result.exitCode == 0)
       assert(service.applyOptions.exists(_.statePath.contains("custom.state.json")))
       assert(service.applyOptions.exists(_.resetState == ResetState.Enabled))
-
-    test("apply forwards locked options"):
-      val service = RecordingInstallerService()
-      val result  = runCli(
-        Vector(
-          "apply",
-          "--config",
-          "profile.yaml",
-          "--locked",
-          "--lock-file",
-          "custom.lock.json"
-        ),
-        service
-      )
-
-      assert(result.exitCode == 0)
-      assert(service.applyOptions.exists(_.lockedApply == LockedApplyMode.Enabled))
-      assert(service.applyOptions.exists(_.lockPath == "custom.lock.json"))
-
-    test("apply forwards parallelism"):
-      val service = RecordingInstallerService()
-      val result  = runCli(
-        Vector("apply", "--config", "profile.yaml", "--parallelism", "8"),
-        service
-      )
-
-      assert(result.exitCode == 0)
-      assert(service.applyOptions.exists(_.applyParallelism.value == 8))
 
     test("apply rejects a non-positive parallelism with a usage error, not a stack trace"):
       val service = RecordingInstallerService()
@@ -223,25 +249,7 @@ object CliModuleTest extends TestSuite:
         ) == Plain
       )
 
-    test("plan forwards locked options"):
-      val service = RecordingInstallerService()
-      val result  = runCli(
-        Vector(
-          "plan",
-          "--config",
-          "profile.yaml",
-          "--locked",
-          "--lock-file",
-          "custom.lock.json"
-        ),
-        service
-      )
-
-      assert(result.exitCode == 0)
-      assert(service.planOptions.exists(_.lockedApply == LockedApplyMode.Enabled))
-      assert(service.planOptions.exists(_.lockPath == "custom.lock.json"))
-
-    test("lock forwards lock file path and selection"):
+    test("lock forwards lock file path"):
       val service = RecordingInstallerService()
       val result  = runCli(
         Vector(
@@ -249,9 +257,7 @@ object CliModuleTest extends TestSuite:
           "--config",
           "profile.yaml",
           "--lock-file",
-          "custom.lock.json",
-          "--only",
-          "alpha"
+          "custom.lock.json"
         ),
         service
       )
@@ -259,7 +265,6 @@ object CliModuleTest extends TestSuite:
       assert(result.exitCode == 0)
       assert(result.out.contains("lock"))
       assert(service.lockOptions.exists(_.outputPath == "custom.lock.json"))
-      assert(service.lockInstallerOptions.exists(_.selection.only == Vector("alpha")))
 
     test("plan prints all example tools in manifest order"):
       val result = runCli(
@@ -329,21 +334,33 @@ object CliModuleTest extends TestSuite:
       assert(!plainOutput.contains("https://cdn.example.invalid/kubernetes/stable.txt"))
       assert(!plainOutput.contains("final url"))
 
-    test("a version containing two consecutive spaces keeps its own column"):
-      // The old renderer recovered columns by splitting core's padded output on runs of two or
-      // more spaces, so a value containing two spaces silently split into the wrong columns. The
-      // rows now cross the boundary as data, so the value survives intact.
+    test("plain versions output preserves every core-authored line"):
+      // Plain output adds no styling, so rebuilding its table from structured rows can only lose
+      // information, including successful diagnostics that core appends after the table.
       val awkward = VersionSummaryRow("alpha", "1.0  beta", NewerVersionStatus.UpToDate)
       val result  = InstallerResult(
-        Vector("binstaller versions", "package  version    newer version"),
+        Vector(
+          "binstaller versions",
+          "package  version    newer version",
+          "alpha    1.0  beta  -",
+          "latest-version lookup completed with one recoverable diagnostic"
+        ),
         InstallerRunStatus.Succeeded,
         versionRows = Vector(awkward)
       )
 
-      val plain = stripAnsi(
-        CliVersionsOutput.colorLines(result, CliOutputStyle.Plain).mkString("\n")
-      )
+      assert(CliVersionsOutput.colorLines(result, CliOutputStyle.Plain) == result.lines)
 
+    test("styled versions preserve spaces within a version value"):
+      val result = InstallerResult(
+        Vector("binstaller versions"),
+        InstallerRunStatus.Succeeded,
+        versionRows = Vector(VersionSummaryRow("alpha", "1.0  beta", NewerVersionStatus.UpToDate))
+      )
+      val styled = CliVersionsOutput.colorLines(result, CliOutputStyle.Ansi).mkString("\n")
+      val plain  = stripAnsi(styled)
+
+      assert(styled.contains("\u001b["))
       assert(plain.contains("1.0  beta"))
       assert(plain.linesIterator.exists(line => line.startsWith("alpha") && line.endsWith("-")))
 
@@ -457,6 +474,21 @@ object CliModuleTest extends TestSuite:
       assert(result.out.contains("installed alpha"))
       assert(result.out.contains("✨ Summary"))
 
+    test("apply clears an active progress row before Picocli reports an exception"):
+      val sharedBuffer = StringWriter()
+      val out          = PrintWriter(sharedBuffer, true)
+      val err          = PrintWriter(sharedBuffer, true)
+      val exitCode     = CliModule
+        .commandLine(ExceptionalApplyInstallerService, out, err, CliOutputStyle.Ansi)
+        .execute("apply")
+      val output       = sharedBuffer.toString
+      val cleanupIndex = output.indexOf("\r\u001b[K")
+      val errorIndex   = output.indexOf(ExceptionalApplyInstallerService.message)
+
+      assert(exitCode != 0)
+      assert(cleanupIndex >= 0)
+      assert(errorIndex > cleanupIndex)
+
     test("apply colours result lines by their status, not by their wording"):
       // The colour must come from the typed status core pairs with each rendered line. A prefix
       // test on the text would keep passing here while silently losing its colour the moment core
@@ -531,6 +563,11 @@ object CliModuleTest extends TestSuite:
   private def stripAnsi(output: String): String = output.replaceAll("\u001b\\[[;\\d]*m", "")
 
   private def defaultConfigPath: String = Path.of("config.yaml").toAbsolutePath.normalize().toString
+
+  private def positiveParallelism(value: Int): ApplyParallelism =
+    ApplyParallelism.fromInt(value) match
+      case Right(parallelism) => parallelism
+      case Left(error) => throw java.lang.AssertionError(s"unexpected parallelism error: $error")
 
   private def writeConfig(tempRoot: Path, content: String): Path =
     val path = tempRoot.resolve("profile.yaml")
@@ -681,6 +718,40 @@ object CliModuleTest extends TestSuite:
   )
 
 private final case class CliRunResult(exitCode: Int, out: String, err: String)
+
+private final case class CommandOptionsCase(
+    args: Vector[String],
+    recordedOptions: RecordingInstallerService => Option[InstallerOptions],
+    expectedOptions: InstallerOptions
+)
+
+private object ExceptionalApplyInstallerService extends BinaryInstallerService:
+  val message: String = "apply failed after progress started"
+
+  def planWithEvents(
+      options: InstallerOptions,
+      eventObserver: InstallerEventObserver
+  ): InstallerResult = StubBinaryInstallerService.planWithEvents(options, eventObserver)
+
+  def applyWithEvents(
+      options: InstallerOptions,
+      eventObserver: InstallerEventObserver
+  ): InstallerResult =
+    eventObserver.onEvent(InstallerEvent.DownloadProgress(
+      ToolName.unsafe("alpha"),
+      "https://example.invalid/alpha",
+      0L,
+      Some(10L),
+      DownloadProgressStatus.Started,
+      Duration.ZERO
+    ))
+    throw IllegalStateException(message)
+
+  def versions(options: InstallerOptions): InstallerResult =
+    StubBinaryInstallerService.versions(options)
+
+  def lock(options: InstallerOptions, lockOptions: LockOptions): InstallerResult =
+    StubBinaryInstallerService.lock(options, lockOptions)
 
 private final class FakeHttpTextClient(text: String) extends HttpTextClient:
 

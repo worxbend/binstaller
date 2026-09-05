@@ -58,10 +58,11 @@ object ConfigLoader:
     // DROP the validator's only errors for fields that decode accepts, such as an unknown
     // `versionRef` or a sudo symlink that policy forbids, whose sole diagnostics come from
     // ProfileValidator. Instead we run the validator and drop only validator errors whose exact
-    // path already carries a decode error -- the sole case where the validator message is
-    // genuinely redundant. Paths the validator alone covers survive.
+    // path already carries a decode error. The validator also receives those paths so aggregate
+    // checks such as duplicate-name detection can exclude only entries whose prerequisite name
+    // failed to decode. Paths the validator alone covers survive.
     val decodedPaths     = decoded.errors.map(_.path).toSet
-    val validationErrors = ProfileValidator.validate(decoded.value)
+    val validationErrors = ProfileValidator.validate(decoded.value, decodedPaths)
       .filterNot(error => decodedPaths.contains(error.path))
     val errors = decoded.errors ++ validationErrors
     if errors.isEmpty then Right(decoded.value)

@@ -2,6 +2,26 @@ package binstaller.core
 
 import binstaller.config.ToolName
 
+/** Expected failure while resolving, building, or saving a lock file. */
+enum LockCommandError:
+  case ResolutionFailed(error: ResolvePlanError)
+  case InspectionFailed(toolName: ToolName, message: String)
+  case InvalidPath(path: String, message: String)
+  case SaveFailed(error: LockFileError)
+
+/** Rendering helpers used by the legacy lock command projection. */
+object LockCommandError:
+
+  /** Render a typed lock failure into script-friendly command lines. */
+  def renderLines(error: LockCommandError): Vector[String] = error match
+    case LockCommandError.ResolutionFailed(resolveError) =>
+      ResolvePlanError.renderLines(resolveError)
+    case LockCommandError.InspectionFailed(toolName, message) =>
+      Vector(s"lock inspection failed for tool '$toolName': $message")
+    case LockCommandError.InvalidPath(path, message) =>
+      Vector(RenderSafety.display(s"lock path '$path' is invalid: $message"))
+    case LockCommandError.SaveFailed(lockFileError) => Vector(LockFileError.render(lockFileError))
+
 /** Expected failure before an apply run is allowed to perform side effects. */
 enum ApplyPreflightError:
   case SudoSymlinkNotAllowed(toolName: ToolName)

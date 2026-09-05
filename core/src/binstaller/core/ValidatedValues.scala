@@ -15,10 +15,9 @@ final case class HttpsUrl private (value: String, uri: URI)
 
 object HttpsUrl:
 
-  def fromString(value: String): Either[String, HttpsUrl] =
-    Try(URI.create(value)).toEither
-      .left.map(error => s"invalid URL: ${Diagnostics.describe(error)}")
-      .flatMap:
+  def fromString(value: String): Either[String, HttpsUrl] = Try(URI.create(value)).toEither
+    .left.map(error => s"invalid URL: ${Diagnostics.describe(error)}")
+    .flatMap:
       case uri if !Option(uri.getScheme).exists(_.equalsIgnoreCase("https")) =>
         Left("URL must use https")
       case uri if Option(uri.getHost).forall(_.isEmpty) => Left("URL must include a host")
@@ -52,9 +51,10 @@ private[core] object NetworkTargetGuard:
     else Right(())
 
   /**
-   * Resolve the host immediately before a request as fail-closed defense-in-depth. The authoritative
-   * rebinding guarantee comes from the installed [[GuardedInetAddressResolverProvider]]: the HTTP
-   * client re-resolves independently, so this pre-check alone cannot pin the connected address.
+   * Resolve the host immediately before a request as fail-closed defense-in-depth. The
+   * authoritative rebinding guarantee comes from the installed
+   * [[GuardedInetAddressResolverProvider]]: the HTTP client re-resolves independently, so this
+   * pre-check alone cannot pin the connected address.
    *
    * `resolve` is injectable so tests can drive all three fail-closed branches without a live DNS
    * lookup; production uses the JDK resolver.
@@ -62,25 +62,24 @@ private[core] object NetworkTargetGuard:
   def validateResolved(
       host: String,
       resolve: String => Array[InetAddress] = InetAddress.getAllByName
-  ): Either[String, Unit] =
-    Try(resolve(host).toVector).toEither.left
-      // Naming the host and the cause is the difference between a report a user can act on and
-      // one that collapses an unknown host, a refused resolver and a timeout into the same line.
-      .map(error => s"URL host '$host' could not be resolved: ${Diagnostics.describe(error)}")
-      .flatMap: addresses =>
-        if addresses.isEmpty then Left(s"URL host '$host' did not resolve to any address")
-        else if addresses.exists(isBlockedAddress) then
-          Left(s"URL host '$host' resolves to a private, local, link-local, or multicast address")
-        else Right(())
+  ): Either[String, Unit] = Try(resolve(host).toVector).toEither.left
+    // Naming the host and the cause is the difference between a report a user can act on and
+    // one that collapses an unknown host, a refused resolver and a timeout into the same line.
+    .map(error => s"URL host '$host' could not be resolved: ${Diagnostics.describe(error)}")
+    .flatMap: addresses =>
+      if addresses.isEmpty then Left(s"URL host '$host' did not resolve to any address")
+      else if addresses.exists(isBlockedAddress) then
+        Left(s"URL host '$host' resolves to a private, local, link-local, or multicast address")
+      else Right(())
 
   private def isIpLiteral(host: String): Boolean = host.contains(':') ||
     host.nonEmpty && host.forall(character => character.isDigit || character == '.')
 
   /** Shared by the static literal path, the pre-request check, and the JVM-wide resolver guard. */
-  private[core] def isBlockedAddress(address: InetAddress): Boolean =
-    address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress ||
-      address.isSiteLocalAddress || address.isMulticastAddress ||
-      isUniqueLocalIpv6(address) || isCarrierGradeNat(address) || isUnspecifiedIpv4Block(address)
+  private[core] def isBlockedAddress(address: InetAddress): Boolean = address.isAnyLocalAddress ||
+    address.isLoopbackAddress || address.isLinkLocalAddress ||
+    address.isSiteLocalAddress || address.isMulticastAddress ||
+    isUniqueLocalIpv6(address) || isCarrierGradeNat(address) || isUnspecifiedIpv4Block(address)
 
   // IPv6 unique-local fc00::/7 (first byte 1111 110x). InetAddress unmaps ::ffff:v4 to Inet4Address,
   // so IPv4-mapped forms fall through to the IPv4 predicates above.
@@ -117,9 +116,9 @@ object RelativeInstallPath:
       Try(Path.of(value)).toEither
         .left.map(error => s"is invalid: ${Diagnostics.describe(error)}")
         .flatMap:
-        case path if path.isAbsolute                                    => Left("must be relative")
-        case path if path.iterator().asScala.exists(_.toString == "..") =>
-          Left("must not contain traversal segments")
-        case path if path.toString == "." && !allowCurrentDirectory =>
-          Left("must not be current directory")
-        case path => Right(RelativeInstallPath(value, path.normalize()))
+          case path if path.isAbsolute => Left("must be relative")
+          case path if path.iterator().asScala.exists(_.toString == "..") =>
+            Left("must not contain traversal segments")
+          case path if path.toString == "." && !allowCurrentDirectory =>
+            Left("must not be current directory")
+          case path => Right(RelativeInstallPath(value, path.normalize()))

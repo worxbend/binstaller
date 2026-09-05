@@ -21,6 +21,13 @@ import scala.util.Using
 private[core] enum ArchiveEntryKind:
   case File, Directory
 
+private[core] final case class ArchiveExtractionLimits(
+    maxExtractedBytes: Long,
+    maxInflatedBytes: Long,
+    maxEntries: Int,
+    timeBudgetMillis: Long
+)
+
 private[core] object ArchiveExtractor:
   // Bytes actually written to disk (the extracted output).
   private[core] val maxExtractedBytes: Long = 1024L * 1024L * 1024L
@@ -37,6 +44,13 @@ private[core] object ArchiveExtractor:
   // stalls and must not trip on a large legitimate archive extracted on a slow machine.
   private[core] val maxEntries: Int            = 65536
   private val extractionTimeBudgetMillis: Long = 300_000L
+
+  private val defaultLimits = ArchiveExtractionLimits(
+    maxExtractedBytes,
+    maxInflatedBytes,
+    maxEntries,
+    extractionTimeBudgetMillis
+  )
 
   /** Shared copy/skip/drain buffer size. Not a tuning knob — just one number instead of four. */
   private val copyBufferBytes: Int = 8192
@@ -61,21 +75,29 @@ private[core] object ArchiveExtractor:
   def extractFile(
       archive: ResolvedArchive,
       artifact: Path,
-      stagingDir: Path
+      stagingDir: Path,
+      limits: ArchiveExtractionLimits = defaultLimits
   ): Either[String, Unit] = archive.original.archiveType match
-    case ArchiveType.Zip =>
-      streamArchive(archive, stagingDir, ArchiveKind.Zip, () => Files.newInputStream(artifact))
+    case ArchiveType.Zip => streamArchive(
+        archive,
+        stagingDir,
+        ArchiveKind.Zip,
+        () => Files.newInputStream(artifact),
+        limits
+      )
     case ArchiveType.TarGz => streamArchive(
         archive,
         stagingDir,
         ArchiveKind.Tar,
-        () => GZIPInputStream(Files.newInputStream(artifact))
+        () => GZIPInputStream(Files.newInputStream(artifact)),
+        limits
       )
     case ArchiveType.TarXz => streamArchive(
         archive,
         stagingDir,
         ArchiveKind.Tar,
-        () => XZInputStream(Files.newInputStream(artifact))
+        () => XZInputStream(Files.newInputStream(artifact)),
+        limits
       )
 
   // A single budgeted pass. The copy plan is derived from the manifest without touching the
@@ -85,10 +107,11 @@ private[core] object ArchiveExtractor:
       archive: ResolvedArchive,
       stagingDir: Path,
       kind: ArchiveKind,
-      openRaw: () => InputStream
+      openRaw: () => InputStream,
+      limits: ArchiveExtractionLimits
   ): Either[String, Unit] = buildPlan(archive, stagingDir).flatMap: plan =>
     Try:
-      val run = ExtractionRun(plan, stagingDir)
+      val run = ExtractionRun(plan, stagingDir, limits)
       kind match
         case ArchiveKind.Zip =>
           Using.resource(ZipInputStream(openRaw()))(zip => streamZipEntries(run, zip))
@@ -115,7 +138,7 @@ private[core] object ArchiveExtractor:
         if targets.isEmpty then boundedDrain(zip, run.budget)
         else
           copyStream(zip, targets.head, run.budget)
-          duplicateTo(targets.head, targets.tail)
+          duplicateTo(targets.head, targets.tail, run.budget)
       zip.closeEntry()
       entry = zip.getNextEntry
 
@@ -133,7 +156,7 @@ private[core] object ArchiveExtractor:
           if targets.isEmpty then boundedSkip(content, entry.size, run.budget)
           else
             copyBounded(content, targets.head, entry.size, run.budget)
-            duplicateTo(targets.head, targets.tail)
+            duplicateTo(targets.head, targets.tail, run.budget)
 
   private final case class DirPrefix(prefix: String, toRoot: String, origin: String)
 
@@ -156,16 +179,29 @@ private[core] object ArchiveExtractor:
       directories <- collectEither(archive.directories.map: mapping =>
         normalizedArchivePath(mapping.from).map: source =>
           DirPrefix(s"$source/", mapping.to, mapping.from))
+      _ <- rejectDuplicateSources(
+        files.map((source, _, _) => source) ++ directories.map(_.prefix.stripSuffix("/"))
+      )
     yield
       val fileTargets = files.map((source, _, target) => source -> target).toMap
       val fileOrigins = files.map((source, origin, _) => source -> origin).toMap
       CopyPlan(fileTargets, fileOrigins, directories)
 
+  private def rejectDuplicateSources(sources: Vector[String]): Either[String, Unit] =
+    val seen = mutable.HashSet.empty[String]
+    sources.find(source => !seen.add(source)) match
+      case Some(source) => Left(s"duplicate archive source: $source")
+      case None         => Right(())
+
   // Mutable bookkeeping for one extraction pass. Reproduces the exact invariants and error
   // strings the previous two-pass planner enforced.
-  private final class ExtractionRun(plan: CopyPlan, stagingDir: Path):
-    val budget: ExtractedByteBudget = ExtractedByteBudget()
-    private val deadline: Long      = System.currentTimeMillis() + extractionTimeBudgetMillis
+  private final class ExtractionRun(
+      plan: CopyPlan,
+      stagingDir: Path,
+      limits: ArchiveExtractionLimits
+  ):
+    val budget: ExtractedByteBudget = ExtractedByteBudget(limits)
+    private val deadline: Long      = System.currentTimeMillis() + limits.timeBudgetMillis
     private val seenSources         = mutable.HashSet.empty[String]
     private val usedTargets         = mutable.HashSet.empty[Path]
     private val matchedFiles        = mutable.HashSet.empty[String]
@@ -174,7 +210,7 @@ private[core] object ArchiveExtractor:
 
     def beginEntry(): Unit =
       entryCount += 1
-      if entryCount > maxEntries then
+      if entryCount > limits.maxEntries then
         throw IllegalArgumentException("archive exceeds max entry count")
       if System.currentTimeMillis() > deadline then
         throw IllegalArgumentException("archive extraction exceeded time budget")
@@ -390,12 +426,18 @@ private[core] object ArchiveExtractor:
         output.write(buffer, 0, count)
         remaining = remaining - count
 
-  // Copy an already-extracted member to any additional targets (a member covered by both a file
-  // and a directory mapping). Disk-to-disk, so it does not inflate; the count is bounded by the
-  // manifest's mapping count, so it needs no budget charge.
-  private def duplicateTo(source: Path, extras: Vector[Path]): Unit = extras.foreach: target =>
-    ensureParent(target)
-    val _ = Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
+  // A disk-to-disk duplicate does not inflate the archive again, but it is additional extracted
+  // output and must consume the on-disk byte budget.
+  private def duplicateTo(
+      source: Path,
+      extras: Vector[Path],
+      budget: ExtractedByteBudget
+  ): Unit =
+    val bytes = Files.size(source)
+    extras.foreach: target =>
+      budget.writeCopy(bytes)
+      ensureParent(target)
+      val _ = Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
 
   // Skip a tar member of known length, charging its declared size to the budget up front so a
   // bomb is rejected before it can inflate, and failing loudly if the stream ends early.
@@ -416,7 +458,7 @@ private[core] object ArchiveExtractor:
       budget.inflate(count.toLong)
       count = input.read(buffer)
 
-  private final class ExtractedByteBudget private ():
+  private final class ExtractedByteBudget private (limits: ArchiveExtractionLimits):
     private var extracted = 0L
     private var inflated  = 0L
 
@@ -424,20 +466,36 @@ private[core] object ArchiveExtractor:
     def extract(bytes: Long): Unit =
       inflate(bytes)
       extracted = plus(extracted, bytes)
-      validateExtractedSize(extracted).left.foreach: message =>
+      validateExtractedSize(extracted, limits.maxExtractedBytes).left.foreach: message =>
+        throw IllegalArgumentException(message)
+
+    /** Charge bytes written by a disk-to-disk copy without charging inflation a second time. */
+    def writeCopy(bytes: Long): Unit =
+      extracted = plus(extracted, bytes)
+      validateExtractedSize(extracted, limits.maxExtractedBytes).left.foreach: message =>
         throw IllegalArgumentException(message)
 
     /** Charge bytes that are inflated but not written (a skipped or drained member). */
     def inflate(bytes: Long): Unit =
       inflated = plus(inflated, bytes)
-      validateInflatedSize(inflated).left.foreach: message =>
+      validateInflatedSize(inflated, limits.maxInflatedBytes).left.foreach: message =>
         throw IllegalArgumentException(message)
 
     private def plus(current: Long, bytes: Long): Long =
       if bytes < 0L || current > Long.MaxValue - bytes then -1L else current + bytes
 
   private object ExtractedByteBudget:
-    def apply(): ExtractedByteBudget = new ExtractedByteBudget()
+
+    def apply(limits: ArchiveExtractionLimits): ExtractedByteBudget =
+      new ExtractedByteBudget(limits)
+
+  private def validateExtractedSize(bytes: Long, limit: Long): Either[String, Unit] =
+    if bytes >= 0 && bytes <= limit then Right(())
+    else Left(s"archive exceeds extracted byte limit of $limit bytes")
+
+  private def validateInflatedSize(bytes: Long, limit: Long): Either[String, Unit] =
+    if bytes >= 0 && bytes <= limit then Right(())
+    else Left(s"archive exceeds inflated byte limit of $limit bytes")
 
   private def skipFully(input: InputStream, bytes: Long): Long =
     var remaining = bytes

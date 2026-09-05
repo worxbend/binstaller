@@ -17,6 +17,11 @@ trait ProfileSource:
   /** Load and validate the profile identified by `configPath`. */
   def load(configPath: String): Either[ConfigLoadError, BinaryDistributionProfile]
 
+  /** Load a typed profile input while preserving legacy file-source substitution. */
+  def load(input: ProfileInput): Either[ConfigLoadError, BinaryDistributionProfile] = input match
+    case ProfileInput.File(path) => load(path.toString)
+    case ProfileInput.Yaml(text) => ConfigModule.loadString(text)
+
 /** Constructors for production and test profile sources. */
 object ProfileSource:
 

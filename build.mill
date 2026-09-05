@@ -10,7 +10,6 @@ object Versions:
 object Deps:
   val picocli: mill.javalib.Dep = mvn"info.picocli:picocli:4.7.7"
   val snakeYamlEngine: mill.javalib.Dep = mvn"org.snakeyaml:snakeyaml-engine:3.0.1"
-  val sttpCore: mill.javalib.Dep = mvn"com.softwaremill.sttp.client4::core:4.0.25"
   val oxCore: mill.javalib.Dep = mvn"com.softwaremill.ox::core:1.0.5"
   val upickle: mill.javalib.Dep = mvn"com.lihaoyi::upickle:4.4.3"
   val osLib: mill.javalib.Dep = mvn"com.lihaoyi::os-lib:0.11.8"
@@ -27,6 +26,7 @@ trait BinstallerModule extends ScalaModule:
     Seq(
       "-deprecation",
       "-feature",
+      "-Werror",
       "-Wunused:all",
       "-Wvalue-discard",
       "-Wnonunit-statement"
@@ -54,7 +54,7 @@ object config extends BinstallerModule:
 object core extends BinstallerModule:
   def moduleDeps: Seq[JavaModule] = Seq(config)
   def mvnDeps: T[Seq[mill.javalib.Dep]] = Task {
-    Seq(Deps.sttpCore, Deps.oxCore, Deps.upickle, Deps.osLib, Deps.xz)
+    Seq(Deps.oxCore, Deps.upickle, Deps.osLib, Deps.xz)
   }
 
 object cli extends BinstallerModule:

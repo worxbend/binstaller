@@ -94,7 +94,9 @@ object BinaryDownloadLimits:
 private[core] final class JdkBinaryDownloadClient(
     client: HttpClient,
     limits: BinaryDownloadLimits = BinaryDownloadLimits.default,
-    hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved(_)
+    hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved(_),
+    createTemporaryFile: () => Path = () =>
+      Files.createTempFile("binstaller-download-", ".artifact")
 ) extends BinaryDownloadClient:
 
   /** Read a downloaded artifact fully into memory. Test-facing: the install pipeline streams. */
@@ -122,7 +124,7 @@ private[core] final class JdkBinaryDownloadClient(
               result.response.statusCode() < 300 =>
           readBodyToFile(result.provenance, result.response, progressObserver)
         case Success(Right(result)) =>
-          result.response.body().close()
+          RuntimeHttpBody.closeAfterFailure(result.response.body())
           Left(BinaryDownloadError(
             url,
             s"HTTP ${result.response.statusCode()}",
@@ -140,43 +142,58 @@ private[core] final class JdkBinaryDownloadClient(
       case value if value.isPresent && value.getAsLong >= 0L => Some(value.getAsLong)
       case _                                                 => None
 
-    val tempPath = Try(Files.createTempFile("binstaller-download-", ".artifact")) match
-      case Failure(error) => return Left(BinaryDownloadError(
-          provenance.initialUrl,
-          Diagnostics.describe(error),
-          Some(provenance)
-        ))
-      case Success(path) => path
-    (Try:
-      Using.resource(response.body()): input =>
-        val outputStream = Files.newOutputStream(
-          tempPath,
-          StandardOpenOption.TRUNCATE_EXISTING,
-          StandardOpenOption.WRITE
-        )
-        Using.resource(outputStream): output =>
-          BoundedBinaryBodyReader.write(
-            provenance.finalUrl,
-            input,
-            output,
-            totalBytes,
-            limits,
-            progressObserver
-          )
-    ) match
-      case Success(result) => result
-          .map((digest, size) => BinaryDownloadArtifact(tempPath, provenance, digest, size))
-          .left
-          .map: error =>
-            val _ = Files.deleteIfExists(tempPath)
-            error.copy(url = provenance.initialUrl, provenance = Some(provenance))
-      case Failure(error) =>
-        val _ = Files.deleteIfExists(tempPath)
-        Left(BinaryDownloadError(
-          provenance.initialUrl,
-          Diagnostics.describe(error),
-          Some(provenance)
-        ))
+    val timeoutError = BinaryDownloadError(
+      provenance.initialUrl,
+      s"download body timed out after ${limits.bodyTimeout.toSeconds}s",
+      Some(provenance)
+    )
+    var temporaryPath: Option[Path] = None
+    var ownershipTransferred        = false
+    try
+      val result = Try:
+        RuntimeHttpBody.readWithDeadline(response.body(), limits.bodyTimeout, timeoutError):
+          input =>
+            val tempPath = createTemporaryFile()
+            temporaryPath = Some(tempPath)
+            writeBodyToTemporaryFile(tempPath, provenance, input, totalBytes, progressObserver)
+      match
+        case Success(result) => result
+        case Failure(error)  => Left(BinaryDownloadError(
+            provenance.initialUrl,
+            Diagnostics.describe(error),
+            Some(provenance)
+          ))
+      ownershipTransferred = result.isRight
+      result
+    finally
+      // The deadline joins its reader before returning, so this also owns files from a reader
+      // cancelled after its last write, or from a response/output close that failed.
+      if !ownershipTransferred then
+        temporaryPath.foreach: path =>
+          val _ = Try(Files.deleteIfExists(path))
+
+  private def writeBodyToTemporaryFile(
+      tempPath: Path,
+      provenance: UrlProvenance,
+      input: InputStream,
+      totalBytes: Option[Long],
+      progressObserver: BinaryDownloadProgressObserver
+  ): Either[BinaryDownloadError, BinaryDownloadArtifact] =
+    val outputStream = Files.newOutputStream(
+      tempPath,
+      StandardOpenOption.TRUNCATE_EXISTING,
+      StandardOpenOption.WRITE
+    )
+    Using.resource(outputStream): output =>
+      BoundedBinaryBodyReader.write(
+        provenance.finalUrl,
+        input,
+        output,
+        totalBytes,
+        limits,
+        progressObserver
+      ).map((digest, size) => BinaryDownloadArtifact(tempPath, provenance, digest, size))
+        .left.map(_.copy(url = provenance.initialUrl, provenance = Some(provenance)))
 
 private[core] object BoundedBinaryBodyReader:
 

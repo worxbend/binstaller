@@ -5,10 +5,10 @@ import binstaller.config.Sha256Digest
 
 import java.io.InputStream
 import java.net.http.HttpClient
+import java.time.Duration
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
-import scala.util.Using
 
 /** Expected failure from a binary metadata lookup. */
 final case class BinaryMetadataError(
@@ -41,7 +41,8 @@ object BinaryMetadataClient:
 
 private[core] final class JdkBinaryMetadataClient(
     client: HttpClient,
-    hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved(_)
+    hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved(_),
+    bodyTimeout: Duration = BinaryDownloadLimits.default.bodyTimeout
 ) extends BinaryMetadataClient:
 
   private val maxBytes = BinaryDownloadLimits.default.maxBytes
@@ -53,9 +54,19 @@ private[core] final class JdkBinaryMetadataClient(
           case Success(Right(result))
               if result.response.statusCode() >= 200 &&
                 result.response.statusCode() < 300 =>
-            inspectBody(url, result.response.body(), result.provenance)
+            Try(RuntimeHttpBody.readWithDeadline(
+              result.response.body(),
+              bodyTimeout,
+              BinaryMetadataError(
+                url,
+                s"metadata response body timed out after ${bodyTimeout.toSeconds}s",
+                Some(result.provenance)
+              )
+            )(inspectBody(url, _, result.provenance))).toEither.left.map(error =>
+              BinaryMetadataError(url, Diagnostics.describe(error), Some(result.provenance))
+            ).flatten
           case Success(Right(result)) =>
-            result.response.body().close()
+            RuntimeHttpBody.closeAfterFailure(result.response.body())
             Left(BinaryMetadataError(
               url,
               s"HTTP ${result.response.statusCode()}",
@@ -69,7 +80,7 @@ private[core] final class JdkBinaryMetadataClient(
       input: InputStream,
       provenance: UrlProvenance
   ): Either[BinaryMetadataError, BinaryMetadata] = Try:
-    Using.resource(input)(Sha256.digestStream(_, maxBytes))
+    Sha256.digestStream(input, maxBytes)
   match
     case Failure(error) =>
       Left(BinaryMetadataError(url, Diagnostics.describe(error), Some(provenance)))

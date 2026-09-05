@@ -33,6 +33,22 @@ object LockedApplyError:
 
 private[core] object LockedApplyValidator:
 
+  private enum LockedVersion:
+    case Concrete(value: String, provenance: Option[UrlProvenance])
+    case Dynamic
+
+  private object LockedVersion:
+
+    def parse(toolName: ToolName, tool: LockFileTool): Either[String, LockedVersion] =
+      if tool.dynamicSource then
+        if tool.resolvedVersion.nonEmpty || tool.versionProvenance.nonEmpty then
+          Left(s"tool '$toolName' dynamic lock has unexpected concrete version fields")
+        else Right(LockedVersion.Dynamic)
+      else
+        tool.resolvedVersion match
+          case Some(value) => Right(LockedVersion.Concrete(value, tool.versionProvenance))
+          case None        => Left(s"tool '$toolName' concrete lock has no resolved version")
+
   def validate(
       prepared: PreparedPlan,
       lockPath: Path,
@@ -67,6 +83,7 @@ private[core] object LockedApplyValidator:
     .orElse(profileProblem(prepared, lockFile))
     .orElse(fingerprintProblem(prepared, lockFile))
     .orElse(duplicateToolProblem(lockFile))
+    .orElse(lockedVersionTupleProblem(lockFile))
     .orElse(toolProblem(prepared.plan.tools, lockFile, metadataClient))
 
   private def schemaProblem(lockFile: LockFile): Option[String] =
@@ -91,6 +108,10 @@ private[core] object LockedApplyValidator:
     duplicates.toVector.map(_.value).sorted.headOption
       .map(name => s"duplicate lock entry for tool '$name'")
 
+  private def lockedVersionTupleProblem(lockFile: LockFile): Option[String] = lockFile.tools.view
+    .flatMap(tool => LockedVersion.parse(tool.name, tool).left.toOption)
+    .headOption
+
   private def toolProblem(
       tools: Vector[ResolvedTool],
       lockFile: LockFile,
@@ -107,11 +128,13 @@ private[core] object LockedApplyValidator:
       tool: ResolvedTool,
       lockedTool: LockFileTool,
       metadataClient: BinaryMetadataClient
-  ): Option[String] = incompleteProvenance(tool, lockedTool)
-    .orElse(versionProblem(tool, lockedTool))
-    .orElse(checksumProblem(tool, lockedTool))
-    .orElse(downloadUrlProblem(tool, lockedTool))
-    .orElse(downloadMetadataProblem(tool, lockedTool, metadataClient))
+  ): Option[String] = LockedVersion.parse(tool.name, lockedTool) match
+    case Left(message)        => Some(message)
+    case Right(lockedVersion) => incompleteProvenance(tool, lockedTool)
+        .orElse(versionProblem(tool, lockedVersion))
+        .orElse(checksumProblem(tool, lockedTool))
+        .orElse(downloadUrlProblem(tool, lockedTool))
+        .orElse(downloadMetadataProblem(tool, lockedTool, metadataClient))
 
   private def incompleteProvenance(
       tool: ResolvedTool,
@@ -127,24 +150,29 @@ private[core] object LockedApplyValidator:
         s"tool '${tool.name}' has no locked sha256 digest; regenerate the lock file"
       )
 
-  private def versionProblem(tool: ResolvedTool, lockedTool: LockFileTool): Option[String] =
-    tool.version match
-      case ResolvedVersion.Concrete(value, provenance) => lockedTool.resolvedVersion match
-          case None => Some(s"tool '${tool.name}' is missing locked resolved version '$value'")
-          case Some(lockedValue) if lockedValue != value =>
-            Some(
-              s"tool '${tool.name}' version changed: lock has '$lockedValue', resolved '$value'"
-            )
-          case Some(_) => provenanceProblem(tool, lockedTool, provenance)
-      case ResolvedVersion.DynamicLatestUrl(_) => Option.when(!lockedTool.dynamicSource)(
+  private def versionProblem(tool: ResolvedTool, lockedVersion: LockedVersion): Option[String] =
+    (tool.version, lockedVersion) match
+      case (
+            ResolvedVersion.Concrete(value, provenance),
+            LockedVersion.Concrete(lockedValue, lockedProvenance)
+          ) =>
+        if lockedValue != value then
+          Some(
+            s"tool '${tool.name}' version changed: lock has '$lockedValue', resolved '$value'"
+          )
+        else provenanceProblem(tool, provenance, lockedProvenance)
+      case (ResolvedVersion.DynamicLatestUrl(_), LockedVersion.Dynamic) => None
+      case (ResolvedVersion.Concrete(value, _), LockedVersion.Dynamic)  =>
+        Some(s"tool '${tool.name}' is missing locked resolved version '$value'")
+      case (ResolvedVersion.DynamicLatestUrl(_), _: LockedVersion.Concrete) => Some(
           s"tool '${tool.name}' lock is not marked as a dynamic source"
         )
 
   private def provenanceProblem(
       tool: ResolvedTool,
-      lockedTool: LockFileTool,
-      provenance: Option[UrlProvenance]
-  ): Option[String] = (provenance, lockedTool.versionProvenance) match
+      provenance: Option[UrlProvenance],
+      lockedProvenance: Option[UrlProvenance]
+  ): Option[String] = (provenance, lockedProvenance) match
     case (Some(current), Some(locked)) if current != locked =>
       Some(s"tool '${tool.name}' version provenance changed")
     case (Some(_), None) => Some(s"tool '${tool.name}' is missing locked version provenance")

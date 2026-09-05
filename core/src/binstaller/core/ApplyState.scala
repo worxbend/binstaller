@@ -1,16 +1,9 @@
 package binstaller.core
 
-import binstaller.config.Diagnostics
 import binstaller.config.ToolName
 
-import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
-import java.nio.file.StandardOpenOption
-import java.util.UUID
-import scala.util.Failure
-import scala.util.Success
-import scala.util.Try
+import java.nio.file.InvalidPathException
 import upickle.default.*
 
 import binstaller.core.ToolNameCodec.given
@@ -135,15 +128,19 @@ object ApplyStateStore:
 private[core] object StatePathResolver:
 
   def resolve(rawPath: String, cwd: Path): Either[ApplyStateError.InvalidPath, Path] =
-    val path = Path.of(rawPath)
     if rawPath.trim.isEmpty then invalid(rawPath, "state filename must not be empty")
-    else if path.isAbsolute then invalid(rawPath, "absolute state paths are not allowed")
-    else if path.getNameCount != 1 then
-      invalid(rawPath, "state path must be a filename in the current working directory")
     else
-      val resolved = cwd.toAbsolutePath.normalize().resolve(path).normalize()
-      if resolved.getParent == cwd.toAbsolutePath.normalize() then Right(resolved)
-      else invalid(rawPath, "state path must stay in the current working directory")
+      try
+        val path = Path.of(rawPath)
+        if path.isAbsolute then invalid(rawPath, "absolute state paths are not allowed")
+        else if path.getNameCount != 1 then
+          invalid(rawPath, "state path must be a filename in the current working directory")
+        else
+          val resolved = cwd.toAbsolutePath.normalize().resolve(path).normalize()
+          if resolved.getParent == cwd.toAbsolutePath.normalize() then Right(resolved)
+          else invalid(rawPath, "state path must stay in the current working directory")
+      catch
+        case error: InvalidPathException => invalid(rawPath, error.getReason)
 
   private def invalid(
       path: String,
@@ -153,63 +150,11 @@ private[core] object StatePathResolver:
 private[core] final class NioApplyStateStore(val cwd: Path) extends ApplyStateStore:
 
   def load(path: Path): Either[ApplyStateError, Option[ApplyState]] =
-    if !Files.exists(path) then Right(None)
-    else
-      Try(read[ApplyState](Files.readString(path))) match
-        case Success(state)                              => Right(Some(state))
-        case Failure(NioApplyStateStore.Decode(message)) =>
-          Left(ApplyStateError.DecodeFailed(path, message))
-        case Failure(error) => Left(ApplyStateError.ReadFailed(path, Diagnostics.describe(error)))
+    PersistedJson.load[ApplyState](path).left.map:
+      case PersistedJsonReadError.DecodeFailed(message) =>
+        ApplyStateError.DecodeFailed(path, message)
+      case PersistedJsonReadError.ReadFailed(message) => ApplyStateError.ReadFailed(path, message)
 
   def save(path: Path, state: ApplyState): Either[ApplyStateError, Unit] =
-    val tmp = cwd.resolve(s".${path.getFileName}.tmp-${UUID.randomUUID()}")
-    Try:
-      Files.createDirectories(cwd)
-      // Write to a unique temp file first; a partial state write must never look like a valid
-      // resume checkpoint.
-      val _ = Files.writeString(
-        tmp,
-        write(state, indent = 2),
-        StandardOpenOption.CREATE_NEW,
-        StandardOpenOption.WRITE
-      )
-      val _ = Files.move(
-        tmp,
-        path,
-        StandardCopyOption.ATOMIC_MOVE,
-        StandardCopyOption.REPLACE_EXISTING
-      )
-    match
-      case Success(_)     => Right(())
-      case Failure(error) =>
-        val _ = Files.deleteIfExists(tmp)
-        Left(ApplyStateError.WriteFailed(path, Diagnostics.describe(error)))
-
-private[core] object NioApplyStateStore:
-
-  /**
-   * Matches the exceptions that mean "the file was read, but its contents are not a valid state".
-   *
-   * upickle signals a rejected value with `Abort`, but rethrows one raised inside a visitor wrapped
-   * in `AbortException`, and wraps that again in a `TraceVisitor.TraceException` carrying the JSON
-   * path. None of the three is a subtype of another, so matching only `Abort` reports a corrupt
-   * state file as one that could not be read at all — which sends the user to check file
-   * permissions instead of the line they hand-edited.
-   *
-   * The extracted message prefers the innermost cause, because that is the one that names the
-   * actual problem; the wrapper only carries the JSON path, which is appended when present.
-   */
-  private[core] object Decode:
-
-    def unapply(error: Throwable): Option[String] = error match
-      case _: (upickle.core.Abort | upickle.core.AbortException |
-            upickle.core.TraceVisitor.TraceException) =>
-        val location = Option(error.getMessage).filter(_.nonEmpty)
-        val reason   = Diagnostics.describe(rootCause(error))
-        Some(location.filter(_ != reason).fold(reason)(at => s"$reason at $at"))
-      case _ => None
-
-    @scala.annotation.tailrec
-    private def rootCause(error: Throwable): Throwable = Option(error.getCause) match
-      case Some(cause) if cause ne error => rootCause(cause)
-      case _                             => error
+    PersistedJson.writeAtomically(path, write(state, indent = 2))
+      .left.map(message => ApplyStateError.WriteFailed(path, message))

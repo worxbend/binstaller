@@ -144,11 +144,18 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
       val nestedResult = service.apply(
         applyOptions(config).copy(statePath = Some("nested/state.json"))
       )
+      val malformedResult = service.apply(
+        applyOptions(config).copy(statePath = Some("bad\u0000state.json"))
+      )
 
       assert(absoluteResult.status == InstallerRunStatus.Failed)
       assert(absoluteResult.lines.exists(_.contains("absolute state paths are not allowed")))
       assert(nestedResult.status == InstallerRunStatus.Failed)
       assert(nestedResult.lines.exists(_.contains("current working directory")))
+      assert(malformedResult.status == InstallerRunStatus.Failed)
+      assert(StatePathResolver.resolve("bad\u0000state.json", tempRoot).left.exists(
+        _.isInstanceOf[ApplyStateError.InvalidPath]
+      ))
       assert(!Files.exists(tempRoot.resolve("apps")))
 
     test("state is saved after each terminal tool result"):
@@ -173,6 +180,47 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
             "beta"  -> ApplyStateToolStatus.Completed
           )
         ))
+
+    test("state write failure keeps its wording and discards the next prepared stage"):
+      val tempRoot     = tempDirectory("core-state-write-failure")
+      val config       = writeConfig(tempRoot, twoToolYaml(tempRoot, "failed.state.json"))
+      val delegate     = ApplyStateStore.nio(tempRoot)
+      val failingStore = new ApplyStateStore:
+        def cwd: Path = delegate.cwd
+
+        def load(path: Path): Either[ApplyStateError, Option[ApplyState]] = delegate.load(path)
+
+        def save(path: Path, state: ApplyState): Either[ApplyStateError, Unit] =
+          Left(ApplyStateError.WriteFailed(path, "disk full"))
+      val service = BinaryInstallerService.resolving(
+        FakeHttpTextClient(""),
+        DirectBinaryInstaller(RoutingBinaryDownloadClient.success, InstallFileSystem.nio),
+        failingStore
+      )
+
+      val result = service.apply(applyOptions(config))
+
+      assert(result.status == InstallerRunStatus.Failed)
+      assert(result.lines.exists(line =>
+        line.startsWith("state write failed:") && line.contains("disk full")
+      ))
+      assert(Files.isRegularFile(tempRoot.resolve("apps/alpha/bin/alpha")))
+      assert(!Files.exists(tempRoot.resolve("apps/beta")))
+      assert(!hasStagedInstall(tempRoot, "beta"))
+
+    test("temporary cleanup failure cannot escape an atomic write failure"):
+      val tempRoot      = tempDirectory("core-persisted-json-cleanup")
+      val blockedParent = tempRoot.resolve("not-a-directory")
+      Files.writeString(blockedParent, "block the state directory")
+      val target   = blockedParent.resolve("state.json")
+      val occupied = Files.createDirectory(tempRoot.resolve("occupied-temp"))
+      Files.writeString(occupied.resolve("child"), "keep cleanup from deleting the directory")
+
+      val result = PersistedJson.writeAtomically(target, "{}", (_, _) => occupied)
+
+      assert(result.left.exists(_.contains(blockedParent.toString)))
+      assert(!result.left.exists(_.contains(occupied.toString)))
+      assert(Files.isDirectory(occupied))
 
     test("rendered terminal lines pair each apply line with its status"):
       val tempRoot = tempDirectory("core-rendered-lines")

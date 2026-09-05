@@ -6,7 +6,13 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 import java.time.Duration
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import ox.forkCancellable
+import ox.unsupervised
 
 /** The JDK HTTP clients: redirect provenance, redirect refusal, and body limits. */
 object HttpClientTest extends TestSuite with CoreTestSupport:
@@ -172,3 +178,181 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
       )
 
       assert(result.left.exists(_.message.contains("download body timed out")))
+
+    test("binary client times out a stalled body and closes it"):
+      val temporaryPath = tempDirectory("core-http-timeout").resolve("artifact")
+      val body          = InterruptibleStalledInputStream()
+      val response      = FakeHttpResponse[InputStream](
+        responseUri = "https://example.invalid/alpha",
+        responseStatusCode = 200,
+        responseBody = body
+      )
+      val client = JdkBinaryDownloadClient(
+        StaticHttpClient(response),
+        limits = BinaryDownloadLimits(1024L, Duration.ofMillis(50)),
+        hostGuard = _ => Right(()),
+        createTemporaryFile = () => Files.createFile(temporaryPath)
+      )
+
+      val startedAt = System.nanoTime()
+      val result    = client.downloadArtifactWithProvenance("https://example.invalid/alpha")
+
+      assert(result.left.exists(_.message.contains("download body timed out")))
+      assert(body.isClosed)
+      assert(!Files.exists(temporaryPath))
+      assert(System.nanoTime() - startedAt < Duration.ofSeconds(2).toNanos)
+
+    test("text client times out a stalled body and closes it"):
+      val body     = InterruptibleStalledInputStream()
+      val response = FakeHttpResponse[InputStream](
+        responseUri = "https://example.invalid/stable.txt",
+        responseStatusCode = 200,
+        responseBody = body
+      )
+      val client = JdkHttpTextClient(
+        StaticHttpClient(response),
+        hostGuard = _ => Right(()),
+        bodyTimeout = Duration.ofMillis(50)
+      )
+
+      val startedAt = System.nanoTime()
+      val result    = client.getText("https://example.invalid/stable.txt")
+
+      assert(result.left.exists(_.message.contains("body timed out")))
+      assert(body.isClosed)
+      assert(System.nanoTime() - startedAt < Duration.ofSeconds(2).toNanos)
+
+    test("metadata client times out a stalled body and closes it"):
+      val body     = InterruptibleStalledInputStream()
+      val response = FakeHttpResponse[InputStream](
+        responseUri = "https://example.invalid/alpha",
+        responseStatusCode = 200,
+        responseBody = body
+      )
+      val client = JdkBinaryMetadataClient(
+        StaticHttpClient(response),
+        hostGuard = _ => Right(()),
+        bodyTimeout = Duration.ofMillis(50)
+      )
+
+      val startedAt = System.nanoTime()
+      val result    = client.metadata("https://example.invalid/alpha")
+
+      assert(result.left.exists(_.message.contains("body timed out")))
+      assert(body.isClosed)
+      assert(System.nanoTime() - startedAt < Duration.ofSeconds(2).toNanos)
+
+    test("cancelling a binary body read closes it and discards the temporary file"):
+      val temporaryPath = tempDirectory("core-http-cancel").resolve("artifact")
+      val body          = InterruptibleStalledInputStream()
+      val response      = FakeHttpResponse[InputStream](
+        responseUri = "https://example.invalid/alpha",
+        responseStatusCode = 200,
+        responseBody = body
+      )
+      val client = JdkBinaryDownloadClient(
+        StaticHttpClient(response),
+        limits = BinaryDownloadLimits(1024L, Duration.ofSeconds(30)),
+        hostGuard = _ => Right(()),
+        createTemporaryFile = () => Files.createFile(temporaryPath)
+      )
+
+      val cancelled = unsupervised:
+        val running = forkCancellable(
+          client.downloadArtifactWithProvenance("https://example.invalid/alpha")
+        )
+        assert(body.awaitRead())
+        running.cancel()
+
+      assert(cancelled.left.exists(_.isInstanceOf[InterruptedException]))
+      assert(body.isClosed)
+      assert(!Files.exists(temporaryPath))
+
+    test("response close failures remain typed and discard a completed binary artifact"):
+      val temporaryPath = tempDirectory("core-http-close").resolve("artifact")
+      def response      = FakeHttpResponse[InputStream](
+        responseUri = "https://example.invalid/alpha",
+        responseStatusCode = 200,
+        responseBody = new ByteArrayInputStream("alpha".getBytes(StandardCharsets.UTF_8)):
+          override def close(): Unit = throw java.io.IOException("response close failed")
+      )
+      val binary = JdkBinaryDownloadClient(
+        StaticHttpClient(response),
+        hostGuard = _ => Right(()),
+        createTemporaryFile = () => Files.createFile(temporaryPath)
+      )
+      val text     = JdkHttpTextClient(StaticHttpClient(response), hostGuard = _ => Right(()))
+      val metadata = JdkBinaryMetadataClient(StaticHttpClient(response), hostGuard = _ => Right(()))
+
+      assert(binary.downloadArtifactWithProvenance("https://example.invalid/alpha")
+        .left.exists(_.message.contains("response close failed")))
+      assert(text.getText("https://example.invalid/alpha")
+        .left.exists(_.message.contains("response close failed")))
+      assert(metadata.metadata("https://example.invalid/alpha")
+        .left.exists(_.message.contains("response close failed")))
+      assert(!Files.exists(temporaryPath))
+
+    test("HTTP failures retain their status when closing a rejected response fails"):
+      def response = FakeHttpResponse[InputStream](
+        responseUri = "https://example.invalid/alpha",
+        responseStatusCode = 503,
+        responseBody = new ByteArrayInputStream(Array.emptyByteArray):
+          override def close(): Unit = throw java.io.IOException("response close failed")
+      )
+      val binary   = JdkBinaryDownloadClient(StaticHttpClient(response), hostGuard = _ => Right(()))
+      val text     = JdkHttpTextClient(StaticHttpClient(response), hostGuard = _ => Right(()))
+      val metadata = JdkBinaryMetadataClient(StaticHttpClient(response), hostGuard = _ => Right(()))
+
+      val failures = Vector(
+        binary.downloadArtifactWithProvenance("https://example.invalid/alpha")
+          .left.toOption.map(error => error.message -> error.provenance),
+        text.getText("https://example.invalid/alpha")
+          .left.toOption.map(error => error.message -> error.provenance),
+        metadata.metadata("https://example.invalid/alpha")
+          .left.toOption.map(error => error.message -> error.provenance)
+      )
+      assert(failures.forall(_.contains(
+        "HTTP 503" -> Some(UrlProvenance.direct("https://example.invalid/alpha"))
+      )))
+
+    test("binary client closes the response body when temporary allocation fails"):
+      val body     = CloseTrackingInputStream("alpha".getBytes(StandardCharsets.UTF_8))
+      val response = FakeHttpResponse[InputStream](
+        responseUri = "https://example.invalid/alpha",
+        responseStatusCode = 200,
+        responseBody = body
+      )
+      val client = JdkBinaryDownloadClient(
+        StaticHttpClient(response),
+        hostGuard = _ => Right(()),
+        createTemporaryFile = () => throw java.io.IOException("temporary allocation failed")
+      )
+
+      val result = client.downloadArtifactWithProvenance("https://example.invalid/alpha")
+
+      assert(result.left.exists(_.message.contains("temporary allocation failed")))
+      assert(body.isClosed)
+
+private final class InterruptibleStalledInputStream extends InputStream:
+  private val closed  = AtomicBoolean(false)
+  private val reading = CountDownLatch(1)
+
+  def isClosed: Boolean    = closed.get()
+  def awaitRead(): Boolean = reading.await(2, TimeUnit.SECONDS)
+
+  override def read(): Int =
+    reading.countDown()
+    Thread.sleep(30_000L)
+    -1
+
+  override def close(): Unit = closed.set(true)
+
+private final class CloseTrackingInputStream(bytes: Array[Byte])
+    extends ByteArrayInputStream(bytes):
+  private val closed = AtomicBoolean(false)
+
+  def isClosed: Boolean = closed.get()
+
+  override def close(): Unit =
+    closed.set(true)
+    super.close()

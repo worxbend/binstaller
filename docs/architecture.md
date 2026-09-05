@@ -39,10 +39,14 @@ happens.
   `--only`/`--skip` selection, creates resolved plans, downloads bounded binary
   bodies, verifies checksums, extracts archives, stages and replaces installs,
   creates symlinks, persists apply state, emits typed installer events, and
-  stays independent from command parsing.
+  stays independent from command parsing. HTTP response bodies have a deadline
+  for their full consumption, and owned download files, install stages, and
+  external processes are cleaned up when their operation fails or is cancelled.
 - `cli`: owns Picocli command parsing, exit codes, script-friendly default
   output, colored apply progress, global flags, and routing for `plan`,
-  `apply`, `versions`, and `lock`.
+  `apply`, `versions`, and `lock`. It adapts typed core output rather than
+  reparsing rendered text: plain `versions` output keeps the core-authored
+  lines, while ANSI output uses `VersionSummaryRow` values for styling.
 - `app`: owns process entry and exit-code propagation only.
 - `build/release`: `build.mill` defines modules and native-image settings;
   `.github/workflows/release.yml` builds, smokes, packages, checksums,
@@ -71,6 +75,11 @@ happens.
    default 4, overridable with `apply --parallelism N`).
 7. CLI apply progress consumes the event contract to keep a compact progress
    line and summary without changing core execution behavior.
+
+`ConfiguredCommand`, `SelectableCommand`, and `LockAwareCommand` build
+`InstallerOptions` through the command hierarchy. This keeps global, selection,
+and lock options consistent across the commands that support them; `apply` adds
+its validated parallelism setting at the leaf command.
 
 ## Command Surface
 
@@ -119,3 +128,19 @@ Current phases are `Resolving`, `Planning`, `LoadingState`, `Downloading`,
   boundary as `RenderedTerminalLine`, each paired with a typed
   `ToolResultStatus`, so colour is chosen by status rather than by testing a
   line for a prefix.
+- JSON state and lock persistence share a same-directory temporary-file
+  and atomic-move mechanism.
+
+## Prerelease Config API
+
+Profiles built outside the YAML loader use
+`BinaryDistributionProfile.validated(...)`; direct construction and `copy` are
+restricted to `config` so duplicate names, version references, and sudo policy
+checks are not skipped. `ChecksumSpec` now stores one `ChecksumSource` enum
+(`Literal` or `Discovery`) instead of the former optional value/discovery pair.
+`ChecksumSpec(algorithm, digest)` remains the literal convenience constructor,
+and `ChecksumSpec.discovery(algorithm, source)` constructs discovery-backed
+checksums.
+
+See [Developer API](developer-api.md) for the prerelease typed profile input,
+shared HTTP-client, and default-service entry points.

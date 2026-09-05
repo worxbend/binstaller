@@ -48,9 +48,10 @@ The remaining external process boundaries are intentionally narrow:
 
 Archive extraction no longer shells out to the system `tar`; all archive types
 are decoded in-process. Core command execution uses argv, not manifest-provided
-shell strings. Process
-execution has a default 15 minute timeout. Failure messages quote arguments so
-diagnostics preserve argument boundaries.
+shell strings. Process execution has a default 15 minute timeout. On timeout,
+process descendants and the root process are forcibly stopped before captured
+output is collected. Failure messages quote arguments so diagnostics preserve
+argument boundaries.
 
 Password-backed sudo uses modeled secret stdin. The password is not included in
 argv, environment variables, command previews, command diagnostics, installer
@@ -155,7 +156,7 @@ Current rules:
 - Absolute paths, nested relative paths, and empty names are rejected.
 - Plan does not validate or touch the state file.
 - State is written after terminal tool results through a same-directory temp
-  file and atomic move.
+  file and atomic move. Lock files use the same persistence mechanism.
 - Incompatible profile names or manifest fingerprints fail unless
   `--reset-state` is used.
 
@@ -182,8 +183,9 @@ into CLI output.
 
 ## Remaining Risks
 
-- Downloads are bounded by default limits, but body deadlines are checked at
-  chunk boundaries.
+- Downloads and HTTP text/metadata reads have bounded sizes and a deadline for
+  full body consumption. Their effectiveness still depends on the underlying
+  HTTP client being able to interrupt a stalled stream.
 - Missing checksums are still accepted by developer-mode profiles.
 - End-to-end release integrity is anchored by keyless Sigstore signatures over
   each release artifact, verified by `scripts/install.sh` when `cosign` is

@@ -121,7 +121,12 @@ trait InstallFileSystem:
       stagedInstall: StagedInstall
   ): Either[InstallFileSystemError.ReplacementFailed, Unit]
 
-  /** Discard an unused staged install tree. */
+  /**
+   * Best-effort discard of an unused staged install tree.
+   *
+   * Implementations must tolerate an already-consumed or already-discarded staging path, so callers
+   * may safely invoke this more than once during failure and cancellation cleanup.
+   */
   def discardStaged(stagedInstall: StagedInstall): Unit
 
 /** Filesystem boundary constructors. */
