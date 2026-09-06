@@ -143,8 +143,7 @@ private[core] object ArchiveExtractor:
       entry = zip.getNextEntry
 
   private def streamTarEntries(run: ExtractionRun, input: InputStream): Unit =
-    readTarEntries(input): (entry, content) =>
-      run.beginEntry()
+    readTarEntries(input, () => run.beginEntry()): (entry, content) =>
       run.register(entry.name)
       entry.kind match
         case ArchiveEntryKind.Directory =>
@@ -254,25 +253,63 @@ private[core] object ArchiveExtractor:
 
   private final case class TarEntry(name: String, kind: ArchiveEntryKind, size: Long)
 
-  private def readTarEntries(input: InputStream)(handle: (TarEntry, InputStream) => Unit): Unit =
-    var header = readTarBlock(input)
+  // A path too long for the 100-byte header field is stored by GNU tar in a preceding pseudo-entry
+  // (typeflag 'L', conventionally named "././@LongLink") whose payload is the real name; 'K' does
+  // the same for a link target. Both payloads are read before any byte budget is charged, so they
+  // are capped here instead -- far above any real path, far below anything worth allocating.
+  private val maxLongNameBytes: Long = 8192L
+
+  private def readTarEntries(
+      input: InputStream,
+      beginHeader: () => Unit
+  )(handle: (TarEntry, InputStream) => Unit): Unit =
+    // Carries a GNU long-name payload onto the member header that follows it.
+    var pendingName: Option[String] = None
+    var header                      = readTarBlock(input)
     while header.exists(!_.forall(_ == 0.toByte)) do
       val current = header.get
-      val entry   = tarEntry(current)
-      handle(entry, input)
-      val padding = tarPadding(entry.size)
-      val _       = skipFully(input, padding)
+      // Counted before the payload is touched, so a stream of nothing but metadata headers trips
+      // the entry-count and time budgets instead of looping forever without reaching a member.
+      beginHeader()
+      val declared = tarSize(current, 124, 12)
+      current(156).toChar match
+        case 'L' => pendingName = Some(readLongName(input, declared))
+        case 'K' =>
+          // A long *link* target. The member it names is a link and is rejected on its own header
+          // below; consume the payload so that rejection reports the link, not stray bytes.
+          val _ = readLongName(input, declared)
+        case _ =>
+          val entry = tarEntry(current, declared, pendingName)
+          pendingName = None
+          handle(entry, input)
+          val _ = skipFully(input, tarPadding(entry.size))
       header = readTarBlock(input)
 
-  private def tarEntry(header: Array[Byte]): TarEntry =
-    val name     = tarString(header, 0, 100)
-    val prefix   = tarString(header, 345, 155)
-    val fullName = if prefix.isEmpty then name else s"$prefix/$name"
-    val source   = normalizedArchivePath(fullName).fold(
+  // Read a GNU long-name member whole, including its padding, and return the NUL-terminated path
+  // it carries.
+  private def readLongName(input: InputStream, size: Long): String =
+    if size > maxLongNameBytes then
+      throw IllegalArgumentException(s"tar long name exceeds $maxLongNameBytes bytes")
+    val bytes  = Array.ofDim[Byte](size.toInt)
+    var offset = 0
+    while offset < bytes.length do
+      val count = input.read(bytes, offset, bytes.length - offset)
+      if count == -1 then throw IllegalArgumentException("unexpected end of tar entry")
+      offset = offset + count
+    val _ = skipFully(input, tarPadding(size))
+    new String(bytes.takeWhile(_ != 0.toByte), java.nio.charset.StandardCharsets.UTF_8)
+
+  private def tarEntry(header: Array[Byte], size: Long, longName: Option[String]): TarEntry =
+    val fullName = longName match
+      case Some(value) => value
+      case None        =>
+        val name   = tarString(header, 0, 100)
+        val prefix = tarString(header, 345, 155)
+        if prefix.isEmpty then name else s"$prefix/$name"
+    val source = normalizedArchivePath(fullName).fold(
       message => throw IllegalArgumentException(message),
       identity
     )
-    val size = tarSize(header, 124, 12)
     val kind = header(156).toChar match
       case 0 | '0' => ArchiveEntryKind.File
       case '5'     => ArchiveEntryKind.Directory

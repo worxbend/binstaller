@@ -464,6 +464,51 @@ private[core] trait CoreTestSupport extends TestSuite:
     gzip.close()
     output.toByteArray
 
+  /**
+   * A tar.gz whose names are carried by GNU "@LongLink" pseudo-entries, exactly as GNU tar writes a
+   * path that does not fit the 100-byte header field: the real header keeps only the truncated
+   * name, so a reader that ignores the pseudo-entry sees the wrong member.
+   */
+  protected def tarGzArchiveWithLongNames(entries: Vector[(String, String)]): Array[Byte] =
+    gzipped(longNameTarBytes(entries))
+
+  /** The tar.xz form of [[tarGzArchiveWithLongNames]] — the shape zig's release artifact has. */
+  protected def tarXzArchiveWithLongNames(entries: Vector[(String, String)]): Array[Byte] =
+    xzCompressed(longNameTarBytes(entries))
+
+  protected def longNameTarBytes(entries: Vector[(String, String)]): Array[Byte] =
+    val output = ByteArrayOutputStream()
+    entries.foreach:
+      case (name, content) =>
+        writeLongNameEntry(output, name)
+        val bytes = content.getBytes(StandardCharsets.UTF_8)
+        output.write(tarHeader(name.take(100), bytes.length, '0'))
+        output.write(bytes)
+        output.write(Array.fill[Byte]((512 - (bytes.length % 512)) % 512)(0))
+    output.write(Array.fill[Byte](1024)(0))
+    output.toByteArray
+
+  /** One GNU long-name pseudo-entry: typeflag 'L' with the NUL-terminated real path as payload. */
+  protected def writeLongNameEntry(output: ByteArrayOutputStream, name: String): Unit =
+    val bytes = name.getBytes(StandardCharsets.UTF_8) :+ 0.toByte
+    output.write(tarHeader("././@LongLink", bytes.length, 'L'))
+    output.write(bytes)
+    output.write(Array.fill[Byte]((512 - (bytes.length % 512)) % 512)(0))
+
+  protected def gzipped(bytes: Array[Byte]): Array[Byte] =
+    val output = ByteArrayOutputStream()
+    val gzip   = GZIPOutputStream(output)
+    gzip.write(bytes)
+    gzip.close()
+    output.toByteArray
+
+  protected def xzCompressed(bytes: Array[Byte]): Array[Byte] =
+    val output = ByteArrayOutputStream()
+    val xz     = XZOutputStream(output, LZMA2Options())
+    xz.write(bytes)
+    xz.close()
+    output.toByteArray
+
   protected def tarGzArchiveWithEntryTypes(entries: Vector[(String, String, Char)]): Array[Byte] =
     val output = ByteArrayOutputStream()
     val gzip   = GZIPOutputStream(output)
