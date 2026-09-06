@@ -253,18 +253,22 @@ private[core] object ArchiveExtractor:
 
   private final case class TarEntry(name: String, kind: ArchiveEntryKind, size: Long)
 
-  // A path too long for the 100-byte header field is stored by GNU tar in a preceding pseudo-entry
-  // (typeflag 'L', conventionally named "././@LongLink") whose payload is the real name; 'K' does
-  // the same for a link target. Both payloads are read before any byte budget is charged, so they
-  // are capped here instead -- far above any real path, far below anything worth allocating.
-  private val maxLongNameBytes: Long = 8192L
+  // A path too long for the 100-byte header field is not stored in the member header at all. GNU
+  // tar writes it as a preceding pseudo-entry (typeflag 'L', conventionally named
+  // "././@LongLink") whose payload is the real name, with 'K' doing the same for a link target;
+  // bsdtar and Go's archive/tar instead write a PAX extended header ('x', or 'g' for one that
+  // describes the whole archive) carrying a "path" attribute. Either way the payload is read
+  // whole, ahead of any byte budget, so it is capped here instead -- far above any real path
+  // (PATH_MAX is 4096), far below anything worth allocating.
+  private val maxMetadataBytes: Long = 8192L
 
   private def readTarEntries(
       input: InputStream,
       beginHeader: () => Unit
   )(handle: (TarEntry, InputStream) => Unit): Unit =
-    // Carries a GNU long-name payload onto the member header that follows it.
+    // Metadata read from a preceding header, applied to the member header that follows it.
     var pendingName: Option[String] = None
+    var pendingSize: Option[Long]   = None
     var header                      = readTarBlock(input)
     while header.exists(!_.forall(_ == 0.toByte)) do
       val current = header.get
@@ -273,23 +277,33 @@ private[core] object ArchiveExtractor:
       beginHeader()
       val declared = tarSize(current, 124, 12)
       current(156).toChar match
-        case 'L' => pendingName = Some(readLongName(input, declared))
+        case 'L' => pendingName = Some(gnuLongName(readMetadata(input, declared)))
         case 'K' =>
           // A long *link* target. The member it names is a link and is rejected on its own header
           // below; consume the payload so that rejection reports the link, not stray bytes.
-          val _ = readLongName(input, declared)
+          val _ = readMetadata(input, declared)
+        case 'x' =>
+          val records = paxRecords(readMetadata(input, declared))
+          records.get("path").foreach(value => pendingName = Some(value))
+          // A member larger than the 12-byte octal size field carries its real length here, so
+          // honouring it is what keeps the stream aligned on the next header.
+          records.get("size").foreach(value => pendingSize = Some(paxSize(value)))
+        case 'g' =>
+          // A global header describes the archive rather than the member that follows it, so its
+          // records are consumed and dropped.
+          val _ = readMetadata(input, declared)
         case _ =>
-          val entry = tarEntry(current, declared, pendingName)
+          val entry = tarEntry(current, pendingSize.getOrElse(declared), pendingName)
           pendingName = None
+          pendingSize = None
           handle(entry, input)
           val _ = skipFully(input, tarPadding(entry.size))
       header = readTarBlock(input)
 
-  // Read a GNU long-name member whole, including its padding, and return the NUL-terminated path
-  // it carries.
-  private def readLongName(input: InputStream, size: Long): String =
-    if size > maxLongNameBytes then
-      throw IllegalArgumentException(s"tar long name exceeds $maxLongNameBytes bytes")
+  /** Read a metadata member whole, including its padding. */
+  private def readMetadata(input: InputStream, size: Long): Array[Byte] =
+    if size > maxMetadataBytes then
+      throw IllegalArgumentException(s"tar metadata entry exceeds $maxMetadataBytes bytes")
     val bytes  = Array.ofDim[Byte](size.toInt)
     var offset = 0
     while offset < bytes.length do
@@ -297,7 +311,70 @@ private[core] object ArchiveExtractor:
       if count == -1 then throw IllegalArgumentException("unexpected end of tar entry")
       offset = offset + count
     val _ = skipFully(input, tarPadding(size))
-    new String(bytes.takeWhile(_ != 0.toByte), java.nio.charset.StandardCharsets.UTF_8)
+    bytes
+
+  private def gnuLongName(payload: Array[Byte]): String =
+    new String(payload.takeWhile(_ != 0.toByte), java.nio.charset.StandardCharsets.UTF_8)
+
+  // A PAX extended header is a run of "<length> <key>=<value>\n" records where <length> counts the
+  // whole record, its own digits included. Lengths are byte counts, so the payload is walked as
+  // bytes and only the key and value are decoded -- measuring a decoded string would mismeasure
+  // every record holding a non-ASCII path.
+  private def paxRecords(payload: Array[Byte]): Map[String, String] =
+    val records = mutable.Map.empty[String, String]
+    var offset  = 0
+    while offset < payload.length do
+      val space = indexOfByte(payload, ' '.toByte, offset)
+      if space < 0 then throw malformedPaxRecord
+      val length = paxRecordLength(payload, offset, space)
+      if length > payload.length - offset then throw malformedPaxRecord
+      val end = offset + length
+      if payload(end - 1) != '\n'.toByte then throw malformedPaxRecord
+      val body   = payload.slice(space + 1, end - 1)
+      val equals = indexOfByte(body, '='.toByte, 0)
+      if equals < 0 then throw malformedPaxRecord
+      val key   = new String(body, 0, equals, java.nio.charset.StandardCharsets.UTF_8)
+      val value = new String(
+        body,
+        equals + 1,
+        body.length - equals - 1,
+        java.nio.charset.StandardCharsets.UTF_8
+      )
+      val _ = records.put(key, value)
+      offset = end
+    records.toMap
+
+  // The record's own length prefix, in decimal. It must cover its digits, the space, at least
+  // "k=" and the newline, so anything that would not advance past the prefix is malformed.
+  private def paxRecordLength(payload: Array[Byte], offset: Int, space: Int): Int =
+    if space == offset then throw malformedPaxRecord
+    var value = 0
+    var index = offset
+    while index < space do
+      val digit = payload(index) - '0'.toByte
+      if digit < 0 || digit > 9 then throw malformedPaxRecord
+      if value > (Int.MaxValue - digit) / 10 then throw malformedPaxRecord
+      value = value * 10 + digit
+      index += 1
+    if value <= space - offset + 1 then throw malformedPaxRecord
+    value
+
+  private def paxSize(value: String): Long =
+    val size =
+      try java.lang.Long.parseLong(value.trim)
+      catch case _: NumberFormatException => throw malformedPaxRecord
+    if size < 0 then throw IllegalArgumentException("tar entry declares a negative size")
+    validateInflatedSize(size).left.foreach: message =>
+      throw IllegalArgumentException(message)
+    size
+
+  private def malformedPaxRecord: IllegalArgumentException =
+    IllegalArgumentException("malformed tar extended header record")
+
+  private def indexOfByte(bytes: Array[Byte], value: Byte, from: Int): Int =
+    var index = from
+    while index < bytes.length && bytes(index) != value do index += 1
+    if index == bytes.length then -1 else index
 
   private def tarEntry(header: Array[Byte], size: Long, longName: Option[String]): TarEntry =
     val fullName = longName match

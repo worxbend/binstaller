@@ -488,6 +488,49 @@ private[core] trait CoreTestSupport extends TestSuite:
     output.write(Array.fill[Byte](1024)(0))
     output.toByteArray
 
+  /**
+   * A tar.gz whose names arrive in PAX extended headers (typeflag 'x' with a "path" attribute), as
+   * bsdtar and Go's archive/tar write them. As with the GNU form, the real header keeps only the
+   * truncated name.
+   */
+  protected def tarGzArchiveWithPaxNames(entries: Vector[(String, String)]): Array[Byte] =
+    gzipped(paxTarBytes(entries))
+
+  protected def paxTarBytes(entries: Vector[(String, String)]): Array[Byte] =
+    val output = ByteArrayOutputStream()
+    entries.foreach:
+      case (name, content) =>
+        writePaxHeader(output, 'x', Vector("path" -> name))
+        val bytes = content.getBytes(StandardCharsets.UTF_8)
+        output.write(tarHeader(name.take(100), bytes.length, '0'))
+        output.write(bytes)
+        output.write(Array.fill[Byte]((512 - (bytes.length % 512)) % 512)(0))
+    output.write(Array.fill[Byte](1024)(0))
+    output.toByteArray
+
+  /** One PAX extended header member: typeflag 'x' (per-entry) or 'g' (whole archive). */
+  protected def writePaxHeader(
+      output: ByteArrayOutputStream,
+      entryType: Char,
+      records: Vector[(String, String)]
+  ): Unit =
+    val payload = records.foldLeft(Array.empty[Byte]):
+      case (accumulated, (key, value)) => accumulated ++ paxRecord(key, value)
+    output.write(tarHeader("PaxHeaders.0/entry", payload.length, entryType))
+    output.write(payload)
+    output.write(Array.fill[Byte]((512 - (payload.length % 512)) % 512)(0))
+
+  /**
+   * One "<length> <key>=<value>\n" record. The length counts its own digits, so it is solved for
+   * rather than computed once.
+   */
+  protected def paxRecord(key: String, value: String): Array[Byte] =
+    val body   = s" $key=$value\n".getBytes(StandardCharsets.UTF_8)
+    var length = body.length + 1
+    while length.toString.length + body.length != length do
+      length = length.toString.length + body.length
+    length.toString.getBytes(StandardCharsets.UTF_8) ++ body
+
   /** One GNU long-name pseudo-entry: typeflag 'L' with the NUL-terminated real path as payload. */
   protected def writeLongNameEntry(output: ByteArrayOutputStream, name: String): Unit =
     val bytes = name.getBytes(StandardCharsets.UTF_8) :+ 0.toByte

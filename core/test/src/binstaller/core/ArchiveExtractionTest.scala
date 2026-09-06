@@ -300,9 +300,9 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
         installDir.resolve(longName.stripPrefix("zig-root/"))
       ) == "header")
 
-    test("tar.gz long-name payload larger than the cap is rejected before allocation"):
-      // The long-name payload is read whole, ahead of any byte budget, so its own cap is what
-      // stops a header that declares a gigabyte of "path".
+    test("tar.gz metadata payload larger than the cap is rejected before allocation"):
+      // A metadata payload is read whole, ahead of any byte budget, so its own cap is what stops a
+      // header that declares a gigabyte of "path".
       val tempRoot   = tempDirectory("core-targz-longname-huge")
       val installDir = tempRoot.resolve("alpha")
       val output     = java.io.ByteArrayOutputStream()
@@ -323,7 +323,7 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
 
       assert(result.left.exists:
         case ToolInstallError.ArchiveExtractionFailed(_, message) =>
-          message.contains("tar long name exceeds")
+          message.contains("tar metadata entry exceeds")
         case _ => false)
 
     test("tar.gz stream of nothing but long-name headers trips the entry budget"):
@@ -387,6 +387,106 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
       assert(result.left.exists:
         case ToolInstallError.ArchiveExtractionFailed(_, message) =>
           message.contains("unsafe archive link entry: pkg/alpha")
+        case _ => false)
+
+    test("tar.gz PAX extended header supplies the member's full path"):
+      // bsdtar and Go's archive/tar solve the same 100-byte problem with a PAX extended header
+      // (typeflag 'x') carrying a "path" attribute instead of a GNU @LongLink pseudo-entry.
+      val tempRoot   = tempDirectory("core-targz-pax")
+      val installDir = tempRoot.resolve("alpha")
+      val longName   = s"pkg/${"nested/" * 15}alpha"
+      assert(longName.length > 100)
+      val installer = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success(tarGzArchiveWithPaxNames(Vector(
+          longName -> "pax-alpha"
+        ))),
+        InstallFileSystem.nio
+      )
+
+      val result = installer.installTool(archiveTool(
+        installDir,
+        ArchiveType.TarGz,
+        files = Vector(longName -> "bin/alpha")
+      ))
+
+      assertInstallSuccess(result, installDir.toString)
+      assert(Files.readString(installDir.resolve("bin/alpha")) == "pax-alpha")
+
+    test("tar.gz PAX global header is consumed without disturbing the members after it"):
+      // A global header describes the archive, not the next member — git archive writes one
+      // carrying only a comment. It must be skipped whole, records and all.
+      val tempRoot   = tempDirectory("core-targz-pax-global")
+      val installDir = tempRoot.resolve("alpha")
+      val output     = java.io.ByteArrayOutputStream()
+      writePaxHeader(output, 'g', Vector("comment" -> ("0" * 40)))
+      output.write(paxTarBytes(Vector("pkg/alpha" -> "global-alpha")))
+      val installer = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success(gzipped(output.toByteArray)),
+        InstallFileSystem.nio
+      )
+
+      val result = installer.installTool(archiveTool(
+        installDir,
+        ArchiveType.TarGz,
+        files = Vector("pkg/alpha" -> "bin/alpha")
+      ))
+
+      assertInstallSuccess(result, installDir.toString)
+      assert(Files.readString(installDir.resolve("bin/alpha")) == "global-alpha")
+
+    test("tar.gz PAX size attribute overrides the header size field"):
+      // A member too large for the 12-byte octal size field declares its real length in PAX.
+      // Ignoring that would resume reading the next header from the middle of the payload.
+      val tempRoot   = tempDirectory("core-targz-pax-size")
+      val installDir = tempRoot.resolve("alpha")
+      val payload    = "pax-sized".getBytes(StandardCharsets.UTF_8)
+      val output     = java.io.ByteArrayOutputStream()
+      writePaxHeader(output, 'x', Vector("size" -> payload.length.toString))
+      // The ustar header understates the member, exactly as it must when the real size does not fit.
+      output.write(tarHeader("pkg/alpha", 0, '0'))
+      output.write(payload)
+      output.write(Array.fill[Byte]((512 - (payload.length % 512)) % 512)(0))
+      output.write(Array.fill[Byte](1024)(0))
+      val installer = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success(gzipped(output.toByteArray)),
+        InstallFileSystem.nio
+      )
+
+      val result = installer.installTool(archiveTool(
+        installDir,
+        ArchiveType.TarGz,
+        files = Vector("pkg/alpha" -> "bin/alpha")
+      ))
+
+      assertInstallSuccess(result, installDir.toString)
+      assert(Files.readString(installDir.resolve("bin/alpha")) == "pax-sized")
+
+    test("tar.gz PAX record whose length prefix is a lie is rejected"):
+      // A record length that does not match its own bytes would walk the parser off the record
+      // boundary; it is refused rather than salvaged.
+      val tempRoot   = tempDirectory("core-targz-pax-malformed")
+      val installDir = tempRoot.resolve("alpha")
+      val payload    = "99 path=pkg/alpha\n".getBytes(StandardCharsets.UTF_8)
+      val output     = java.io.ByteArrayOutputStream()
+      output.write(tarHeader("PaxHeaders.0/entry", payload.length, 'x'))
+      output.write(payload)
+      output.write(Array.fill[Byte]((512 - (payload.length % 512)) % 512)(0))
+      output.write(tarHeader("pkg/alpha", 0, '0'))
+      output.write(Array.fill[Byte](1024)(0))
+      val installer = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success(gzipped(output.toByteArray)),
+        InstallFileSystem.nio
+      )
+
+      val result = installer.installTool(archiveTool(
+        installDir,
+        ArchiveType.TarGz,
+        files = Vector("pkg/alpha" -> "bin/alpha")
+      ))
+
+      assert(result.left.exists:
+        case ToolInstallError.ArchiveExtractionFailed(_, message) =>
+          message.contains("malformed tar extended header record")
         case _ => false)
 
     test("archive extraction enforces an aggregate expanded-byte budget"):
