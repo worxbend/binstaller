@@ -171,6 +171,7 @@
   }
   .copy:hover { color: var(--fg); background: rgba(255,255,255,0.07); }
   .copy.ok { color: var(--green); }
+  .copy.err { color: var(--red); }
 
   .btn-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 22px; }
   .btn {
@@ -278,7 +279,7 @@
     margin: 0; padding: 12px 14px; border-radius: 10px;
     background: #070c14; border: 1px solid var(--line-soft);
     font-size: 12.7px; color: #cfe3f5;
-    white-space: pre-wrap; word-break: break-word;
+    white-space: pre-wrap; overflow-wrap: anywhere;
   }
 
   /* shots */
@@ -685,22 +686,39 @@ binstaller versions</pre>
     var btn = document.getElementById('copy-btn');
     var cmd = document.getElementById('install-cmd');
     if (!btn || !cmd) return;
+    var timer = null;
+    var reset = function () {
+      if (timer) { clearTimeout(timer); timer = null; }
+      btn.textContent = 'copy';
+      btn.classList.remove('ok', 'err');
+      btn.setAttribute('aria-label', 'Copy install command');
+    };
+    // aria-label is what a screen reader announces for this button, so the outcome has to be
+    // written there too — updating only textContent leaves non-sighted users with no feedback.
+    var settle = function (label, announced, state) {
+      reset();
+      btn.textContent = label;
+      btn.setAttribute('aria-label', announced);
+      btn.classList.add(state);
+      timer = setTimeout(reset, 1600);
+    };
+    var done = function () { settle('copied ✓', 'Install command copied', 'ok'); };
+    var fail = function () { settle('copy failed ✗', 'Copy failed, select the command manually', 'err'); };
     btn.addEventListener('click', function () {
       var text = cmd.textContent.trim();
-      var done = function () {
-        btn.textContent = 'copied ✓';
-        btn.classList.add('ok');
-        setTimeout(function () { btn.textContent = 'copy'; btn.classList.remove('ok'); }, 1600);
-      };
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(done, function () {});
+        navigator.clipboard.writeText(text).then(done, fail);
       } else {
         var ta = document.createElement('textarea');
         ta.value = text;
         document.body.appendChild(ta);
         ta.select();
-        try { document.execCommand('copy'); done(); } catch (e) {}
-        document.body.removeChild(ta);
+        try {
+          if (document.execCommand('copy')) { done(); } else { fail(); }
+        } catch (err) {
+          fail();
+        }
+        ta.remove();
       }
     });
   })();
