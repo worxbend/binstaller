@@ -14,7 +14,6 @@ private[core] object StatefulApplyRunner:
       options: InstallerOptions,
       prepared: PreparedPlan,
       installer: DirectBinaryInstaller,
-      fileSystem: InstallFileSystem,
       stateStore: ApplyStateStore,
       eventContext: InstallerEventContext
   ): InstallerResult = statePath(options, prepared.plan) match
@@ -50,7 +49,6 @@ private[core] object StatefulApplyRunner:
             prepared,
             options,
             installer,
-            fileSystem,
             stateStore,
             eventContext
           )
@@ -104,10 +102,12 @@ private[core] object StatefulApplyRunner:
       prepared: PreparedPlan,
       options: InstallerOptions,
       installer: DirectBinaryInstaller,
-      fileSystem: InstallFileSystem,
       stateStore: ApplyStateStore,
       eventContext: InstallerEventContext
   ): InstallerResult =
+    // The installer already owns the filesystem it installs through; taking a second one as a
+    // parameter meant two names for the same collaborator with nothing keeping them in agreement.
+    val fileSystem = installer.fileSystem
     val completed = prepared.plan.tools.filter(tool => completedAndPresent(state, tool, fileSystem))
       .map(_.name)
       .toSet

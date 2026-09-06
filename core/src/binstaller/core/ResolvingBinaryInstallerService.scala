@@ -71,7 +71,6 @@ private[core] final class ResolvingBinaryInstallerService(
           options,
           lockedPrepared,
           installer,
-          installer.fileSystem,
           stateStore,
           eventContext
         )
