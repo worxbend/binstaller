@@ -254,18 +254,12 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
       val installDir = tempRoot.resolve("alpha")
       val longName   = s"pkg/${"nested/" * 15}alpha"
       assert(longName.length > 100)
-      val installer = DirectBinaryInstaller(
-        FakeBinaryDownloadClient.success(tarGzArchiveWithLongNames(Vector(
-          longName -> "long-alpha"
-        ))),
-        InstallFileSystem.nio
-      )
 
-      val result = installer.installTool(archiveTool(
+      val result = installArchive(
         installDir,
-        ArchiveType.TarGz,
+        tarGzArchiveWithLongNames(Vector(longName -> "long-alpha")),
         files = Vector(longName -> "bin/alpha")
-      ))
+      )
 
       assertInstallSuccess(result, installDir.toString)
       assert(Files.readString(installDir.resolve("bin/alpha")) == "long-alpha")
@@ -278,116 +272,71 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
       val longName        = s"zig-root/lib/libc/include/${"generic-freebsd/" * 6}header.h"
       val commandExecutor = FakeArchiveCommandExecutor("zig-root/bin/zig", "zig")
       assert(longName.length > 100)
-      val installer = DirectBinaryInstaller(
-        FakeBinaryDownloadClient.success(tarXzArchiveWithLongNames(Vector(
-          "zig-root/bin/zig" -> "zig",
-          longName           -> "header"
-        ))),
-        InstallFileSystem.nio,
-        commandExecutor
-      )
 
-      val result = installer.installTool(archiveTool(
+      val result = installArchive(
         installDir,
-        ArchiveType.TarXz,
+        tarXzArchiveWithLongNames(Vector("zig-root/bin/zig" -> "zig", longName -> "header")),
+        archiveType = ArchiveType.TarXz,
+        files = Vector.empty,
         directories = Vector("zig-root" -> "."),
-        executable = "bin/zig"
-      ))
+        executable = "bin/zig",
+        commandExecutor = commandExecutor
+      )
 
       assertInstallSuccess(result, installDir.toString)
       assert(Files.readString(installDir.resolve("bin/zig")) == "zig")
-      assert(Files.readString(
-        installDir.resolve(longName.stripPrefix("zig-root/"))
-      ) == "header")
+      assert(Files.readString(installDir.resolve(longName.stripPrefix("zig-root/"))) == "header")
+      assert(commandExecutor.commands.isEmpty)
 
     test("tar.gz metadata payload larger than the cap is rejected before allocation"):
       // A metadata payload is read whole, ahead of any byte budget, so its own cap is what stops a
       // header that declares a gigabyte of "path".
       val tempRoot   = tempDirectory("core-targz-longname-huge")
       val installDir = tempRoot.resolve("alpha")
-      val output     = java.io.ByteArrayOutputStream()
-      val gzip       = java.util.zip.GZIPOutputStream(output)
-      gzip.write(tarHeader("././@LongLink", 1024L * 1024L * 1024L, 'L'))
-      gzip.write(Array.fill[Byte](1024)(0))
-      gzip.close()
-      val installer = DirectBinaryInstaller(
-        FakeBinaryDownloadClient.success(output.toByteArray),
-        InstallFileSystem.nio
-      )
+      // Written by hand: the header declares a gigabyte of payload and then supplies none of it,
+      // which is precisely the archive a well-formed builder would refuse to produce.
+      val archive = gzippedTar: gzip =>
+        gzip.write(tarHeader("././@LongLink", 1024L * 1024L * 1024L, 'L'))
 
-      val result = installer.installTool(archiveTool(
-        installDir,
-        ArchiveType.TarGz,
-        files = Vector("pkg/alpha" -> "bin/alpha")
-      ))
+      val result = installArchive(installDir, archive)
 
-      assert(result.left.exists:
-        case ToolInstallError.ArchiveExtractionFailed(_, message) =>
-          message.contains("tar metadata entry exceeds")
-        case _ => false)
+      assertArchiveExtractionFailed(result, "tar metadata entry exceeds")
 
     test("tar.gz stream of nothing but long-name headers trips the entry budget"):
       // Long-name headers never reach a member, so they must be counted as they are read or a
       // crafted archive would spin forever without ever charging the entry or time budget.
       val tempRoot   = tempDirectory("core-targz-longname-count")
       val installDir = tempRoot.resolve("alpha")
-      val output     = java.io.ByteArrayOutputStream()
-      val gzip       = java.util.zip.GZIPOutputStream(output)
-      val total      = ArchiveExtractor.maxEntries + 1
-      var index      = 0
-      while index < total do
-        gzip.write(tarHeader("././@LongLink", 6, 'L'))
-        gzip.write("pkg/a".getBytes(StandardCharsets.UTF_8) :+ 0.toByte)
-        gzip.write(Array.fill[Byte](506)(0))
-        index += 1
-      gzip.write(Array.fill[Byte](1024)(0))
-      gzip.close()
-      val installer = DirectBinaryInstaller(
-        FakeBinaryDownloadClient.success(output.toByteArray),
-        InstallFileSystem.nio
-      )
+      // Streamed straight into the gzip stream: this is roughly 64 MiB of uncompressed tar.
+      val archive = gzippedTar: gzip =>
+        val total = ArchiveExtractor.maxEntries + 1
+        var index = 0
+        while index < total do
+          gzip.write(tarHeader("././@LongLink", 6, 'L'))
+          gzip.write("pkg/a".getBytes(StandardCharsets.UTF_8) :+ 0.toByte)
+          gzip.write(Array.fill[Byte](506)(0))
+          index += 1
 
-      val result = installer.installTool(archiveTool(
-        installDir,
-        ArchiveType.TarGz,
-        files = Vector("pkg/alpha" -> "bin/alpha")
-      ))
+      val result = installArchive(installDir, archive)
 
-      assert(result.left.exists:
-        case ToolInstallError.ArchiveExtractionFailed(_, message) =>
-          message.contains("max entry count")
-        case _ => false)
+      assertArchiveExtractionFailed(result, "max entry count")
 
     test("tar.gz long link-target metadata still rejects the link it names"):
       // A 'K' header carries a long link target; consuming its payload is what lets the link entry
       // that follows be reported as a link rather than as garbled header bytes.
       val tempRoot   = tempDirectory("core-targz-longlink-target")
       val installDir = tempRoot.resolve("alpha")
-      val output     = java.io.ByteArrayOutputStream()
-      val gzip       = java.util.zip.GZIPOutputStream(output)
       val target     = ("../" * 40) + "etc/passwd"
       val bytes      = target.getBytes(StandardCharsets.UTF_8) :+ 0.toByte
-      gzip.write(tarHeader("././@LongLink", bytes.length, 'K'))
-      gzip.write(bytes)
-      gzip.write(Array.fill[Byte]((512 - (bytes.length % 512)) % 512)(0))
-      gzip.write(tarHeader("pkg/alpha", 0, '2'))
-      gzip.write(Array.fill[Byte](1024)(0))
-      gzip.close()
-      val installer = DirectBinaryInstaller(
-        FakeBinaryDownloadClient.success(output.toByteArray),
-        InstallFileSystem.nio
-      )
+      val archive    = gzippedTar: gzip =>
+        gzip.write(tarHeader("././@LongLink", bytes.length, 'K'))
+        gzip.write(bytes)
+        gzip.write(Array.fill[Byte]((512 - (bytes.length % 512)) % 512)(0))
+        gzip.write(tarHeader("pkg/alpha", 0, '2'))
 
-      val result = installer.installTool(archiveTool(
-        installDir,
-        ArchiveType.TarGz,
-        files = Vector("pkg/alpha" -> "bin/alpha")
-      ))
+      val result = installArchive(installDir, archive)
 
-      assert(result.left.exists:
-        case ToolInstallError.ArchiveExtractionFailed(_, message) =>
-          message.contains("unsafe archive link entry: pkg/alpha")
-        case _ => false)
+      assertArchiveExtractionFailed(result, "unsafe archive link entry: pkg/alpha")
 
     test("tar.gz PAX extended header supplies the member's full path"):
       // bsdtar and Go's archive/tar solve the same 100-byte problem with a PAX extended header
@@ -396,18 +345,12 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
       val installDir = tempRoot.resolve("alpha")
       val longName   = s"pkg/${"nested/" * 15}alpha"
       assert(longName.length > 100)
-      val installer = DirectBinaryInstaller(
-        FakeBinaryDownloadClient.success(tarGzArchiveWithPaxNames(Vector(
-          longName -> "pax-alpha"
-        ))),
-        InstallFileSystem.nio
-      )
 
-      val result = installer.installTool(archiveTool(
+      val result = installArchive(
         installDir,
-        ArchiveType.TarGz,
+        tarGzArchiveWithPaxNames(Vector(longName -> "pax-alpha")),
         files = Vector(longName -> "bin/alpha")
-      ))
+      )
 
       assertInstallSuccess(result, installDir.toString)
       assert(Files.readString(installDir.resolve("bin/alpha")) == "pax-alpha")
@@ -417,19 +360,12 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
       // carrying only a comment. It must be skipped whole, records and all.
       val tempRoot   = tempDirectory("core-targz-pax-global")
       val installDir = tempRoot.resolve("alpha")
-      val output     = java.io.ByteArrayOutputStream()
-      writePaxHeader(output, 'g', Vector("comment" -> ("0" * 40)))
-      output.write(paxTarBytes(Vector("pkg/alpha" -> "global-alpha")))
-      val installer = DirectBinaryInstaller(
-        FakeBinaryDownloadClient.success(gzipped(output.toByteArray)),
-        InstallFileSystem.nio
-      )
+      val archive    = gzippedTar: gzip =>
+        writePaxHeader(gzip, 'g', Vector("comment" -> ("0" * 40)))
+        writePaxHeader(gzip, 'x', Vector("path" -> "pkg/alpha"))
+        writeTarMember(gzip, "pkg/alpha", "global-alpha")
 
-      val result = installer.installTool(archiveTool(
-        installDir,
-        ArchiveType.TarGz,
-        files = Vector("pkg/alpha" -> "bin/alpha")
-      ))
+      val result = installArchive(installDir, archive)
 
       assertInstallSuccess(result, installDir.toString)
       assert(Files.readString(installDir.resolve("bin/alpha")) == "global-alpha")
@@ -440,23 +376,15 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
       val tempRoot   = tempDirectory("core-targz-pax-size")
       val installDir = tempRoot.resolve("alpha")
       val payload    = "pax-sized".getBytes(StandardCharsets.UTF_8)
-      val output     = java.io.ByteArrayOutputStream()
-      writePaxHeader(output, 'x', Vector("size" -> payload.length.toString))
-      // The ustar header understates the member, exactly as it must when the real size does not fit.
-      output.write(tarHeader("pkg/alpha", 0, '0'))
-      output.write(payload)
-      output.write(Array.fill[Byte]((512 - (payload.length % 512)) % 512)(0))
-      output.write(Array.fill[Byte](1024)(0))
-      val installer = DirectBinaryInstaller(
-        FakeBinaryDownloadClient.success(gzipped(output.toByteArray)),
-        InstallFileSystem.nio
-      )
+      val archive    = gzippedTar: gzip =>
+        writePaxHeader(gzip, 'x', Vector("size" -> payload.length.toString))
+        // Written by hand: the ustar header understates the member, exactly as it must when the
+        // real size does not fit the octal field.
+        gzip.write(tarHeader("pkg/alpha", 0, '0'))
+        gzip.write(payload)
+        gzip.write(Array.fill[Byte]((512 - (payload.length % 512)) % 512)(0))
 
-      val result = installer.installTool(archiveTool(
-        installDir,
-        ArchiveType.TarGz,
-        files = Vector("pkg/alpha" -> "bin/alpha")
-      ))
+      val result = installArchive(installDir, archive)
 
       assertInstallSuccess(result, installDir.toString)
       assert(Files.readString(installDir.resolve("bin/alpha")) == "pax-sized")
@@ -466,28 +394,18 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
       // boundary; it is refused rather than salvaged.
       val tempRoot   = tempDirectory("core-targz-pax-malformed")
       val installDir = tempRoot.resolve("alpha")
-      val payload    = "99 path=pkg/alpha\n".getBytes(StandardCharsets.UTF_8)
-      val output     = java.io.ByteArrayOutputStream()
-      output.write(tarHeader("PaxHeaders.0/entry", payload.length, 'x'))
-      output.write(payload)
-      output.write(Array.fill[Byte]((512 - (payload.length % 512)) % 512)(0))
-      output.write(tarHeader("pkg/alpha", 0, '0'))
-      output.write(Array.fill[Byte](1024)(0))
-      val installer = DirectBinaryInstaller(
-        FakeBinaryDownloadClient.success(gzipped(output.toByteArray)),
-        InstallFileSystem.nio
-      )
+      // Written by hand: the "99" length prefix is the lie under test, so the record must not go
+      // through the builder that would compute a truthful one.
+      val payload = "99 path=pkg/alpha\n".getBytes(StandardCharsets.UTF_8)
+      val archive = gzippedTar: gzip =>
+        gzip.write(tarHeader("PaxHeaders.0/entry", payload.length, 'x'))
+        gzip.write(payload)
+        gzip.write(Array.fill[Byte]((512 - (payload.length % 512)) % 512)(0))
+        gzip.write(tarHeader("pkg/alpha", 0, '0'))
 
-      val result = installer.installTool(archiveTool(
-        installDir,
-        ArchiveType.TarGz,
-        files = Vector("pkg/alpha" -> "bin/alpha")
-      ))
+      val result = installArchive(installDir, archive)
 
-      assert(result.left.exists:
-        case ToolInstallError.ArchiveExtractionFailed(_, message) =>
-          message.contains("malformed tar extended header record")
-        case _ => false)
+      assertArchiveExtractionFailed(result, "malformed tar extended header record")
 
     test("archive extraction enforces an aggregate expanded-byte budget"):
       assert(ArchiveExtractor.validateExtractedSize(ArchiveExtractor.maxExtractedBytes).isRight)

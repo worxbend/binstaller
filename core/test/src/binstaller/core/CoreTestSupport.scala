@@ -12,6 +12,7 @@ import binstaller.config.SymlinkPrivilege
 import utest.*
 
 import java.io.ByteArrayOutputStream
+import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -77,6 +78,22 @@ private[core] trait CoreTestSupport extends TestSuite:
       assert(success.toolName.value == "alpha")
       assert(success.installDir == installDir)
     case Left(error) => abort(s"expected install success, got $error")
+
+  /**
+   * Assert extraction refused the archive with a message containing `fragment`. A mismatch names
+   * both what was expected and what actually came back, which a bare pattern match cannot.
+   */
+  protected def assertArchiveExtractionFailed(
+      result: Either[ToolInstallError, TerminalToolResult.Completed],
+      fragment: String
+  ): Unit =
+    val expectation = s"expected extraction to fail with a message containing \"$fragment\""
+    result match
+      case Left(ToolInstallError.ArchiveExtractionFailed(_, message)) =>
+        if !message.contains(fragment) then abort(s"$expectation, got \"$message\"")
+      case Left(error)    => abort(s"$expectation, got $error")
+      case Right(success) =>
+        abort(s"$expectation, got a successful install at ${success.installDir}")
 
   protected def errorAt(path: String)(error: ValidationError): Boolean = error.path == path
 
@@ -341,6 +358,27 @@ private[core] trait CoreTestSupport extends TestSuite:
                  |            sudo: true
                  |""".stripMargin
 
+  /**
+   * Install one archive-backed tool whose artifact is exactly `bytes`. Collapses the download
+   * client, the file system and the resolved tool into one call; the defaults describe the archive
+   * these tests keep reaching for — a tar.gz whose "pkg/alpha" member lands at "bin/alpha" — so a
+   * test states only what it varies. The command executor stays a parameter so a test that asserts
+   * extraction never shelled out still owns the executor it inspects.
+   */
+  protected def installArchive(
+      installDir: Path,
+      bytes: Array[Byte],
+      archiveType: ArchiveType = ArchiveType.TarGz,
+      files: Vector[(String, String)] = Vector("pkg/alpha" -> "bin/alpha"),
+      directories: Vector[(String, String)] = Vector.empty,
+      executable: String = "bin/alpha",
+      commandExecutor: CommandExecutor = CommandExecutor.process
+  ): Either[ToolInstallError, TerminalToolResult.Completed] = DirectBinaryInstaller(
+    FakeBinaryDownloadClient.success(bytes),
+    InstallFileSystem.nio,
+    commandExecutor
+  ).installTool(archiveTool(installDir, archiveType, files, directories, executable))
+
   protected def archiveTool(
       installDir: Path,
       archiveType: ArchiveType,
@@ -481,10 +519,7 @@ private[core] trait CoreTestSupport extends TestSuite:
     entries.foreach:
       case (name, content) =>
         writeLongNameEntry(output, name)
-        val bytes = content.getBytes(StandardCharsets.UTF_8)
-        output.write(tarHeader(name.take(100), bytes.length, '0'))
-        output.write(bytes)
-        output.write(Array.fill[Byte]((512 - (bytes.length % 512)) % 512)(0))
+        writeTarMember(output, name, content)
     output.write(Array.fill[Byte](1024)(0))
     output.toByteArray
 
@@ -501,16 +536,13 @@ private[core] trait CoreTestSupport extends TestSuite:
     entries.foreach:
       case (name, content) =>
         writePaxHeader(output, 'x', Vector("path" -> name))
-        val bytes = content.getBytes(StandardCharsets.UTF_8)
-        output.write(tarHeader(name.take(100), bytes.length, '0'))
-        output.write(bytes)
-        output.write(Array.fill[Byte]((512 - (bytes.length % 512)) % 512)(0))
+        writeTarMember(output, name, content)
     output.write(Array.fill[Byte](1024)(0))
     output.toByteArray
 
   /** One PAX extended header member: typeflag 'x' (per-entry) or 'g' (whole archive). */
   protected def writePaxHeader(
-      output: ByteArrayOutputStream,
+      output: OutputStream,
       entryType: Char,
       records: Vector[(String, String)]
   ): Unit =
@@ -532,7 +564,7 @@ private[core] trait CoreTestSupport extends TestSuite:
     length.toString.getBytes(StandardCharsets.UTF_8) ++ body
 
   /** One GNU long-name pseudo-entry: typeflag 'L' with the NUL-terminated real path as payload. */
-  protected def writeLongNameEntry(output: ByteArrayOutputStream, name: String): Unit =
+  protected def writeLongNameEntry(output: OutputStream, name: String): Unit =
     val bytes = name.getBytes(StandardCharsets.UTF_8) :+ 0.toByte
     output.write(tarHeader("././@LongLink", bytes.length, 'L'))
     output.write(bytes)
@@ -543,6 +575,33 @@ private[core] trait CoreTestSupport extends TestSuite:
     val gzip   = GZIPOutputStream(output)
     gzip.write(bytes)
     gzip.close()
+    output.toByteArray
+
+  /**
+   * One ustar file member: the header (whose name field keeps only the first 100 bytes, as the
+   * format forces) followed by the payload padded out to the 512-byte record boundary.
+   */
+  protected def writeTarMember(output: OutputStream, name: String, content: String): Unit =
+    val bytes = content.getBytes(StandardCharsets.UTF_8)
+    output.write(tarHeader(name.take(100), bytes.length, '0'))
+    output.write(bytes)
+    output.write(Array.fill[Byte]((512 - (bytes.length % 512)) % 512)(0))
+
+  /**
+   * Gzip whatever `write` puts into the tar, closing the archive with the two zero blocks that end
+   * it. The writer is handed the compressing stream itself rather than a buffer: the entry-budget
+   * fixture pushes tens of megabytes through it, which must never be staged uncompressed.
+   *
+   * Only the well-formed scaffolding belongs here. A test whose subject is a malformed header or
+   * record still writes those bytes by hand inside the callback.
+   */
+  protected def gzippedTar(write: OutputStream => Unit): Array[Byte] =
+    val output = ByteArrayOutputStream()
+    val gzip   = GZIPOutputStream(output)
+    try
+      write(gzip)
+      gzip.write(Array.fill[Byte](1024)(0))
+    finally gzip.close()
     output.toByteArray
 
   protected def xzCompressed(bytes: Array[Byte]): Array[Byte] =
