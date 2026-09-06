@@ -42,44 +42,69 @@ private[core] object RuntimeHttpClient:
       // live DNS. Production uses the fail-closed resolved check as defense-in-depth.
       hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved(_)
   ): Either[String, RuntimeHttpResponse] = RuntimeUrl.httpsUri(initialUrl).flatMap: initialUri =>
-    @tailrec
-    def follow(
-        current: URI,
-        redirects: Vector[UrlRedirectHop],
-        remaining: Int
-    ): Either[String, RuntimeHttpResponse] = hostGuard(current.getHost) match
-      case Left(message) => Left(message)
-      case Right(())     =>
-        val request  = HttpRequest.newBuilder(current).timeout(requestTimeout).GET().build()
-        val response = client.send(request, HttpResponse.BodyHandlers.ofInputStream())
-        if !redirectStatuses(response.statusCode()) then
-          // The caller streams this body, so it must stay open.
-          val provenance =
-            if redirects.nonEmpty then UrlProvenance(initialUrl, current.toString, redirects)
-            else UrlProvenance.fromResponse(initialUrl, response)
-          Right(RuntimeHttpResponse(response, provenance))
-        else if remaining == 0 then
-          failClosing(response, s"HTTP redirect limit exceeded ($maxRedirects)")
-        else
-          val location = response.headers().firstValue("Location")
-          if location.isEmpty || location.get().trim.isEmpty then
-            failClosing(response, s"HTTP ${response.statusCode()} redirect is missing Location")
-          else
-            // A malformed Location makes URI.resolve throw IllegalArgumentException; treat it as a
-            // failed redirect rather than letting it escape the download boundary uncaught.
-            val next = Try(current.resolve(location.get()).toString).toEither
-              .left.map(error => s"invalid redirect Location: ${Diagnostics.describe(error)}")
-              .flatMap(RuntimeUrl.httpsUri(_).left.map(message =>
-                s"unsafe redirect target: $message"
-              ))
-            next match
-              case Left(message) => failClosing(response, message)
-              case Right(uri)    =>
-                val hop = UrlRedirectHop(current.toString, uri.toString, response.statusCode())
-                response.body().close()
-                follow(uri, redirects :+ hop, remaining - 1)
+    follow(client, initialUrl, hostGuard, initialUri, Vector.empty, maxRedirects)
 
-    follow(initialUri, Vector.empty, maxRedirects)
+  // Lives beside `getInputStream` rather than nested inside it: as a local `def` its own branching
+  // aggregated into the enclosing method on top of a nesting surcharge, which read as one method
+  // doing far more than it does.
+  @tailrec
+  private def follow(
+      client: HttpClient,
+      initialUrl: String,
+      hostGuard: String => Either[String, Unit],
+      current: URI,
+      redirects: Vector[UrlRedirectHop],
+      remaining: Int
+  ): Either[String, RuntimeHttpResponse] = hostGuard(current.getHost) match
+    case Left(message) => Left(message)
+    case Right(())     =>
+      val request  = HttpRequest.newBuilder(current).timeout(requestTimeout).GET().build()
+      val response = client.send(request, HttpResponse.BodyHandlers.ofInputStream())
+      if !redirectStatuses(response.statusCode()) then
+        // The caller streams this body, so it must stay open.
+        Right(RuntimeHttpResponse(
+          response,
+          provenanceFor(initialUrl, current, redirects, response)
+        ))
+      else if remaining == 0 then
+        failClosing(response, s"HTTP redirect limit exceeded ($maxRedirects)")
+      else
+        // Kept as a `match` rather than a for-comprehension: the recursive call below has to stay
+        // in tail position, and moving it inside a `flatMap` lambda breaks `@tailrec`.
+        redirectTarget(current, response) match
+          case Left(message) => failClosing(response, message)
+          case Right(uri)    =>
+            val hop = UrlRedirectHop(current.toString, uri.toString, response.statusCode())
+            response.body().close()
+            follow(client, initialUrl, hostGuard, uri, redirects :+ hop, remaining - 1)
+
+  // Deliberately leaves `response` open on every path, success and failure alike: the body belongs
+  // to the caller, which releases it through `failClosing`. Closing here would double-close it.
+  private def redirectTarget(
+      current: URI,
+      response: HttpResponse[InputStream]
+  ): Either[String, URI] =
+    val location = response.headers().firstValue("Location")
+    if location.isEmpty || location.get().trim.isEmpty then
+      Left(s"HTTP ${response.statusCode()} redirect is missing Location")
+    else
+      // A malformed Location makes URI.resolve throw IllegalArgumentException; treat it as a
+      // failed redirect rather than letting it escape the download boundary uncaught.
+      Try(current.resolve(location.get()).toString).toEither
+        .left.map(error => s"invalid redirect Location: ${Diagnostics.describe(error)}")
+        .flatMap(RuntimeUrl.httpsUri(_).left.map(message => s"unsafe redirect target: $message"))
+
+  // The two arms draw on different sources on purpose. A chain this loop followed itself is only
+  // recorded in `redirects`; a response that never redirected here may still have been redirected
+  // by the transport, and only the response carries that history.
+  private def provenanceFor(
+      initialUrl: String,
+      current: URI,
+      redirects: Vector[UrlRedirectHop],
+      response: HttpResponse[InputStream]
+  ): UrlProvenance =
+    if redirects.nonEmpty then UrlProvenance(initialUrl, current.toString, redirects)
+    else UrlProvenance.fromResponse(initialUrl, response)
 
 private[core] final case class RuntimeHttpResponse(
     response: HttpResponse[InputStream],

@@ -89,6 +89,65 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
 
       assert(result.left.exists(_.message.contains("unsafe redirect target")))
 
+    test("HTTP clients stop following redirects once the budget is exhausted"):
+      val body     = CloseTrackingInputStream(Array.emptyByteArray)
+      val redirect = FakeHttpResponse[InputStream](
+        responseUri = "https://example.invalid/stable.txt",
+        responseStatusCode = 302,
+        responseBody = body,
+        responseHeaders = Map("Location" -> Vector("https://example.invalid/next.txt"))
+      )
+      val client = JdkHttpTextClient(StaticHttpClient(redirect), _ => Right(()))
+
+      val result = client.getTextWithProvenance("https://example.invalid/stable.txt")
+
+      assert(result.left.exists(_.message.contains("HTTP redirect limit exceeded (10)")))
+      assert(body.isClosed)
+
+    test("HTTP clients fail a redirect that carries no Location header"):
+      val body     = CloseTrackingInputStream(Array.emptyByteArray)
+      val redirect = FakeHttpResponse[InputStream](
+        responseUri = "https://example.invalid/stable.txt",
+        responseStatusCode = 302,
+        responseBody = body
+      )
+      val client = JdkHttpTextClient(StaticHttpClient(redirect), _ => Right(()))
+
+      val result = client.getTextWithProvenance("https://example.invalid/stable.txt")
+
+      assert(result.left.exists(_.message.contains("HTTP 302 redirect is missing Location")))
+      assert(body.isClosed)
+
+    test("HTTP clients fail a redirect whose Location header is blank"):
+      val body     = CloseTrackingInputStream(Array.emptyByteArray)
+      val redirect = FakeHttpResponse[InputStream](
+        responseUri = "https://example.invalid/stable.txt",
+        responseStatusCode = 307,
+        responseBody = body,
+        responseHeaders = Map("Location" -> Vector("   "))
+      )
+      val client = JdkHttpTextClient(StaticHttpClient(redirect), _ => Right(()))
+
+      val result = client.getTextWithProvenance("https://example.invalid/stable.txt")
+
+      assert(result.left.exists(_.message.contains("HTTP 307 redirect is missing Location")))
+      assert(body.isClosed)
+
+    test("HTTP clients fail a redirect whose Location header is malformed"):
+      val body     = CloseTrackingInputStream(Array.emptyByteArray)
+      val redirect = FakeHttpResponse[InputStream](
+        responseUri = "https://example.invalid/stable.txt",
+        responseStatusCode = 301,
+        responseBody = body,
+        responseHeaders = Map("Location" -> Vector("https://exa mple.invalid/next.txt"))
+      )
+      val client = JdkHttpTextClient(StaticHttpClient(redirect), _ => Right(()))
+
+      val result = client.getTextWithProvenance("https://example.invalid/stable.txt")
+
+      assert(result.left.exists(_.message.contains("invalid redirect Location")))
+      assert(body.isClosed)
+
     test("JDK binary download client records direct no-redirect provenance"):
       val response = FakeHttpResponse[ByteArrayInputStream](
         responseUri = "https://example.invalid/alpha",
