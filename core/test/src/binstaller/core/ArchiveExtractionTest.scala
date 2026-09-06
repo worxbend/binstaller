@@ -246,6 +246,167 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
       assert(Files.readString(installDir.resolve("bin/zig")) == "zig")
       assert(commandExecutor.commands.isEmpty)
 
+    test("tar.gz GNU long-name member is extracted under its full path"):
+      // Regression guard for issue #2: GNU tar stores a path longer than the 100-byte header field
+      // in a preceding "@LongLink" pseudo-entry (typeflag 'L'), which the reader used to reject as
+      // an unsupported entry type before ever reaching the member it names.
+      val tempRoot   = tempDirectory("core-targz-longname")
+      val installDir = tempRoot.resolve("alpha")
+      val longName   = s"pkg/${"nested/" * 15}alpha"
+      assert(longName.length > 100)
+
+      val result = installArchive(
+        installDir,
+        tarGzArchiveWithLongNames(Vector(longName -> "long-alpha")),
+        files = Vector(longName -> "bin/alpha")
+      )
+
+      assertInstallSuccess(result, installDir.toString)
+      assert(Files.readString(installDir.resolve("bin/alpha")) == "long-alpha")
+
+    test("tar.xz directory mapping extracts members whose names arrive via @LongLink"):
+      // The exact shape of the zig release artifact: a tar.xz whose tree is pulled in by a single
+      // directory mapping and whose deepest paths are carried by GNU long-name headers.
+      val tempRoot        = tempDirectory("core-tarxz-longname")
+      val installDir      = tempRoot.resolve("zig")
+      val longName        = s"zig-root/lib/libc/include/${"generic-freebsd/" * 6}header.h"
+      val commandExecutor = FakeArchiveCommandExecutor("zig-root/bin/zig", "zig")
+      assert(longName.length > 100)
+
+      val result = installArchive(
+        installDir,
+        tarXzArchiveWithLongNames(Vector("zig-root/bin/zig" -> "zig", longName -> "header")),
+        archiveType = ArchiveType.TarXz,
+        files = Vector.empty,
+        directories = Vector("zig-root" -> "."),
+        executable = "bin/zig",
+        commandExecutor = commandExecutor
+      )
+
+      assertInstallSuccess(result, installDir.toString)
+      assert(Files.readString(installDir.resolve("bin/zig")) == "zig")
+      assert(Files.readString(installDir.resolve(longName.stripPrefix("zig-root/"))) == "header")
+      assert(commandExecutor.commands.isEmpty)
+
+    test("tar.gz metadata payload larger than the cap is rejected before allocation"):
+      // A metadata payload is read whole, ahead of any byte budget, so its own cap is what stops a
+      // header that declares a gigabyte of "path".
+      val tempRoot   = tempDirectory("core-targz-longname-huge")
+      val installDir = tempRoot.resolve("alpha")
+      // Written by hand: the header declares a gigabyte of payload and then supplies none of it,
+      // which is precisely the archive a well-formed builder would refuse to produce.
+      val archive = gzippedTar: gzip =>
+        gzip.write(tarHeader("././@LongLink", 1024L * 1024L * 1024L, 'L'))
+
+      val result = installArchive(installDir, archive)
+
+      assertArchiveExtractionFailed(result, "tar metadata entry exceeds")
+
+    test("tar.gz stream of nothing but long-name headers trips the entry budget"):
+      // Long-name headers never reach a member, so they must be counted as they are read or a
+      // crafted archive would spin forever without ever charging the entry or time budget.
+      val tempRoot   = tempDirectory("core-targz-longname-count")
+      val installDir = tempRoot.resolve("alpha")
+      // Streamed straight into the gzip stream: this is roughly 64 MiB of uncompressed tar.
+      val archive = gzippedTar: gzip =>
+        val total = ArchiveExtractor.maxEntries + 1
+        var index = 0
+        while index < total do
+          gzip.write(tarHeader("././@LongLink", 6, 'L'))
+          gzip.write("pkg/a".getBytes(StandardCharsets.UTF_8) :+ 0.toByte)
+          gzip.write(Array.fill[Byte](506)(0))
+          index += 1
+
+      val result = installArchive(installDir, archive)
+
+      assertArchiveExtractionFailed(result, "max entry count")
+
+    test("tar.gz long link-target metadata still rejects the link it names"):
+      // A 'K' header carries a long link target; consuming its payload is what lets the link entry
+      // that follows be reported as a link rather than as garbled header bytes.
+      val tempRoot   = tempDirectory("core-targz-longlink-target")
+      val installDir = tempRoot.resolve("alpha")
+      val target     = ("../" * 40) + "etc/passwd"
+      val bytes      = target.getBytes(StandardCharsets.UTF_8) :+ 0.toByte
+      val archive    = gzippedTar: gzip =>
+        gzip.write(tarHeader("././@LongLink", bytes.length, 'K'))
+        gzip.write(bytes)
+        gzip.write(Array.fill[Byte]((512 - (bytes.length % 512)) % 512)(0))
+        gzip.write(tarHeader("pkg/alpha", 0, '2'))
+
+      val result = installArchive(installDir, archive)
+
+      assertArchiveExtractionFailed(result, "unsafe archive link entry: pkg/alpha")
+
+    test("tar.gz PAX extended header supplies the member's full path"):
+      // bsdtar and Go's archive/tar solve the same 100-byte problem with a PAX extended header
+      // (typeflag 'x') carrying a "path" attribute instead of a GNU @LongLink pseudo-entry.
+      val tempRoot   = tempDirectory("core-targz-pax")
+      val installDir = tempRoot.resolve("alpha")
+      val longName   = s"pkg/${"nested/" * 15}alpha"
+      assert(longName.length > 100)
+
+      val result = installArchive(
+        installDir,
+        tarGzArchiveWithPaxNames(Vector(longName -> "pax-alpha")),
+        files = Vector(longName -> "bin/alpha")
+      )
+
+      assertInstallSuccess(result, installDir.toString)
+      assert(Files.readString(installDir.resolve("bin/alpha")) == "pax-alpha")
+
+    test("tar.gz PAX global header is consumed without disturbing the members after it"):
+      // A global header describes the archive, not the next member — git archive writes one
+      // carrying only a comment. It must be skipped whole, records and all.
+      val tempRoot   = tempDirectory("core-targz-pax-global")
+      val installDir = tempRoot.resolve("alpha")
+      val archive    = gzippedTar: gzip =>
+        writePaxHeader(gzip, 'g', Vector("comment" -> ("0" * 40)))
+        writePaxHeader(gzip, 'x', Vector("path" -> "pkg/alpha"))
+        writeTarMember(gzip, "pkg/alpha", "global-alpha")
+
+      val result = installArchive(installDir, archive)
+
+      assertInstallSuccess(result, installDir.toString)
+      assert(Files.readString(installDir.resolve("bin/alpha")) == "global-alpha")
+
+    test("tar.gz PAX size attribute overrides the header size field"):
+      // A member too large for the 12-byte octal size field declares its real length in PAX.
+      // Ignoring that would resume reading the next header from the middle of the payload.
+      val tempRoot   = tempDirectory("core-targz-pax-size")
+      val installDir = tempRoot.resolve("alpha")
+      val payload    = "pax-sized".getBytes(StandardCharsets.UTF_8)
+      val archive    = gzippedTar: gzip =>
+        writePaxHeader(gzip, 'x', Vector("size" -> payload.length.toString))
+        // Written by hand: the ustar header understates the member, exactly as it must when the
+        // real size does not fit the octal field.
+        gzip.write(tarHeader("pkg/alpha", 0, '0'))
+        gzip.write(payload)
+        gzip.write(Array.fill[Byte]((512 - (payload.length % 512)) % 512)(0))
+
+      val result = installArchive(installDir, archive)
+
+      assertInstallSuccess(result, installDir.toString)
+      assert(Files.readString(installDir.resolve("bin/alpha")) == "pax-sized")
+
+    test("tar.gz PAX record whose length prefix is a lie is rejected"):
+      // A record length that does not match its own bytes would walk the parser off the record
+      // boundary; it is refused rather than salvaged.
+      val tempRoot   = tempDirectory("core-targz-pax-malformed")
+      val installDir = tempRoot.resolve("alpha")
+      // Written by hand: the "99" length prefix is the lie under test, so the record must not go
+      // through the builder that would compute a truthful one.
+      val payload = "99 path=pkg/alpha\n".getBytes(StandardCharsets.UTF_8)
+      val archive = gzippedTar: gzip =>
+        gzip.write(tarHeader("PaxHeaders.0/entry", payload.length, 'x'))
+        gzip.write(payload)
+        gzip.write(Array.fill[Byte]((512 - (payload.length % 512)) % 512)(0))
+        gzip.write(tarHeader("pkg/alpha", 0, '0'))
+
+      val result = installArchive(installDir, archive)
+
+      assertArchiveExtractionFailed(result, "malformed tar extended header record")
+
     test("archive extraction enforces an aggregate expanded-byte budget"):
       assert(ArchiveExtractor.validateExtractedSize(ArchiveExtractor.maxExtractedBytes).isRight)
       assert(ArchiveExtractor.validateExtractedSize(ArchiveExtractor.maxExtractedBytes + 1).isLeft)
