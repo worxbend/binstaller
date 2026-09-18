@@ -613,7 +613,7 @@ binstaller versions</pre>
         <ul class="bullets">
           <li><span class="m">🚫</span><span><b>Installer scripts are rejected</b> — no shell syntax, no inherited environment, no surprise sudo.</span></li>
           <li><span class="m">🔤</span><span><b>Only safe variables interpolate</b> — <code>HOME</code>, <code>USER</code>, <code>SHELL</code>, <code>XDG_*</code>. A manifest can't smuggle a secret into a URL.</span></li>
-          <li><span class="m">🧭</span><span><b>Selection is explicit</b> — <code>--only</code> is applied first, then <code>--skip</code>, always in manifest order.</span></li>
+          <li><span class="m">🧭</span><span><b>Selection is explicit</b> — <code>--only</code> is applied first, then <code>--skip</code>, always in manifest order. Both take comma- or space-separated lists and can be repeated.</span></li>
           <li><span class="m">🧱</span><span><b>Strict mode</b> rejects dynamic latest URLs, missing checksums, sudo symlinks and tar.xz fallback extraction.</span></li>
           <li><span class="m">🧾</span><span><b>Duplicates and dangling refs</b> fail at load time, not halfway through an install.</span></li>
         </ul>
@@ -654,21 +654,26 @@ binstaller versions</pre>
 binstaller plan  --only lazygit
 binstaller apply --only lazygit
 
-<span class="y-com"># --only is repeatable — target a handful of tools</span>
+<span class="y-com"># Comma- or space-separated — target several tools in one flag</span>
+binstaller apply --only lazygit,neovim
+binstaller apply --only lazygit neovim
+
+<span class="y-com"># --only is also repeatable, and repeats combine with lists</span>
 binstaller apply --only lazygit --only neovim
 
 <span class="y-com"># --skip removes one entry and runs the rest</span>
 binstaller apply --skip neovim
 
 <span class="y-com"># --only is applied first, then --skip — combine them</span>
-binstaller plan --only lazygit --only neovim --skip neovim</pre>
+binstaller plan --only lazygit,neovim --skip neovim</pre>
 
       <div>
         <h3 style="margin-top:0;font-size:1.35rem;letter-spacing:-.02em">Test or install a single tool 🎯</h3>
-        <p style="color:var(--muted);font-size:15px;margin:0 0 6px">No separate "single tool" command is needed — every command takes <code>--only</code> and <code>--skip</code>, both repeatable and matched against the <code>name</code> in <code>spec.plan</code>.</p>
+        <p style="color:var(--muted);font-size:15px;margin:0 0 6px">No separate "single tool" command is needed — every command takes <code>--only</code> and <code>--skip</code>, matched against the <code>name</code> in <code>spec.plan</code>.</p>
         <ul class="bullets">
           <li><span class="m">🔍</span><span><b>Dry-run one tool</b> — <code>binstaller plan --only lazygit</code> resolves and prints just that entry, writing nothing.</span></li>
           <li><span class="m">🚀</span><span><b>Install one tool</b> — the same flag on <code>apply</code> downloads, verifies and stages only what matches.</span></li>
+          <li><span class="m">📋</span><span><b>Lists work too</b> — comma- or space-separated in one flag, and the flag can also be repeated; both forms combine.</span></li>
           <li><span class="m">🧭</span><span><b>Order is fixed</b> — <code>--only</code> narrows the set first, then <code>--skip</code> removes from what's left.</span></li>
           <li><span class="m">🎛️</span><span>Works on <code>plan</code>, <code>apply</code>, <code>versions</code> and <code>lock</code> alike — same flags, same manifest order.</span></li>
         </ul>

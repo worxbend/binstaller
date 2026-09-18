@@ -285,6 +285,44 @@ object CliModuleTest extends TestSuite:
       assert(result.out.contains("tools: 1"))
       assert(renderedToolNames(result.out) == Vector("yazi"))
 
+    test("plan only selection accepts a comma-separated list in a single flag"):
+      val result = runCli(
+        Vector("plan", "--config", configExamplePath.toString, "--only", "yazi,lazygit"),
+        resolvingService
+      )
+
+      assert(result.exitCode == 0)
+      assert(result.out.contains("tools: 2"))
+      assert(renderedToolNames(result.out).toSet == Set("yazi", "lazygit"))
+
+    test("plan only selection accepts a space-separated list in a single flag"):
+      val result = runCli(
+        Vector("plan", "--config", configExamplePath.toString, "--only", "yazi", "lazygit"),
+        resolvingService
+      )
+
+      assert(result.exitCode == 0)
+      assert(result.out.contains("tools: 2"))
+      assert(renderedToolNames(result.out).toSet == Set("yazi", "lazygit"))
+
+    test("plan only selection combines comma-separated values across repeated flags"):
+      val result = runCli(
+        Vector(
+          "plan",
+          "--config",
+          configExamplePath.toString,
+          "--only",
+          "yazi,lazygit",
+          "--only",
+          "neovim"
+        ),
+        resolvingService
+      )
+
+      assert(result.exitCode == 0)
+      assert(result.out.contains("tools: 3"))
+      assert(renderedToolNames(result.out).toSet == Set("yazi", "lazygit", "neovim"))
+
     test("plan skip selection omits the requested tool and preserves order"):
       val result = runCli(
         Vector("plan", "--config", configExamplePath.toString, "--skip", "neovim"),

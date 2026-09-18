@@ -113,8 +113,9 @@ binstaller versions
 </div>
 
 **Test or install a single tool** — every command (`plan`, `apply`, `versions`, `lock`) accepts
-`--only` and `--skip`, matched against `name` in `spec.plan`. Both flags are repeatable and
-`--only` is applied first, `--skip` second:
+`--only` and `--skip`, matched against `name` in `spec.plan`. Each flag takes a comma- or
+space-separated list and either flag may also be repeated; `--only` is applied first, `--skip`
+second:
 
 ```bash
 # Dry-run one tool, nothing is written
@@ -123,14 +124,18 @@ binstaller plan --only lazygit
 # Install (or re-verify) just that one tool
 binstaller apply --only lazygit
 
-# --only is repeatable — target a handful of tools
+# A comma- or space-separated list targets several tools at once
+binstaller apply --only lazygit,neovim
+binstaller apply --only lazygit neovim
+
+# --only is also repeatable, and repeats combine with lists
 binstaller apply --only lazygit --only neovim
 
 # --skip removes one entry and runs the rest
 binstaller apply --skip neovim
 
 # Combine both: --only narrows the set first, then --skip trims it further
-binstaller plan --only lazygit --only neovim --skip neovim
+binstaller plan --only lazygit,neovim --skip neovim
 ```
 
 There's no separate "single tool" command — `--only`/`--skip` is the whole selection mechanism,
@@ -182,8 +187,8 @@ binstaller apply --locked --lock-file binstaller.lock.json
 | `--state FILE` | Override the profile state file for `apply`. |
 | `--reset-state` | Ignore saved execution state and start fresh. |
 | `--verbose` | Show additional command diagnostics. |
-| `--only TOOL` | Include only a named tool (`plan`, `apply`, `versions`, `lock`). Repeatable. |
-| `--skip TOOL` | Omit a named tool (`plan`, `apply`, `versions`, `lock`). Repeatable. |
+| `--only TOOL[,TOOL...]` | Include only the named tool(s) (`plan`, `apply`, `versions`, `lock`). Comma- or space-separated, and repeatable. |
+| `--skip TOOL[,TOOL...]` | Omit the named tool(s) (`plan`, `apply`, `versions`, `lock`). Comma- or space-separated, and repeatable. |
 
 **`plan` and `apply` also accept**
 

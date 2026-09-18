@@ -258,11 +258,14 @@ Selection is a command option, not a manifest field.
 ```bash
 binstaller plan --only yazi
 binstaller apply --skip neovim
+binstaller apply --only yazi,lazygit
+binstaller apply --only yazi lazygit --skip lazygit
 ```
 
-`--only` and `--skip` may be repeated. `--only` is applied first, `--skip` is
-applied second, and manifest order is preserved. Unknown names are selection
-errors.
+`--only` and `--skip` each accept a comma- or space-separated list of tool
+names, and either flag may also be repeated; all values from every occurrence
+are combined. `--only` is applied first, `--skip` is applied second, and
+manifest order is preserved. Unknown names are selection errors.
 
 ## Unsupported Fields
 

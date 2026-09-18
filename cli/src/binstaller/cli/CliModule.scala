@@ -198,16 +198,24 @@ private[cli] abstract class SelectableCommand(
   @CliOption(
     names = Array("--only"),
     paramLabel = "TOOL",
-    description = Array("Select only the named tool. May be repeated.")
+    arity = "1..*",
+    split = "[,\\s]+",
+    description = Array(
+      "Select only the named tool. Accepts a comma- or space-separated list, and the flag may also be repeated."
+    )
   )
-  def addOnlyTool(value: String): Unit = onlyTools = onlyTools :+ value
+  def addOnlyTool(values: Array[String]): Unit = onlyTools = onlyTools ++ values
 
   @CliOption(
     names = Array("--skip"),
     paramLabel = "TOOL",
-    description = Array("Omit the named tool. May be repeated.")
+    arity = "1..*",
+    split = "[,\\s]+",
+    description = Array(
+      "Omit the named tool. Accepts a comma- or space-separated list, and the flag may also be repeated."
+    )
   )
-  def addSkippedTool(value: String): Unit = skippedTools = skippedTools :+ value
+  def addSkippedTool(values: Array[String]): Unit = skippedTools = skippedTools ++ values
 
   override protected def installerOptions: InstallerOptions =
     super.installerOptions.copy(selection = ToolSelection(onlyTools, skippedTools))
