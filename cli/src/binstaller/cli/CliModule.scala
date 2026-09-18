@@ -200,6 +200,7 @@ private[cli] abstract class SelectableCommand(
     paramLabel = "TOOL",
     arity = "1..*",
     split = "[,\\s]+",
+    splitSynopsisLabel = ",",
     description = Array(
       "Select only the named tool. Accepts a comma- or space-separated list, and the flag may also be repeated."
     )
@@ -211,6 +212,7 @@ private[cli] abstract class SelectableCommand(
     paramLabel = "TOOL",
     arity = "1..*",
     split = "[,\\s]+",
+    splitSynopsisLabel = ",",
     description = Array(
       "Omit the named tool. Accepts a comma- or space-separated list, and the flag may also be repeated."
     )
