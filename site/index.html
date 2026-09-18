@@ -648,6 +648,32 @@ binstaller versions</pre>
         </tbody>
       </table>
     </div>
+
+    <div class="split" style="margin-top:44px">
+      <pre class="code"><span class="y-com"># Plan or apply just one entry from the manifest</span>
+binstaller plan  --only lazygit
+binstaller apply --only lazygit
+
+<span class="y-com"># --only is repeatable — target a handful of tools</span>
+binstaller apply --only lazygit --only neovim
+
+<span class="y-com"># --skip removes one entry and runs the rest</span>
+binstaller apply --skip neovim
+
+<span class="y-com"># --only is applied first, then --skip — combine them</span>
+binstaller plan --only lazygit --only neovim --skip neovim</pre>
+
+      <div>
+        <h3 style="margin-top:0;font-size:1.35rem;letter-spacing:-.02em">Test or install a single tool 🎯</h3>
+        <p style="color:var(--muted);font-size:15px;margin:0 0 6px">No separate "single tool" command is needed — every command takes <code>--only</code> and <code>--skip</code>, both repeatable and matched against the <code>name</code> in <code>spec.plan</code>.</p>
+        <ul class="bullets">
+          <li><span class="m">🔍</span><span><b>Dry-run one tool</b> — <code>binstaller plan --only lazygit</code> resolves and prints just that entry, writing nothing.</span></li>
+          <li><span class="m">🚀</span><span><b>Install one tool</b> — the same flag on <code>apply</code> downloads, verifies and stages only what matches.</span></li>
+          <li><span class="m">🧭</span><span><b>Order is fixed</b> — <code>--only</code> narrows the set first, then <code>--skip</code> removes from what's left.</span></li>
+          <li><span class="m">🎛️</span><span>Works on <code>plan</code>, <code>apply</code>, <code>versions</code> and <code>lock</code> alike — same flags, same manifest order.</span></li>
+        </ul>
+      </div>
+    </div>
   </div>
 </section>
 

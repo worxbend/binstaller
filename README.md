@@ -112,12 +112,29 @@ binstaller versions
   <img src="assets/demo-versions.svg" alt="binstaller versions output with pinned versions next to newer GitHub releases" width="620">
 </div>
 
-**Narrow the blast radius** — both flags are repeatable, `--only` is applied first and `--skip` second:
+**Test or install a single tool** — every command (`plan`, `apply`, `versions`, `lock`) accepts
+`--only` and `--skip`, matched against `name` in `spec.plan`. Both flags are repeatable and
+`--only` is applied first, `--skip` second:
 
 ```bash
-binstaller plan  --only yazi
+# Dry-run one tool, nothing is written
+binstaller plan --only lazygit
+
+# Install (or re-verify) just that one tool
+binstaller apply --only lazygit
+
+# --only is repeatable — target a handful of tools
+binstaller apply --only lazygit --only neovim
+
+# --skip removes one entry and runs the rest
 binstaller apply --skip neovim
+
+# Combine both: --only narrows the set first, then --skip trims it further
+binstaller plan --only lazygit --only neovim --skip neovim
 ```
+
+There's no separate "single tool" command — `--only`/`--skip` is the whole selection mechanism,
+and it works the same way across `plan`, `apply`, `versions` and `lock`.
 
 **Pin everything to a lock file:**
 
