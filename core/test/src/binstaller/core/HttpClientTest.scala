@@ -148,6 +148,25 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
       assert(result.left.exists(_.message.contains("invalid redirect Location")))
       assert(body.isClosed)
 
+    test("HTTP clients fail closed on a rejecting host guard before issuing any request"):
+      val transport = StaticHttpClient(FakeHttpResponse[InputStream](
+        responseUri = "https://example.invalid/stable.txt",
+        responseStatusCode = 200,
+        responseBody = ByteArrayInputStream("v1.0.0".getBytes(StandardCharsets.UTF_8))
+      ))
+      val guard: String => Either[String, Unit] = _ => Left("host guard rejected example.invalid")
+      val text                                  = JdkHttpTextClient(transport, guard)
+      val binary   = JdkBinaryDownloadClient(transport, hostGuard = guard)
+      val metadata = JdkBinaryMetadataClient(transport, hostGuard = guard)
+
+      assert(text.getTextWithProvenance("https://example.invalid/stable.txt")
+        .left.exists(_.message.contains("host guard rejected example.invalid")))
+      assert(binary.downloadWithProvenance("https://example.invalid/alpha")
+        .left.exists(_.message.contains("host guard rejected example.invalid")))
+      assert(metadata.metadata("https://example.invalid/alpha")
+        .left.exists(_.message.contains("host guard rejected example.invalid")))
+      assert(transport.requestCount == 0)
+
     test("JDK binary download client records direct no-redirect provenance"):
       val response = FakeHttpResponse[ByteArrayInputStream](
         responseUri = "https://example.invalid/alpha",

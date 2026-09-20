@@ -7,7 +7,6 @@ import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.nio.file.Path
-import scala.jdk.CollectionConverters.*
 import scala.util.Try
 
 /** Validated HTTPS URL used at the network boundary. */
@@ -107,18 +106,12 @@ object RelativeInstallPath:
   def fromString(
       value: String,
       allowCurrentDirectory: Boolean = false
-  ): Either[String, RelativeInstallPath] =
-    if value.trim.isEmpty then Left("must not be empty")
-    else if value.exists(Character.isISOControl) then Left("must not contain control characters")
-    else if value.contains('\\') then Left("must not contain backslashes")
-    else if value.matches("^[A-Za-z]:.*") then Left("must not be drive-prefixed")
-    else
-      Try(Path.of(value)).toEither
+  ): Either[String, RelativeInstallPath] = PathSyntaxRules.validate(value) match
+    case Left(violation) => Left(violation.message)
+    case Right(())       => Try(Path.of(value)).toEither
         .left.map(error => s"is invalid: ${Diagnostics.describe(error)}")
         .flatMap:
-          case path if path.isAbsolute => Left("must be relative")
-          case path if path.iterator().asScala.exists(_.toString == "..") =>
-            Left("must not contain traversal segments")
+          case path if path.isAbsolute                                => Left("must be relative")
           case path if path.toString == "." && !allowCurrentDirectory =>
             Left("must not be current directory")
           case path => Right(RelativeInstallPath(value, path.normalize()))

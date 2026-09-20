@@ -41,12 +41,15 @@ jobs:
             ~/Library/Caches/Coursier
             ~/.cache/mill
             ~/.ivy2/cache
-          key: ${{ runner.os }}-${{ runner.arch }}-mill-${{ hashFiles('build.mill', 'mill') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-mill-${{ hashFiles('build.mill', 'mill', '.mill-version') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-mill-
 
       - name: Check formatting
         run: ./mill mill.scalalib.scalafmt/checkFormatAll
+
+      - name: Check patch whitespace
+        run: git diff --check
 
       - name: Compile with warnings as errors
         run: ./mill __.compile

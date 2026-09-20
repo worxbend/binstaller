@@ -88,4 +88,5 @@ private[core] object StrictPolicyValidator:
 
   private def usesLatestEndpoint(url: String): Boolean =
     val lower = url.toLowerCase
-    lower.endsWith("/latest") || lower.contains("/latest/")
+    lower.endsWith("/latest") || lower.contains("/latest/") ||
+    lower.contains("/latest?") || lower.contains("/latest#")

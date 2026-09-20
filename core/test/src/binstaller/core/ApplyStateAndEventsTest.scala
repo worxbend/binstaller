@@ -348,23 +348,15 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
       val service  = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
 
       val result = service.planWithEvents(applyOptions(config), observer)
+      val planReady: PartialFunction[InstallerEvent, Boolean] = {
+        case InstallerEvent.PlanReady(names, Some(_), _)
+            if names.map(_.value) == Vector("alpha", "beta") => true
+      }
 
       assert(result.status == InstallerRunStatus.Succeeded)
       assert(eventIndex(observer.events, { case InstallerEvent.ResolvingStarted(_, _) => true }) <
-        eventIndex(
-          observer.events,
-          {
-            case InstallerEvent.PlanReady(names, Some(_), _)
-                if names.map(_.value) == Vector("alpha", "beta") => true
-          }
-        ))
-      assert(eventIndex(
-        observer.events,
-        {
-          case InstallerEvent.PlanReady(names, Some(_), _)
-              if names.map(_.value) == Vector("alpha", "beta") => true
-        }
-      ) <
+        eventIndex(observer.events, planReady))
+      assert(eventIndex(observer.events, planReady) <
         eventIndex(
           observer.events,
           {
@@ -386,6 +378,15 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
       )
 
       val result = service.applyWithEvents(applyOptions(config), observer)
+      val alphaCompleted: PartialFunction[InstallerEvent, Boolean] = {
+        case InstallerEvent.ToolResult(
+              named("alpha"),
+              ToolResultStatus.Completed,
+              Some(_),
+              None,
+              _
+            ) => true
+      }
 
       assert(result.status == InstallerRunStatus.Succeeded)
       assert(eventIndex(
@@ -412,30 +413,8 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
           case InstallerEvent.DownloadProgress(_, _, _, _, DownloadProgressStatus.Finished, _) =>
             true
         }
-      ) < eventIndex(
-        observer.events,
-        {
-          case InstallerEvent.ToolResult(
-                named("alpha"),
-                ToolResultStatus.Completed,
-                Some(_),
-                None,
-                _
-              ) => true
-        }
-      ))
-      assert(eventIndex(
-        observer.events,
-        {
-          case InstallerEvent.ToolResult(
-                named("alpha"),
-                ToolResultStatus.Completed,
-                Some(_),
-                None,
-                _
-              ) => true
-        }
-      ) < eventIndex(
+      ) < eventIndex(observer.events, alphaCompleted))
+      assert(eventIndex(observer.events, alphaCompleted) < eventIndex(
         observer.events,
         {
           case InstallerEvent.Summary(InstallerRunStatus.Succeeded, 1, 0, 0, None, _) => true
@@ -503,6 +482,39 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
       )
       assert(skipIndex < summaryIndex)
 
+    test("apply with a state file emits a state-loading event without a phantom tool"):
+      val tempRoot = tempDirectory("core-events-state-loading")
+      val config   = writeConfig(tempRoot, twoToolYaml(tempRoot, "loading.state.json"))
+      val observer = RecordingInstallerEventObserver()
+      val service  = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
+
+      val result = service.applyWithEvents(applyOptions(config), observer)
+
+      assert(result.status == InstallerRunStatus.Succeeded)
+      assert(observer.events.exists:
+        case InstallerEvent.StateLoading(path, _) => path == "loading.state.json"
+        case _                                    => false)
+      assert(!observer.events.exists:
+        case InstallerEvent.ToolPhaseChanged(name, _, _) => name.value == "state"
+        case _                                           => false)
+
+    test("a throwing event observer does not fail the install it observes"):
+      val tempRoot = tempDirectory("core-events-throwing-observer")
+      val config   = writeConfig(tempRoot, directBinaryYaml(tempRoot.resolve("alpha")))
+      val service  = BinaryInstallerService.resolving(
+        FakeHttpTextClient(""),
+        DirectBinaryInstaller(RoutingBinaryDownloadClient.success, InstallFileSystem.nio),
+        ApplyStateStore.nio(tempRoot)
+      )
+
+      val result = service.applyWithEvents(
+        applyOptions(config),
+        _ => throw RuntimeException("renderer exploded")
+      )
+
+      assert(result.status == InstallerRunStatus.Succeeded)
+      assert(Files.isRegularFile(tempRoot.resolve("alpha/bin/alpha")))
+
     test("continue-on-error emits failed then completed results before failed summary"):
       val tempRoot = tempDirectory("core-events-continue")
       val config   = writeConfig(
@@ -519,6 +531,15 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
       )
 
       val result = service.applyWithEvents(applyOptions(config), observer)
+      val betaCompleted: PartialFunction[InstallerEvent, Boolean] = {
+        case InstallerEvent.ToolResult(
+              named("beta"),
+              ToolResultStatus.Completed,
+              Some(_),
+              None,
+              _
+            ) => true
+      }
 
       assert(result.status == InstallerRunStatus.Failed)
       assert(eventIndex(
@@ -532,30 +553,8 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
                 _
               ) => true
         }
-      ) < eventIndex(
-        observer.events,
-        {
-          case InstallerEvent.ToolResult(
-                named("beta"),
-                ToolResultStatus.Completed,
-                Some(_),
-                None,
-                _
-              ) => true
-        }
-      ))
-      assert(eventIndex(
-        observer.events,
-        {
-          case InstallerEvent.ToolResult(
-                named("beta"),
-                ToolResultStatus.Completed,
-                Some(_),
-                None,
-                _
-              ) => true
-        }
-      ) < eventIndex(
+      ) < eventIndex(observer.events, betaCompleted))
+      assert(eventIndex(observer.events, betaCompleted) < eventIndex(
         observer.events,
         {
           case InstallerEvent.Summary(InstallerRunStatus.Failed, 1, 1, 0, Some(_), _) => true

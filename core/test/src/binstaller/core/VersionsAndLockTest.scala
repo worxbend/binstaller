@@ -28,20 +28,22 @@ object VersionsAndLockTest extends TestSuite with CoreTestSupport:
       ))
       // yazi and kustomize are GitHub release-download tools; the fake client cannot reach the
       // GitHub latest-release API, so their status is unknown ("?") rather than a false "-".
+      // helm, kubectl and minikube are never checked at all (non-GitHub or dynamic-latest), so
+      // they also render "?" — only a genuinely checked up-to-date tool may render "-".
       assert(versionSummaryRowExists(result.lines, "yazi", "v26.5.6", "?"))
-      assert(versionSummaryRowExists(result.lines, "helm", "v3.21.2", "-"))
+      assert(versionSummaryRowExists(result.lines, "helm", "v3.21.2", "?"))
       assert(versionSummaryRowExists(result.lines, "kustomize", "v5.8.1", "?"))
 
       // The same facts also cross the boundary as data, so a renderer never has to split the
       // padded text back into columns to recover them.
       assert(result.versionRows.contains(
-        VersionSummaryRow("helm", "v3.21.2", NewerVersionStatus.UpToDate)
+        VersionSummaryRow("helm", "v3.21.2", NewerVersionStatus.Unknown)
       ))
       assert(result.versionRows.contains(
         VersionSummaryRow("yazi", "v26.5.6", NewerVersionStatus.Unknown)
       ))
-      assert(versionSummaryRowExists(result.lines, "kubectl", "v1.34.0", "-"))
-      assert(versionSummaryRowExists(result.lines, "minikube", "dynamic latest-url", "-"))
+      assert(versionSummaryRowExists(result.lines, "kubectl", "v1.34.0", "?"))
+      assert(versionSummaryRowExists(result.lines, "minikube", "dynamic latest-url", "?"))
       assert(!result.lines.exists(_.contains("https://")))
       assert(!result.lines.exists(_.contains("final url")))
 
@@ -62,6 +64,24 @@ object VersionsAndLockTest extends TestSuite with CoreTestSupport:
       assert(result.status == InstallerRunStatus.Succeeded)
       assert(versionSummaryRowExists(result.lines, "jujutsu", "0.40.0", "v0.41.0"))
       assert(!result.lines.exists(_.contains("github:")))
+
+    test("versions checks the same GitHub repository once for several tools"):
+      val apiUrl = "https://api.github.com/repos/jj-vcs/jj/releases/latest"
+      val plan   = resolve(sameRepoGitHubYaml)
+      val calls  = java.util.concurrent.atomic.AtomicInteger(0)
+      val client = new HttpTextClient:
+        def getTextWithProvenance(url: String): Either[HttpTextError, HttpTextResponse] =
+          assert(url == apiUrl)
+          val _ = calls.incrementAndGet()
+          Right(HttpTextResponse("""{"tag_name":"v0.41.0"}""", UrlProvenance.direct(url)))
+
+      val statuses = GitHubReleaseVersions.versionStatusByTool(plan, client)
+
+      assert(calls.get() == 1)
+      assert(statuses == Map(
+        toolName("jujutsu")     -> GitHubReleaseVersions.LatestReleaseStatus.Newer("v0.41.0"),
+        toolName("jujutsu-alt") -> GitHubReleaseVersions.LatestReleaseStatus.Newer("v0.41.0")
+      ))
 
     test("semantic version ordering distinguishes stable and prerelease versions"):
       assert(VersionOrdering.compare("v1.2.0", "v1.2.0-rc.1") == VersionOrder.Greater)
@@ -272,7 +292,8 @@ object VersionsAndLockTest extends TestSuite with CoreTestSupport:
       assert(planResult.lines.exists(_.contains(s"checksum: sha256 $artifactHash (discovered")))
       assert(planResult.lines.exists(_.contains(checksumFileUrl)))
       assert(versionsResult.status == InstallerRunStatus.Succeeded)
-      assert(versionSummaryRowExists(versionsResult.lines, "alpha", "1.0.0", "-"))
+      // alpha's download is not a GitHub release URL, so its newer-version status is unchecked.
+      assert(versionSummaryRowExists(versionsResult.lines, "alpha", "1.0.0", "?"))
       assert(!versionsResult.lines.exists(_.contains("checksums:")))
       assert(applyResult.status == InstallerRunStatus.Succeeded)
       assert(Files.readString(tempRoot.resolve("apps/alpha/bin/alpha")) == "alpha-binary")

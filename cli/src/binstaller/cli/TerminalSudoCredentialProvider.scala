@@ -95,16 +95,16 @@ private[cli] final class TerminalSudoCredentialProvider(err: PrintWriter)
     var overflow = false
     while !done do
       input.read() match
-        case -1                  => done = true
-        case '\n' | '\r'         => done = true
-        case value if value >= 0 =>
-          if length >= buffer.length then
-            overflow = true
-            done = true
+        case -1          => done = true
+        case '\n' | '\r' => done = true
+        case value       =>
+          // An over-long password keeps draining to the line end: returning immediately would
+          // leave the tail (and its newline) queued in /dev/tty, where the parent shell would
+          // read it as its next command line.
+          if length >= buffer.length then overflow = true
           else
             buffer(length) = value.toByte
             length += 1
-        case _ => done = true
     if overflow then
       Left(SudoCredentialError.Unavailable(
         "sudo credentials required, but the entered password exceeds the supported length"

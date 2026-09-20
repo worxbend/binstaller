@@ -3,12 +3,15 @@ package binstaller.core
 import binstaller.config.Diagnostics
 import binstaller.config.ExecutableMode
 
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.PosixFilePermission
 import java.time.Duration
 import java.time.Instant
+import java.util.UUID
+import scala.annotation.tailrec
 import scala.jdk.CollectionConverters.*
 import scala.util.Failure
 import scala.util.Success
@@ -204,7 +207,7 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
         Left(error)
 
   def discardStaged(stagedInstall: StagedInstall): Unit =
-    SafePaths.deleteRecursively(stagedInstall.stagingDir)
+    val _ = SafePaths.deleteRecursively(stagedInstall.stagingDir)
 
   // Temp-dir infixes this filesystem creates next to an install; all are reclaimable orphans.
   private val tempInfixes: Vector[String]  = Vector("stage", "backup", "corrupt")
@@ -222,7 +225,8 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
           stream.iterator().asScala.foreach: candidate =>
             val candidateName = Option(candidate.getFileName).map(_.toString).getOrElse("")
             val isTemp = tempInfixes.exists(infix => candidateName.startsWith(s".$name.$infix-"))
-            if isTemp && isStaleTemp(candidate) then SafePaths.deleteRecursively(candidate)
+            if isTemp && isStaleTemp(candidate) then
+              val _ = SafePaths.deleteRecursively(candidate)
 
   private def isStaleTemp(path: Path): Boolean = Try(Files.getLastModifiedTime(path).toInstant)
     .toOption
@@ -309,48 +313,63 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
     val parent     = Option(installDir.getParent).getOrElse(Path.of("").toAbsolutePath.normalize())
     val backupPrefix = s".${installName(installDir)}.backup-"
 
-    val prepared = Try:
-      val backupDir = Files.createTempDirectory(parent, backupPrefix)
-      Files.delete(backupDir)
-      backupDir
-
-    prepared match
-      case Failure(error) =>
-        Left(InstallFileSystemError.ReplacementFailed(Diagnostics.describe(error)))
-      case Success(backupDir) => replaceWithBackup(stagedInstall, installDir, backupDir)
+    replaceWithBackup(stagedInstall, installDir, parent, backupPrefix)
 
   private def replaceWithBackup(
       stagedInstall: StagedInstall,
       installDir: Path,
-      backupDir: Path
+      parent: Path,
+      backupPrefix: String
   ): Either[InstallFileSystemError.ReplacementFailed, Unit] =
     val hadExisting = Files.exists(installDir)
-    val result      = Try:
-      if hadExisting then
-        val _ = Files.move(installDir, backupDir, StandardCopyOption.REPLACE_EXISTING)
+    // Assigned before the staged move is attempted, so a failure of that move still knows where
+    // the old install was put.
+    var backupDir = Option.empty[Path]
+    val result    = Try:
+      if hadExisting then backupDir = Some(moveToFreshSibling(installDir, parent, backupPrefix))
       val _ = Files.move(stagedInstall.stagingDir, installDir, StandardCopyOption.REPLACE_EXISTING)
 
     result match
       case Success(_) =>
-        SafePaths.deleteRecursively(backupDir)
+        backupDir.foreach: dir =>
+          warnOnResidue("backup directory", dir, SafePaths.deleteRecursively(dir))
         Right(())
       case Failure(error) =>
         // If the final move fails after moving the old install aside, attempt to restore it so a
         // failed upgrade does not silently leave the tool missing.
-        val restoreError = restoreBackup(installDir, backupDir, hadExisting)
+        val restoreError = restoreBackup(installDir, backupDir)
         val message      = restoreError match
           case Some(restore) => s"${Diagnostics.describe(error)}; rollback failed: $restore"
           case None          => Diagnostics.describe(error)
         Left(InstallFileSystemError.ReplacementFailed(message))
 
+  // Move `source` onto a fresh random sibling name without REPLACE_EXISTING: the move itself
+  // claims the name atomically, so a name claimed between naming and moving is retried with a new
+  // name instead of being blindly overwritten. This replaces the old create-temp-dir-then-delete
+  // dance, whose delete left a window for a third party to claim the name.
+  private val freshSiblingAttempts = 3
+
+  @tailrec
+  private def moveToFreshSibling(
+      source: Path,
+      parent: Path,
+      prefix: String,
+      attemptsLeft: Int = freshSiblingAttempts
+  ): Path =
+    val candidate = parent.resolve(s"$prefix${UUID.randomUUID()}")
+    Try(Files.move(source, candidate)) match
+      case Success(moved)                                             => moved
+      case Failure(_: FileAlreadyExistsException) if attemptsLeft > 1 =>
+        moveToFreshSibling(source, parent, prefix, attemptsLeft - 1)
+      case Failure(error) => throw error
+
   private def restoreBackup(
       installDir: Path,
-      backupDir: Path,
-      hadExisting: Boolean
-  ): Option[String] =
-    if !hadExisting || !Files.exists(backupDir) then None
-    else
-      Try:
+      backupDir: Option[Path]
+  ): Option[String] = backupDir.filter(Files.exists(_)) match
+    case None         => None
+    case Some(backup) =>
+      val restored = Try:
         if Files.exists(installDir) then
           // Move the failed partial install aside instead of deleting it, so the backup is never
           // the only surviving copy if the restore move below also fails. The aside is reclaimed
@@ -358,13 +377,17 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
           val parent =
             Option(installDir.getParent).getOrElse(Path.of("").toAbsolutePath.normalize())
           val corruptAside =
-            Files.createTempDirectory(parent, s".${installName(installDir)}.corrupt-")
-          Files.delete(corruptAside)
-          val _ = Files.move(installDir, corruptAside, StandardCopyOption.REPLACE_EXISTING)
-          val _ = Files.move(backupDir, installDir, StandardCopyOption.REPLACE_EXISTING)
-          SafePaths.deleteRecursively(corruptAside)
+            moveToFreshSibling(installDir, parent, s".${installName(installDir)}.corrupt-")
+          val _ = Files.move(backup, installDir, StandardCopyOption.REPLACE_EXISTING)
+          warnOnResidue("corrupt aside", corruptAside, SafePaths.deleteRecursively(corruptAside))
         else
-          val _ = Files.move(backupDir, installDir, StandardCopyOption.REPLACE_EXISTING)
-      match
+          val _ = Files.move(backup, installDir, StandardCopyOption.REPLACE_EXISTING)
+      restored match
         case Success(_)     => None
         case Failure(error) => Some(Diagnostics.describe(error))
+
+  private def warnOnResidue(purpose: String, root: Path, residue: Vector[Path]): Unit =
+    if residue.nonEmpty then
+      System.err.println(
+        s"warning: could not fully remove $purpose $root; undeletable: ${residue.mkString(", ")}"
+      )

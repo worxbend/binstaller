@@ -36,20 +36,13 @@ private[cli] object CliVersionsOutput:
       VersionSummaryRow("package", "version", NewerVersionStatus.Available("newer version"))
     // The header participates in the width computation exactly as it does in core, so the two
     // tables line up column for column.
-    val layout = layoutFor(header +: rows)
+    val layout = VersionSummaryRow.layoutFor(header +: rows)
     colorHeader(header, layout, outputStyle) +: rows.zipWithIndex.map: (row, index) =>
       colorToolRow(row, layout, index, outputStyle)
 
-  private final case class Layout(packageWidth: Int, versionWidth: Int)
-
-  private def layoutFor(rows: Vector[VersionSummaryRow]): Layout = Layout(
-    rows.map(_.packageName.length).maxOption.getOrElse(0),
-    rows.map(_.version.length).maxOption.getOrElse(0)
-  )
-
   private def colorHeader(
       row: VersionSummaryRow,
-      layout: Layout,
+      layout: VersionSummaryRow.Layout,
       outputStyle: CliOutputStyle
   ): String =
     val packageCell = row.packageName.padTo(layout.packageWidth, ' ')
@@ -60,7 +53,7 @@ private[cli] object CliVersionsOutput:
 
   private def colorToolRow(
       row: VersionSummaryRow,
-      layout: Layout,
+      layout: VersionSummaryRow.Layout,
       index: Int,
       outputStyle: CliOutputStyle
   ): String =

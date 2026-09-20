@@ -9,8 +9,10 @@ import java.net.http.HttpResponse
 import java.io.InputStream
 import scala.annotation.tailrec
 import scala.concurrent.duration.DurationLong
-import scala.util.Try
 import java.time.Duration
+import scala.util.Failure
+import scala.util.Success
+import scala.util.Try
 import scala.util.Using
 import ox.timeoutEither
 
@@ -43,6 +45,29 @@ private[core] object RuntimeHttpClient:
       hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved(_)
   ): Either[String, RuntimeHttpResponse] = RuntimeUrl.httpsUri(initialUrl).flatMap: initialUri =>
     follow(client, initialUrl, hostGuard, initialUri, Vector.empty, maxRedirects)
+
+  /**
+   * The shared GET pipeline for small-response clients: https check, redirects, 2xx guard, then
+   * hand the still-open response to `read`, which owns reading and closing the body and reporting
+   * its own failures. Non-2xx bodies are closed here; `error` builds the caller's domain error from
+   * a message and the provenance observed so far, if any.
+   */
+  def withSuccessfulStream[E, A](
+      client: HttpClient,
+      url: String,
+      hostGuard: String => Either[String, Unit],
+      error: (String, Option[UrlProvenance]) => E
+  )(read: RuntimeHttpResponse => Either[E, A]): Either[E, A] = RuntimeUrl.httpsUri(url) match
+    case Left(message) => Left(error(message, None))
+    case Right(_)      => Try(getInputStream(client, url, hostGuard)) match
+        case Success(Right(result))
+            if result.response.statusCode() >= 200 && result.response.statusCode() < 300 =>
+          read(result)
+        case Success(Right(result)) =>
+          RuntimeHttpBody.closeAfterFailure(result.response.body())
+          Left(error(s"HTTP ${result.response.statusCode()}", Some(result.provenance)))
+        case Success(Left(message)) => Left(error(message, None))
+        case Failure(cause)         => Left(error(Diagnostics.describe(cause), None))
 
   // Lives beside `getInputStream` rather than nested inside it: as a local `def` its own branching
   // aggregated into the enclosing method on top of a nesting surcharge, which read as one method

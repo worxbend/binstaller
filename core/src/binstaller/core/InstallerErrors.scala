@@ -13,13 +13,16 @@ enum LockCommandError:
 object LockCommandError:
 
   /** Render a typed lock failure into script-friendly command lines. */
-  def renderLines(error: LockCommandError): Vector[String] = error match
+  def renderLines(
+      error: LockCommandError,
+      redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
+  ): Vector[String] = error match
     case LockCommandError.ResolutionFailed(resolveError) =>
-      ResolvePlanError.renderLines(resolveError)
+      ResolvePlanError.renderLines(resolveError, redactions)
     case LockCommandError.InspectionFailed(toolName, message) =>
       Vector(s"lock inspection failed for tool '$toolName': $message")
     case LockCommandError.InvalidPath(path, message) =>
-      Vector(RenderSafety.display(s"lock path '$path' is invalid: $message"))
+      Vector(RenderSafety.display(s"lock path '$path' is invalid: $message", redactions))
     case LockCommandError.SaveFailed(lockFileError) => Vector(LockFileError.render(lockFileError))
 
 /** Expected failure before an apply run is allowed to perform side effects. */
@@ -32,7 +35,7 @@ object ApplyPreflightError:
   /** Render a preflight failure into a concise user-facing line. */
   def render(error: ApplyPreflightError): String = error match
     case ApplyPreflightError.SudoSymlinkNotAllowed(toolName) =>
-      s"failed $toolName: sudo symlinks are not allowed by policy.allowSudoSymlinks"
+      ToolInstallError.renderSudoSymlinkNotAllowed(toolName)
 
 /**
  * Expected failure while installing one tool.
@@ -165,8 +168,7 @@ object ToolInstallError:
         ),
         redactions
       )
-    case ToolInstallError.SudoSymlinkNotAllowed(_) =>
-      "sudo symlinks are not allowed by policy.allowSudoSymlinks"
+    case ToolInstallError.SudoSymlinkNotAllowed(toolName) => renderSudoSymlinkNotAllowed(toolName)
     case ToolInstallError.SudoCredentialCanceled(toolName, path, target) => detailBlock(
         s"sudo credentials canceled for $path -> $target",
         Vector(
@@ -192,6 +194,10 @@ object ToolInstallError:
         ),
         redactions
       )
+
+  /** The one spelling of the sudo-symlink policy refusal, shared with [[ApplyPreflightError]]. */
+  private[core] def renderSudoSymlinkNotAllowed(toolName: ToolName): String =
+    s"failed $toolName: sudo symlinks are not allowed by policy.allowSudoSymlinks"
 
   private def detailBlock(
       summary: String,

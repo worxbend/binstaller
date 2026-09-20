@@ -14,7 +14,7 @@ set -eu
 
 REPO="worxbend/binstaller"
 VERSION="${BINSTALLER_VERSION:-latest}"
-INSTALL_DIR="${BINSTALLER_INSTALL_DIR:-${HOME}/.local/bin}"
+INSTALL_DIR="${BINSTALLER_INSTALL_DIR:-${HOME:?HOME is not set; set BINSTALLER_INSTALL_DIR explicitly}/.local/bin}"
 
 info() {
   printf '%s\n' "$*"
@@ -36,8 +36,9 @@ require mktemp
 
 os="$(uname -s)"
 case "${os}" in
-  Linux) ;;
-  *) die "unsupported OS: ${os} (only Linux is supported)" ;;
+  Linux) os=linux ;;
+  Darwin) os=macos ;;
+  *) die "unsupported OS: ${os} (supported: Linux and macOS)" ;;
 esac
 
 arch="$(uname -m)"
@@ -47,7 +48,26 @@ case "${arch}" in
   *) die "unsupported architecture: ${arch}" ;;
 esac
 
-target="linux-${arch}"
+target="${os}-${arch}"
+
+# The release binaries are GraalVM native images built on ubuntu-24.04 and
+# dynamically linked, so Linux hosts need glibc 2.39 or newer.
+min_glibc="2.39"
+
+if [ "${os}" = "linux" ]; then
+  require ldd
+  libc_line="$(ldd --version 2>&1 | head -n 1 || true)"
+  case "${libc_line}" in
+    *"GNU libc"* | *GLIBC*) ;;
+    *) die "unsupported C library: ${libc_line:-unknown} (binstaller requires glibc ${min_glibc} or newer)" ;;
+  esac
+  glibc_version="$(printf '%s\n' "${libc_line}" | sed -n 's/.* \([0-9][0-9.]*\)$/\1/p')"
+  [ -n "${glibc_version}" ] ||
+    die "could not determine the glibc version (binstaller requires glibc ${min_glibc} or newer)"
+  oldest="$(printf '%s\n%s\n' "${min_glibc}" "${glibc_version}" | sort -V | head -n 1)"
+  [ "${oldest}" = "${min_glibc}" ] ||
+    die "glibc ${glibc_version} is too old; binstaller requires glibc ${min_glibc} or newer"
+fi
 
 if [ "${VERSION}" = "latest" ]; then
   info "resolving latest release version"
@@ -61,7 +81,8 @@ archive="binstaller-${VERSION}-${target}.tar.gz"
 base_url="https://github.com/${REPO}/releases/download/${VERSION}"
 
 tmp_dir="$(mktemp -d)"
-trap 'rm -rf "${tmp_dir}"' EXIT INT TERM
+trap 'rm -rf "${tmp_dir}"' EXIT
+trap 'exit 1' INT TERM
 
 info "downloading ${base_url}/${archive}"
 curl --proto '=https' --tlsv1.2 -fsSL "${base_url}/${archive}" -o "${tmp_dir}/${archive}"
@@ -77,7 +98,7 @@ cd "${tmp_dir}"
 
 info "verifying checksum"
 if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum -c "${archive}.sha256" || die "checksum verification failed"
+  sha256sum -c --strict "${archive}.sha256" || die "checksum verification failed"
 elif command -v shasum >/dev/null 2>&1; then
   shasum -a 256 -c "${archive}.sha256" || die "checksum verification failed"
 else
@@ -86,10 +107,11 @@ fi
 
 if command -v cosign >/dev/null 2>&1; then
   info "verifying keyless release signature"
+  repo_regexp="$(printf '%s\n' "${REPO}" | sed 's/\./\\./g')"
   cosign verify-blob "${archive}" \
     --bundle "${archive}.sigstore.json" \
     --certificate-identity-regexp \
-      '^https://github.com/worxbend/binstaller/.github/workflows/release.yml@refs/(tags/.+|heads/main)$' \
+      "^https://github.com/${repo_regexp}/.github/workflows/release.yml@refs/(tags/.+|heads/main)$" \
     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
     >/dev/null || die "Sigstore verification failed"
 else
@@ -112,7 +134,7 @@ path_line="export PATH=\"${INSTALL_DIR}:\$PATH\""
 # add_to_rc adds the install directory to a shell startup file when it is not already present.
 add_to_rc() {
   rc_file="$1"
-  if [ -f "${rc_file}" ] && grep -qF "${INSTALL_DIR}" "${rc_file}"; then
+  if [ -f "${rc_file}" ] && grep -qxF "${path_line}" "${rc_file}"; then
     return 0
   fi
   printf '\n# Added by the binstaller install script\n%s\n' "${path_line}" >> "${rc_file}"

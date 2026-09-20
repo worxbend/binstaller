@@ -6,10 +6,15 @@ import utest.*
 
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentLinkedQueue
+import scala.compiletime.constValueTuple
+import scala.deriving.Mirror
 import scala.jdk.CollectionConverters.*
 
 /** Turning a manifest into a `ResolvedPlan`: variables, versions, policy and path validation. */
 object PlanResolutionTest extends TestSuite with CoreTestSupport:
+
+  private inline def fieldNames[T](using mirror: Mirror.ProductOf[T]): Set[String] =
+    constValueTuple[mirror.MirroredElemLabels].toList.map(_.toString).toSet
 
   val tests: Tests = Tests:
     test("pinned versions interpolate into URLs and paths"):
@@ -31,9 +36,9 @@ object PlanResolutionTest extends TestSuite with CoreTestSupport:
     test("host selectors exclude non-matching tools before version resolution"):
       val requestedUrls = ConcurrentLinkedQueue[String]()
       val client        = new HttpTextClient:
-        def getText(url: String): Either[HttpTextError, String] =
+        def getTextWithProvenance(url: String): Either[HttpTextError, HttpTextResponse] =
           requestedUrls.add(url)
-          Right("1.0.0")
+          Right(HttpTextResponse("1.0.0", UrlProvenance.direct(url)))
 
       val profile = ConfigModule.loadString(hostSelectedYaml) match
         case Right(value) => value
@@ -62,6 +67,33 @@ object PlanResolutionTest extends TestSuite with CoreTestSupport:
       assert(ManifestFingerprint.profile(original) != ManifestFingerprint.profile(osChanged))
       assert(ManifestFingerprint.profile(original) !=
         ManifestFingerprint.profile(architectureChanged))
+
+    test("manifest fingerprint covers every field of the fingerprint-relevant config types"):
+      // Reflect over the config schema so a new field fails here until ManifestFingerprint hashes
+      // it; otherwise 'edit manifest ⇒ lock invalid' silently stops holding for that field.
+      val actual = Map(
+        "BinaryDistributionProfile" -> fieldNames[binstaller.config.BinaryDistributionProfile],
+        "ManifestMetadata"          -> fieldNames[binstaller.config.ManifestMetadata],
+        "ProfileSpec"               -> fieldNames[binstaller.config.ProfileSpec],
+        "InstallPolicy"             -> fieldNames[binstaller.config.InstallPolicy],
+        "PlanEntry"                 -> fieldNames[binstaller.config.PlanEntry],
+        "WhenClause"                -> fieldNames[binstaller.config.WhenClause],
+        "OsClause"                  -> fieldNames[binstaller.config.OsClause],
+        "BinaryToolSpec"            -> fieldNames[binstaller.config.BinaryToolSpec],
+        "DownloadSpec"              -> fieldNames[binstaller.config.DownloadSpec],
+        "ChecksumSpec"              -> fieldNames[binstaller.config.ChecksumSpec],
+        "ChecksumDiscoverySpec"     -> fieldNames[binstaller.config.ChecksumDiscoverySpec],
+        "ArchiveSpec"               -> fieldNames[binstaller.config.ArchiveSpec],
+        "ArchiveExtract"            -> fieldNames[binstaller.config.ArchiveExtract],
+        "ExtractMapping"            -> fieldNames[binstaller.config.ExtractMapping],
+        "ExecutableSpec"            -> fieldNames[binstaller.config.ExecutableSpec],
+        "SymlinkSpec"               -> fieldNames[binstaller.config.SymlinkSpec],
+        "VersionSource.Pinned"      -> fieldNames[binstaller.config.VersionSource.Pinned],
+        "VersionSource.Dynamic"     -> fieldNames[binstaller.config.VersionSource.Dynamic],
+        "VersionSource.Resolver"    -> fieldNames[binstaller.config.VersionSource.Resolver]
+      )
+
+      assert(actual == ManifestFingerprint.coveredFields)
 
     test("dynamic latest-url remains dynamic without a concrete version"):
       val plan = resolve(dynamicLatestUrlYaml)
@@ -96,6 +128,25 @@ object PlanResolutionTest extends TestSuite with CoreTestSupport:
       assert(plan.policy.allowDynamicLatestUrls == PolicyAllowance.Allowed)
       assert(plan.policy.allowMissingChecksums == PolicyAllowance.Allowed)
       assert(tool.download.archive.exists(_.original.archiveType == ArchiveType.TarXz))
+
+    test("strict policy rejects latest download URLs with a query or fragment"):
+      val queryErrors = resolveErrors(strictPolicyYaml().replace(
+        "https://example.invalid/latest/download/alpha.tar.xz",
+        "https://example.invalid/latest?file=alpha.tar.xz"
+      ))
+      val fragmentErrors = resolveErrors(strictPolicyYaml().replace(
+        "https://example.invalid/latest/download/alpha.tar.xz",
+        "https://example.invalid/latest#alpha"
+      ))
+
+      assert(queryErrors.exists(error =>
+        error.path == "spec.plan[0].spec.download.url" &&
+          error.message.contains("strict-policy[dynamic-latest-url]")
+      ))
+      assert(fragmentErrors.exists(error =>
+        error.path == "spec.plan[0].spec.download.url" &&
+          error.message.contains("strict-policy[dynamic-latest-url]")
+      ))
 
     test("unresolved variables and missing version values produce validation-style errors"):
       val errors = resolveErrors(invalidVariablesYaml)
@@ -247,3 +298,26 @@ object PlanResolutionTest extends TestSuite with CoreTestSupport:
       assert(planResult.status == InstallerRunStatus.Failed)
       assert(planResult.lines.exists(_.contains("strict-policy[missing-checksum]")))
       assert(planResult.lines.exists(_.contains("suggestion[missing-checksum]")))
+
+    test("error line rendering applies the supplied redactions"):
+      val secret     = "super-secret-resolver-token"
+      val redactions = SensitiveValueRedactions(Vector(secret))
+
+      val resolveLines = ResolvePlanError.renderLines(
+        ResolvePlanError.SelectionFailed(Vector(s"token $secret rejected")),
+        redactions
+      )
+      val lockLines = LockCommandError.renderLines(
+        LockCommandError.InvalidPath(s"/locks/$secret.lock.json", "bad path"),
+        redactions
+      )
+      val applyLines = LockedApplyError.renderLines(
+        LockedApplyError.Incompatible(Path.of(s"/locks/$secret.lock.json"), "mismatch"),
+        redactions
+      )
+
+      assert(resolveLines == Vector("selection: token <redacted> rejected"))
+      assert(lockLines == Vector("lock path '/locks/<redacted>.lock.json' is invalid: bad path"))
+      assert(applyLines == Vector(
+        "locked apply refused by /locks/<redacted>.lock.json: mismatch"
+      ))

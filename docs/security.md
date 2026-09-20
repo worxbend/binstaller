@@ -72,6 +72,24 @@ Extraction enforces an aggregate expanded-byte budget across all copied members,
 independent of the compressed download cap, to bound decompression bombs that
 would otherwise exhaust disk.
 
+### Extraction Budgets
+
+Extraction refuses an archive as soon as it would exceed any of these budgets:
+
+- Bytes written to disk across all members: 1 GiB.
+- Bytes inflated from the compressed stream, including members that are only
+  skipped over: 4 GiB. This is the decompression-bomb guard.
+- Entry count: 65536, bounding archives of millions of tiny members.
+- Wall-clock time: 5 minutes, catching degenerate stalls that stay under the
+  byte budgets.
+
+A very large but legitimate archive can trip these limits. Extraction then
+fails before the install is replaced, the staged tree is discarded, and the
+previous install stays in place. The failure message names the exceeded
+budget (extracted byte limit, inflated byte limit, entry count, or time
+budget), which is the signal to re-check whether the artifact is what it
+claims to be.
+
 Known deferred archive gaps are documented in [Hardening Review](hardening-review.md).
 
 ## Checksum Policy

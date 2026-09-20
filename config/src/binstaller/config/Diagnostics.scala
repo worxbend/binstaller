@@ -15,11 +15,13 @@ package binstaller.config
 object Diagnostics:
 
   /**
-   * Message text for `error`, falling back to its cause's message and finally to its class name.
+   * Message text for `error`, falling back to the deepest cause's message and finally to its class
+   * name.
    *
    * A present message is returned unchanged and unprefixed, so this only alters output in the case
    * where the alternative was the word "null".
    */
-  def describe(error: Throwable): String = Option(error.getMessage)
-    .orElse(Option(error.getCause).flatMap(cause => Option(cause.getMessage)))
-    .getOrElse(error.getClass.getName)
+  def describe(error: Throwable): String = Option(error.getMessage).getOrElse:
+    error.getCause match
+      case null  => error.getClass.getName
+      case cause => describe(cause)

@@ -29,10 +29,10 @@ private[core] final class ResolvingBinaryInstallerService(
 ) extends BinaryInstaller:
 
   def plan(request: PlanRequest): Either[ResolvePlanError, ResolvedPlan] =
-    resolveSelectedPreparedPlan(request).map(_.plan)
+    resolveSelectedPreparedPlan(request.profile, request.selection).map(_.plan)
 
   def lock(request: LockRequest): Either[LockCommandError, LockReport] =
-    resolveSelectedPreparedPlan(request)
+    resolveSelectedPreparedPlan(request.profile, request.selection)
       .left
       .map(LockCommandError.ResolutionFailed.apply)
       .flatMap(prepared => writeLock(prepared, request.outputPath))
@@ -119,16 +119,6 @@ private[core] final class ResolvingBinaryInstallerService(
   ): Either[ResolvePlanError, PreparedPlan] = resolveFromOptions(options).flatMap: prepared =>
     ToolSelector.select(prepared.plan, options.selection).map: selected =>
       prepared.copy(plan = selected)
-
-  private def resolveSelectedPreparedPlan(
-      request: PlanRequest
-  ): Either[ResolvePlanError, PreparedPlan] =
-    resolveSelectedPreparedPlan(request.profile, request.selection)
-
-  private def resolveSelectedPreparedPlan(
-      request: LockRequest
-  ): Either[ResolvePlanError, PreparedPlan] =
-    resolveSelectedPreparedPlan(request.profile, request.selection)
 
   private def resolveSelectedPreparedPlan(
       profileInput: ProfileInput,
@@ -222,8 +212,9 @@ private[core] final class ResolvingBinaryInstallerService(
         newer = statuses.get(tool.name) match
           case Some(GitHubReleaseVersions.LatestReleaseStatus.Newer(tag)) =>
             NewerVersionStatus.Available(tag)
-          case Some(GitHubReleaseVersions.LatestReleaseStatus.Unknown) => NewerVersionStatus.Unknown
-          case _ => NewerVersionStatus.UpToDate
+          case Some(GitHubReleaseVersions.LatestReleaseStatus.UpToDate) =>
+            NewerVersionStatus.UpToDate
+          case _ => NewerVersionStatus.Unknown
       )
     // Redact once here, before the rows leave core, so a renderer consuming `versionRows` gets the
     // same protection as one reading `lines`.
@@ -248,19 +239,24 @@ private[core] final class ResolvingBinaryInstallerService(
   private def renderVersionSummaryTable(rows: Vector[VersionSummaryRow]): Vector[String] =
     val headers =
       VersionSummaryRow("package", "version", NewerVersionStatus.Available("newer version"))
-    val displayRows  = headers +: rows
-    val packageWidth = displayRows.map(_.packageName.length).max
-    val versionWidth = displayRows.map(_.version.length).max
+    val displayRows = headers +: rows
+    val layout      = VersionSummaryRow.layoutFor(displayRows)
     displayRows.map: row =>
-      s"${row.packageName.padTo(packageWidth, ' ')}  " +
-        s"${row.version.padTo(versionWidth, ' ')}  " +
+      s"${row.packageName.padTo(layout.packageWidth, ' ')}  " +
+        s"${row.version.padTo(layout.versionWidth, ' ')}  " +
         NewerVersionStatus.render(row.newer)
 
-  private def renderError(error: ResolvePlanError): InstallerResult =
-    InstallerResult(ResolvePlanError.renderLines(error), InstallerRunStatus.Failed)
+  // The resolved plan's redactions are a copy of resolutionOptions.redactions, so the options
+  // field redacts error surfaces even on paths where resolution failed and no plan exists.
+  private def renderError(error: ResolvePlanError): InstallerResult = InstallerResult(
+    ResolvePlanError.renderLines(error, resolutionOptions.redactions),
+    InstallerRunStatus.Failed
+  )
 
-  private def renderLockCommandError(error: LockCommandError): InstallerResult =
-    InstallerResult(LockCommandError.renderLines(error), InstallerRunStatus.Failed)
+  private def renderLockCommandError(error: LockCommandError): InstallerResult = InstallerResult(
+    LockCommandError.renderLines(error, resolutionOptions.redactions),
+    InstallerRunStatus.Failed
+  )
 
   private def renderLockReport(report: LockReport): InstallerResult = InstallerResult(
     Vector(
@@ -299,8 +295,10 @@ private[core] final class ResolvingBinaryInstallerService(
     case LegacyLockValidationError.ValidationFailed(lockedApplyError) =>
       renderLockedApplyError(lockedApplyError)
 
-  private def renderLockedApplyError(error: LockedApplyError): InstallerResult =
-    InstallerResult(LockedApplyError.renderLines(error), InstallerRunStatus.Failed)
+  private def renderLockedApplyError(error: LockedApplyError): InstallerResult = InstallerResult(
+    LockedApplyError.renderLines(error, resolutionOptions.redactions),
+    InstallerRunStatus.Failed
+  )
 
   private def applyLockedChecksums(
       prepared: PreparedPlan,

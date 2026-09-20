@@ -39,8 +39,9 @@ Compilation treats warnings as errors, including unused declarations and discard
 values. Fix the cause of a warning in the affected code; keep the same gate for
 production code, tests, and examples.
 
-The `Checks` workflow runs formatting, compilation, tests, and the CLI help smoke
-test on Linux and macOS for pull requests and pushes to `main`.
+The `Checks` workflow runs formatting, a `git diff --check` whitespace check,
+compilation, tests, and the CLI help smoke test on Linux and macOS for pull
+requests and pushes to `main`.
 
 When changing config models, test both YAML decoding and
 `BinaryDistributionProfile.validated(...)`. Checksum declarations should cover

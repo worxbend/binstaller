@@ -14,7 +14,9 @@ import binstaller.core.ToolSelection
 import binstaller.core.VerboseOutput
 import picocli.CommandLine
 import picocli.CommandLine.Option as CliOption
+import picocli.CommandLine.Spec as CliSpec
 import picocli.CommandLine.Command
+import picocli.CommandLine.Model.CommandSpec
 import picocli.CommandLine.ScopeType
 
 import java.io.PrintWriter
@@ -34,7 +36,7 @@ object CliModule:
 
   /** Run the CLI with injectable writers for tests or alternate launchers. */
   def run(args: Vector[String], out: PrintWriter, err: PrintWriter): Int =
-    run(args, out, err, CliOutputStyle.Ansi)
+    run(args, out, err, CliOutputStyle.Plain)
 
   private[cli] def run(
       args: Vector[String],
@@ -48,7 +50,7 @@ object CliModule:
       service: BinaryInstallerService,
       out: PrintWriter,
       err: PrintWriter
-  ): CommandLine = commandLine(service, out, err, CliOutputStyle.Ansi)
+  ): CommandLine = commandLine(service, out, err, CliOutputStyle.Plain)
 
   private[cli] def commandLine(
       service: BinaryInstallerService,
@@ -119,7 +121,13 @@ private[cli] object DefaultConfig:
   description = Array("Inspect and apply binary installer manifests.")
 )
 private[cli] final class BinstallerCommand(out: PrintWriter) extends Callable[Integer]:
-  private var globalOptions: GlobalOptions = GlobalOptions.empty
+  private var globalOptions: GlobalOptions     = GlobalOptions.empty
+  private var commandSpec: Option[CommandSpec] = None
+
+  // Injected through a method, not a field: the native-image reflect config registers this class's
+  // methods but not its fields, so field injection would NPE in the shipped binary.
+  @CliSpec
+  def setCommandSpec(spec: CommandSpec): Unit = commandSpec = Some(spec)
 
   @CliOption(
     names = Array("--config"),
@@ -163,9 +171,8 @@ private[cli] final class BinstallerCommand(out: PrintWriter) extends Callable[In
   )
 
   override def call(): Integer =
-    out.println("binstaller - binary installer")
-    out.println("Use --help to show commands.")
-    Integer.valueOf(0)
+    commandSpec.foreach(_.commandLine().usage(out))
+    Integer.valueOf(CommandLine.ExitCode.USAGE)
 
 private[cli] abstract class ConfiguredCommand(
     root: BinstallerCommand,
@@ -180,8 +187,8 @@ private[cli] abstract class ConfiguredCommand(
 
   protected def executeWithOptions(
       action: InstallerOptions => InstallerResult,
-      renderResult: InstallerResult => InstallerResult
-  ): Integer = render(renderResult(action(installerOptions)))
+      transformResult: InstallerResult => InstallerResult
+  ): Integer = render(transformResult(action(installerOptions)))
 
   protected def render(result: InstallerResult): Integer =
     result.lines.foreach(out.println)

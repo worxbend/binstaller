@@ -33,4 +33,4 @@ object ToolName:
   private[config] val invalidSentinel: ToolName = ToolName("<invalid>")
 
   /** Wrap a name this program already validated. */
-  private[binstaller] def unsafe(value: String): ToolName = ToolName(value)
+  private[binstaller] def trusted(value: String): ToolName = ToolName(value)

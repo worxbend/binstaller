@@ -3,14 +3,12 @@ package binstaller.config
 private[config] object YamlDecode:
   type YamlMap = Map[String, Any]
 
-  def requiredMap(map: YamlMap, path: String): DecodeResult[YamlMap] =
-    val key = path.split("\\.").last
+  def requiredMap(map: YamlMap, key: String, path: String): DecodeResult[YamlMap] =
     map.get(key) match
       case Some(value) => asMap(value, path)
       case None        => DecodeResult.invalid(Map.empty, path, "required map is missing")
 
-  def requiredList(map: YamlMap, path: String): DecodeResult[Vector[Any]] =
-    val key = path.split("\\.").last
+  def requiredList(map: YamlMap, key: String, path: String): DecodeResult[Vector[Any]] =
     map.get(key) match
       case Some(value) => asList(value, path)
       case None        => DecodeResult.invalid(Vector.empty, path, "required list is missing")
@@ -48,10 +46,6 @@ private[config] object YamlDecode:
         child.errors ++ decoded.flatMap((_, result) => result.errors)
       )
 
-  def requiredString(map: YamlMap, path: String): DecodeResult[String] =
-    val key = path.split("\\.").last
-    requiredString(map, key, path)
-
   def requiredString(map: YamlMap, key: String, path: String): DecodeResult[String] =
     map.get(key) match
       case Some(value: String) if value.trim.nonEmpty => DecodeResult.valid(value)
@@ -83,7 +77,7 @@ private[config] object YamlDecode:
     case _                       => DecodeResult.invalid(Map.empty, path, "value must be a map")
 
   def asList(value: Any, path: String): DecodeResult[Vector[Any]] = value match
-    case list: Vector[?] => DecodeResult.valid(list.asInstanceOf[Vector[Any]])
+    case list: Vector[?] => DecodeResult.valid(list)
     case _               => DecodeResult.invalid(Vector.empty, path, "value must be a list")
 
   def enumValue[A](
@@ -94,16 +88,7 @@ private[config] object YamlDecode:
       render: A => String
   ): DecodeResult[A] =
     if input.errors.nonEmpty then DecodeResult(fallback, input.errors)
-    else
-      values.find(value => render(value) == input.value) match
-        case Some(value) => DecodeResult(value, input.errors)
-        case None        => DecodeResult(
-            fallback,
-            input.errors :+ ValidationError(
-              path,
-              s"unsupported value '${input.value}', expected one of ${values.map(render).mkString(", ")}"
-            )
-          )
+    else matchEnum(input.value, path, values, fallback, render)
 
   def optionalEnumValue[A](
       input: DecodeResult[Option[String]],
@@ -116,12 +101,20 @@ private[config] object YamlDecode:
     else
       input.value match
         case None        => DecodeResult.valid(fallback)
-        case Some(value) => values.find(candidate => render(candidate) == value) match
-            case Some(candidate) => DecodeResult.valid(candidate)
-            case None            => DecodeResult(
-                fallback,
-                Vector(ValidationError(
-                  path,
-                  s"unsupported value '$value', expected one of ${values.map(render).mkString(", ")}"
-                ))
-              )
+        case Some(value) => matchEnum(value, path, values, fallback, render)
+
+  private def matchEnum[A](
+      value: String,
+      path: String,
+      values: Vector[A],
+      fallback: A,
+      render: A => String
+  ): DecodeResult[A] = values.find(candidate => render(candidate) == value) match
+    case Some(candidate) => DecodeResult.valid(candidate)
+    case None            => DecodeResult(
+        fallback,
+        Vector(ValidationError(
+          path,
+          s"unsupported value '$value', expected one of ${values.map(render).mkString(", ")}"
+        ))
+      )

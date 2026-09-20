@@ -10,6 +10,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
+import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPInputStream
 import java.util.zip.ZipInputStream
 import scala.collection.mutable
@@ -54,6 +55,10 @@ private[core] object ArchiveExtractor:
 
   /** Shared copy/skip/drain buffer size. Not a tuning knob — just one number instead of four. */
   private val copyBufferBytes: Int = 8192
+
+  // The time budget is sampled inside the streaming loops too, so one pathological member cannot
+  // blow the budget between entry boundaries. 1024 chunks of copyBufferBytes is 8 MiB.
+  private val deadlineCheckIntervalChunks: Int = 1024
 
   private[core] def validateExtractedSize(bytes: Long): Either[String, Unit] =
     if bytes >= 0 && bytes <= maxExtractedBytes then Right(())
@@ -132,12 +137,12 @@ private[core] object ArchiveExtractor:
       run.register(name)
       // Zip entry sizes are advisory and may be absent, so drain the actual inflated bytes and
       // charge the budget per chunk rather than trusting the declared size.
-      if entry.isDirectory then boundedDrain(zip, run.budget)
+      if entry.isDirectory then boundedDrain(zip, run)
       else
         val targets = run.targetsFor(name)
-        if targets.isEmpty then boundedDrain(zip, run.budget)
+        if targets.isEmpty then boundedDrain(zip, run)
         else
-          copyStream(zip, targets.head, run.budget)
+          copyStream(zip, targets.head, run)
           duplicateTo(targets.head, targets.tail, run.budget)
       zip.closeEntry()
       entry = zip.getNextEntry
@@ -149,12 +154,12 @@ private[core] object ArchiveExtractor:
         case ArchiveEntryKind.Directory =>
           // Directory members carry no payload, but skip through the budget defensively so a
           // bogus size cannot inflate unbounded.
-          boundedSkip(content, entry.size, run.budget)
+          boundedSkip(content, entry.size, run)
         case ArchiveEntryKind.File =>
           val targets = run.targetsFor(entry.name)
-          if targets.isEmpty then boundedSkip(content, entry.size, run.budget)
+          if targets.isEmpty then boundedSkip(content, entry.size, run)
           else
-            copyBounded(content, targets.head, entry.size, run.budget)
+            copyBounded(content, targets.head, entry.size, run)
             duplicateTo(targets.head, targets.tail, run.budget)
 
   private final case class DirPrefix(prefix: String, toRoot: String, origin: String)
@@ -200,19 +205,26 @@ private[core] object ArchiveExtractor:
       limits: ArchiveExtractionLimits
   ):
     val budget: ExtractedByteBudget = ExtractedByteBudget(limits)
-    private val deadline: Long      = System.currentTimeMillis() + limits.timeBudgetMillis
-    private val seenSources         = mutable.HashSet.empty[String]
-    private val usedTargets         = mutable.HashSet.empty[Path]
-    private val matchedFiles        = mutable.HashSet.empty[String]
-    private val matchedDirectories  = mutable.HashSet.empty[String]
-    private var entryCount          = 0
+
+    private val deadlineNanos: Long = System.nanoTime() +
+      TimeUnit.MILLISECONDS.toNanos(limits.timeBudgetMillis)
+
+    private val seenSources        = mutable.HashSet.empty[String]
+    private val usedTargets        = mutable.HashSet.empty[Path]
+    private val matchedFiles       = mutable.HashSet.empty[String]
+    private val matchedDirectories = mutable.HashSet.empty[String]
+    private var entryCount         = 0
 
     def beginEntry(): Unit =
       entryCount += 1
       if entryCount > limits.maxEntries then
         throw IllegalArgumentException("archive exceeds max entry count")
-      if System.currentTimeMillis() > deadline then
-        throw IllegalArgumentException("archive extraction exceeded time budget")
+      checkDeadline()
+
+    // nanoTime rather than currentTimeMillis: the budget measures elapsed work and must not move
+    // with wall-clock adjustments. Subtraction is overflow-safe across a nanoTime wrap.
+    def checkDeadline(): Unit = if System.nanoTime() - deadlineNanos > 0L then
+      throw IllegalArgumentException("archive extraction exceeded time budget")
 
     def register(name: String): Unit = if !seenSources.add(name) then
       throw IllegalArgumentException(s"duplicate archive member: $name")
@@ -455,24 +467,28 @@ private[core] object ArchiveExtractor:
 
   private def normalizedArchivePath(value: String): Either[String, String] =
     val path = value.stripSuffix("/")
-    // Archive names are treated as POSIX-like relative paths independent of host OS. Backslash,
-    // drive prefixes, absolute roots, controls, and `..` are rejected before copy planning.
-    if path.isEmpty then Left("archive path must not be empty")
-    else if path == "." then Right(path)
-    else if path.exists(_ < ' ') then Left(s"archive path contains control character: $value")
-    else if path.contains('\\') then Left(s"archive path contains backslash: $value")
-    else if path.matches("^[A-Za-z]:.*") then Left(s"archive path is drive-prefixed: $value")
+    // Archive names are treated as POSIX-like relative paths independent of host OS. The shared
+    // syntax rules reject empties, controls, backslashes, drive prefixes, and traversal; absolute
+    // roots are rejected below, before copy planning.
+    if path == "." then Right(path)
     else
-      val nioPath = Path.of(path)
-      if nioPath.isAbsolute then Left(s"archive path is absolute: $value")
-      else
-        val segments = path.split('/').toVector
-        val unsafe   = segments.exists(_ == "..")
-        if unsafe then Left(s"archive path escapes staging directory: $value")
+      PathSyntaxRules.validate(path).left.map(archivePathViolation(_, value)).flatMap: _ =>
+        if Path.of(path).isAbsolute then Left(s"archive path is absolute: $value")
         else
-          val normalized = segments.filterNot(segment => segment.isEmpty || segment == ".")
+          val normalized = path.split('/').toVector
+            .filterNot(segment => segment.isEmpty || segment == ".")
           if normalized.isEmpty then Right(".")
           else Right(normalized.mkString("/"))
+
+  private def archivePathViolation(violation: PathSyntaxRules.Violation, value: String): String =
+    violation match
+      case PathSyntaxRules.Violation.Empty             => "archive path must not be empty"
+      case PathSyntaxRules.Violation.ControlCharacters =>
+        s"archive path contains control character: $value"
+      case PathSyntaxRules.Violation.Backslashes       => s"archive path contains backslash: $value"
+      case PathSyntaxRules.Violation.DrivePrefixed     => s"archive path is drive-prefixed: $value"
+      case PathSyntaxRules.Violation.TraversalSegments =>
+        s"archive path escapes staging directory: $value"
 
   private def resolveInside(root: Path, relative: String): Either[String, Path] =
     val clean = if relative.isEmpty then "." else relative
@@ -513,32 +529,42 @@ private[core] object ArchiveExtractor:
   private def copyStream(
       input: InputStream,
       target: Path,
-      budget: ExtractedByteBudget
+      run: ExtractionRun
   ): Unit = writingTo(target): output =>
     val buffer = Array.ofDim[Byte](copyBufferBytes)
     var count  = input.read(buffer)
+    var chunks = 0
     while count != -1 do
-      budget.extract(count.toLong)
+      run.budget.extract(count.toLong)
       output.write(buffer, 0, count)
+      chunks += 1
+      if chunks == deadlineCheckIntervalChunks then
+        run.checkDeadline()
+        chunks = 0
       count = input.read(buffer)
 
   private def copyBounded(
       input: InputStream,
       target: Path,
       bytes: Long,
-      budget: ExtractedByteBudget
+      run: ExtractionRun
   ): Unit =
     // Charged before a single byte is written, so an oversized member is rejected rather than
     // partially extracted.
-    budget.extract(bytes)
+    run.budget.extract(bytes)
     writingTo(target): output =>
       val buffer    = Array.ofDim[Byte](copyBufferBytes)
       var remaining = bytes
+      var chunks    = 0
       while remaining > 0 do
         val count = input.read(buffer, 0, math.min(buffer.length.toLong, remaining).toInt)
         if count == -1 then throw IllegalArgumentException("unexpected end of tar entry")
         output.write(buffer, 0, count)
         remaining = remaining - count
+        chunks += 1
+        if chunks == deadlineCheckIntervalChunks then
+          run.checkDeadline()
+          chunks = 0
 
   // A disk-to-disk duplicate does not inflate the archive again, but it is additional extracted
   // output and must consume the on-disk byte budget.
@@ -555,21 +581,31 @@ private[core] object ArchiveExtractor:
 
   // Skip a tar member of known length, charging its declared size to the budget up front so a
   // bomb is rejected before it can inflate, and failing loudly if the stream ends early.
-  private def boundedSkip(input: InputStream, bytes: Long, budget: ExtractedByteBudget): Unit =
-    budget.inflate(bytes)
+  private def boundedSkip(input: InputStream, bytes: Long, run: ExtractionRun): Unit =
+    run.budget.inflate(bytes)
     val buffer    = Array.ofDim[Byte](copyBufferBytes)
     var remaining = bytes
+    var chunks    = 0
     while remaining > 0 do
       val count = input.read(buffer, 0, math.min(buffer.length.toLong, remaining).toInt)
       if count == -1 then throw IllegalArgumentException("unexpected end of tar entry")
       remaining = remaining - count
+      chunks += 1
+      if chunks == deadlineCheckIntervalChunks then
+        run.checkDeadline()
+        chunks = 0
 
   // Drain a stream of unknown length (a zip member), charging every inflated chunk to the budget.
-  private def boundedDrain(input: InputStream, budget: ExtractedByteBudget): Unit =
+  private def boundedDrain(input: InputStream, run: ExtractionRun): Unit =
     val buffer = Array.ofDim[Byte](copyBufferBytes)
     var count  = input.read(buffer)
+    var chunks = 0
     while count != -1 do
-      budget.inflate(count.toLong)
+      run.budget.inflate(count.toLong)
+      chunks += 1
+      if chunks == deadlineCheckIntervalChunks then
+        run.checkDeadline()
+        chunks = 0
       count = input.read(buffer)
 
   private final class ExtractedByteBudget private (limits: ArchiveExtractionLimits):

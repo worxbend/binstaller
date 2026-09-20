@@ -26,10 +26,14 @@ enum LockedApplyError:
 object LockedApplyError:
 
   /** Render a locked-apply failure into concise user-facing lines. */
-  def renderLines(error: LockedApplyError): Vector[String] = error match
-    case LockedApplyError.LockFile(lockError)         => Vector(LockFileError.render(lockError))
+  def renderLines(
+      error: LockedApplyError,
+      redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
+  ): Vector[String] = error match
+    case LockedApplyError.LockFile(lockError) =>
+      Vector(RenderSafety.display(LockFileError.render(lockError), redactions))
     case LockedApplyError.Incompatible(path, message) =>
-      Vector(s"locked apply refused by $path: $message")
+      Vector(RenderSafety.display(s"locked apply refused by $path: $message", redactions))
 
 private[core] object LockedApplyValidator:
 
@@ -79,12 +83,19 @@ private[core] object LockedApplyValidator:
       prepared: PreparedPlan,
       lockFile: LockFile,
       metadataClient: BinaryMetadataClient
-  ): Option[String] = schemaProblem(lockFile)
-    .orElse(profileProblem(prepared, lockFile))
-    .orElse(fingerprintProblem(prepared, lockFile))
-    .orElse(duplicateToolProblem(lockFile))
-    .orElse(lockedVersionTupleProblem(lockFile))
-    .orElse(toolProblem(prepared.plan.tools, lockFile, metadataClient))
+  ): Option[String] =
+    val parsedVersions = parseLockedVersions(lockFile)
+    schemaProblem(lockFile)
+      .orElse(profileProblem(prepared, lockFile))
+      .orElse(fingerprintProblem(prepared, lockFile))
+      .orElse(duplicateToolProblem(lockFile))
+      .orElse(lockedVersionTupleProblem(lockFile, parsedVersions))
+      .orElse(toolProblem(prepared.plan.tools, lockFile, parsedVersions, metadataClient))
+
+  private def parseLockedVersions(
+      lockFile: LockFile
+  ): Map[ToolName, Either[String, LockedVersion]] =
+    lockFile.tools.map(tool => tool.name -> LockedVersion.parse(tool.name, tool)).toMap
 
   private def schemaProblem(lockFile: LockFile): Option[String] =
     Option.when(lockFile.schemaVersion != LockFile.schemaVersion)(
@@ -108,27 +119,33 @@ private[core] object LockedApplyValidator:
     duplicates.toVector.map(_.value).sorted.headOption
       .map(name => s"duplicate lock entry for tool '$name'")
 
-  private def lockedVersionTupleProblem(lockFile: LockFile): Option[String] = lockFile.tools.view
-    .flatMap(tool => LockedVersion.parse(tool.name, tool).left.toOption)
+  private def lockedVersionTupleProblem(
+      lockFile: LockFile,
+      parsedVersions: Map[ToolName, Either[String, LockedVersion]]
+  ): Option[String] = lockFile.tools.view
+    .flatMap(tool => parsedVersions(tool.name).left.toOption)
     .headOption
 
   private def toolProblem(
       tools: Vector[ResolvedTool],
       lockFile: LockFile,
+      parsedVersions: Map[ToolName, Either[String, LockedVersion]],
       metadataClient: BinaryMetadataClient
   ): Option[String] =
     val lockedTools = lockFile.tools.map(tool => tool.name -> tool).toMap
     tools.view.flatMap(tool =>
       lockedTools.get(tool.name) match
         case None             => Some(s"missing lock entry for tool '${tool.name}'")
-        case Some(lockedTool) => validateTool(tool, lockedTool, metadataClient)
+        case Some(lockedTool) =>
+          validateTool(tool, lockedTool, parsedVersions(tool.name), metadataClient)
     ).headOption
 
   private def validateTool(
       tool: ResolvedTool,
       lockedTool: LockFileTool,
+      parsedVersion: Either[String, LockedVersion],
       metadataClient: BinaryMetadataClient
-  ): Option[String] = LockedVersion.parse(tool.name, lockedTool) match
+  ): Option[String] = parsedVersion match
     case Left(message)        => Some(message)
     case Right(lockedVersion) => incompleteProvenance(tool, lockedTool)
         .orElse(versionProblem(tool, lockedVersion))

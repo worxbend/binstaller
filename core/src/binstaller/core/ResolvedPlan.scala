@@ -137,6 +137,11 @@ object ResolvedPolicy:
    *
    * For call sites that install a single already-resolved tool and must not inherit permissions
    * from a manifest they never read.
+   *
+   * Note: `appsDir` is set to `installDir` itself here, a shape `containmentErrors` rejects for
+   * manifest-driven plans. That is deliberate and exempt: a restricted policy governs one tool that
+   * was already resolved outside plan validation, so there is no sibling tool the apps root could
+   * swallow, and the containment rule never runs against this policy.
    */
   def restricted(installDir: String): ResolvedPolicy = ResolvedPolicy(
     installDir,
@@ -249,17 +254,24 @@ enum ResolvePlanError:
 object ResolvePlanError:
 
   /** Render resolution failures into scrubbed user-facing lines. */
-  def renderLines(error: ResolvePlanError): Vector[String] = error match
-    case ResolvePlanError.ConfigLoadFailed(loadError) => renderConfigLoadError(loadError)
-    case ResolvePlanError.ValidationFailed(errors)    =>
-      errors.map(error => RenderSafety.display(s"${error.path}: ${error.message}"))
+  def renderLines(
+      error: ResolvePlanError,
+      redactions: SensitiveValueRedactions = SensitiveValueRedactions.empty
+  ): Vector[String] = error match
+    case ResolvePlanError.ConfigLoadFailed(loadError) =>
+      renderConfigLoadError(loadError, redactions)
+    case ResolvePlanError.ValidationFailed(errors) =>
+      errors.map(error => RenderSafety.display(s"${error.path}: ${error.message}", redactions))
     case ResolvePlanError.SelectionFailed(messages) =>
-      messages.map(message => RenderSafety.display(s"selection: $message"))
+      messages.map(message => RenderSafety.display(s"selection: $message", redactions))
 
-  private def renderConfigLoadError(error: ConfigLoadError): Vector[String] = error match
+  private def renderConfigLoadError(
+      error: ConfigLoadError,
+      redactions: SensitiveValueRedactions
+  ): Vector[String] = error match
     case ConfigLoadError.ValidationFailed(errors) =>
-      errors.map(error => RenderSafety.display(s"${error.path}: ${error.message}"))
+      errors.map(error => RenderSafety.display(s"${error.path}: ${error.message}", redactions))
     case ConfigLoadError.ReadFailed(path, message) =>
-      Vector(RenderSafety.display(s"config read failed for $path: $message"))
+      Vector(RenderSafety.display(s"config read failed for $path: $message", redactions))
     case ConfigLoadError.ParseFailed(message) =>
-      Vector(RenderSafety.display(s"config parse failed: $message"))
+      Vector(RenderSafety.display(s"config parse failed: $message", redactions))

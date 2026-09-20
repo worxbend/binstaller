@@ -8,21 +8,21 @@ private[config] object ManifestDecoder:
     val root = acc(asMap(value, "$"))
     acc.report(unknownKeyErrors(root, "$", Set("apiVersion", "kind", "metadata", "spec")))
     val apiVersion = acc(enumValue(
-      requiredString(root, "apiVersion"),
+      requiredString(root, "apiVersion", "apiVersion"),
       "apiVersion",
       ApiVersion.values.toVector,
       ApiVersion.V1Alpha1,
       _.value
     ))
     val kind = acc(enumValue(
-      requiredString(root, "kind"),
+      requiredString(root, "kind", "kind"),
       "kind",
       ManifestKind.values.toVector,
       ManifestKind.BinaryDistributionProfile,
       _.value
     ))
-    val metadata = acc(decodeMetadata(requiredMap(root, "metadata")))
-    val spec     = acc(decodeSpec(requiredMap(root, "spec")))
+    val metadata = acc(decodeMetadata(requiredMap(root, "metadata", "metadata")))
+    val spec     = acc(decodeSpec(requiredMap(root, "spec", "spec")))
     BinaryDistributionProfile(
       apiVersion = apiVersion,
       kind = kind,
@@ -34,7 +34,7 @@ private[config] object ManifestDecoder:
     DecodeResult.accumulate: acc =>
       val map = acc(input)
       acc.report(unknownKeyErrors(map, "metadata", Set("name", "labels", "annotations")))
-      val name        = acc(requiredString(map, "metadata.name"))
+      val name        = acc(requiredString(map, "name", "metadata.name"))
       val labels      = acc(optionalStringMap(map, "labels", "metadata.labels"))
       val annotations = acc(optionalStringMap(map, "annotations", "metadata.annotations"))
       ManifestMetadata(name, labels, annotations)
@@ -43,10 +43,10 @@ private[config] object ManifestDecoder:
     DecodeResult.accumulate: acc =>
       val map = acc(input)
       acc.report(unknownKeyErrors(map, "spec", Set("policy", "vars", "versions", "plan")))
-      val policy   = acc(decodePolicy(requiredMap(map, "spec.policy")))
+      val policy   = acc(decodePolicy(requiredMap(map, "policy", "spec.policy")))
       val vars     = acc(optionalStringMap(map, "vars", "spec.vars"))
-      val versions = acc(decodeVersions(requiredMap(map, "spec.versions")))
-      val plan     = acc(decodePlan(requiredList(map, "spec.plan")))
+      val versions = acc(decodeVersions(requiredMap(map, "versions", "spec.versions")))
+      val plan     = acc(decodePlan(requiredList(map, "plan", "spec.plan")))
       ProfileSpec(policy, vars, versions, plan)
 
   private def decodePolicy(input: DecodeResult[YamlMap]): DecodeResult[InstallPolicy] =
@@ -76,7 +76,7 @@ private[config] object ManifestDecoder:
         optionalBoolean(map, "continueOnError", "spec.policy.continueOnError", default = false)
           .map(PolicyOverride.fromBoolean)
       )
-      val appsDir           = acc(requiredString(map, "spec.policy.appsDir"))
+      val appsDir           = acc(requiredString(map, "appsDir", "spec.policy.appsDir"))
       val allowSudoSymlinks = acc(optionalBoolean(
         map,
         "allowSudoSymlinks",
@@ -126,11 +126,14 @@ private[config] object ManifestDecoder:
       case map: YamlMap @unchecked if map.contains("dynamic") =>
         DecodeResult.accumulate: acc =>
           acc.report(unknownKeyErrors(map, path, Set("dynamic")))
-          acc(decodeDynamicVersion(requiredMap(map, s"$path.dynamic"), s"$path.dynamic"))
+          acc(decodeDynamicVersion(requiredMap(map, "dynamic", s"$path.dynamic"), s"$path.dynamic"))
       case map: YamlMap @unchecked if map.contains("resolver") =>
         DecodeResult.accumulate: acc =>
           acc.report(unknownKeyErrors(map, path, Set("resolver")))
-          acc(decodeVersionResolver(requiredMap(map, s"$path.resolver"), s"$path.resolver"))
+          acc(decodeVersionResolver(
+            requiredMap(map, "resolver", s"$path.resolver"),
+            s"$path.resolver"
+          ))
       case _ => DecodeResult.invalid(
           VersionSource.Pinned(""),
           path,
@@ -166,23 +169,24 @@ private[config] object ManifestDecoder:
       VersionResolverKind.HttpText,
       _.value
     ))
-    val url = acc(requiredString(map, s"$path.url"))
+    val url = acc(requiredString(map, "url", s"$path.url"))
     VersionSource.Resolver(kind, url)
 
   private def decodePlan(input: DecodeResult[Vector[Any]]): DecodeResult[Vector[PlanEntry]] =
     DecodeResult.accumulate: acc =>
       val list = acc(input)
       list.zipWithIndex.map:
-        case (value, index) => acc(decodePlanEntry(asMap(value, s"spec.plan[$index]"), index))
+        case (value, index) =>
+          acc(decodePlanEntry(asMap(value, ManifestPath.planEntry(index)), index))
 
   private def decodePlanEntry(input: DecodeResult[YamlMap], index: Int): DecodeResult[PlanEntry] =
-    val path = s"spec.plan[$index]"
+    val path = ManifestPath.planEntry(index)
     DecodeResult.accumulate: acc =>
       val map = acc(input)
       acc.report(unknownKeyErrors(map, path, Set("name", "kind", "description", "when", "spec")))
-      val name = acc(requiredToolName(map, s"$path.name"))
+      val name = acc(requiredToolName(map, "name", ManifestPath.planEntryName(index)))
       val kind = acc(enumValue(
-        requiredString(map, s"$path.kind"),
+        requiredString(map, "kind", s"$path.kind"),
         s"$path.kind",
         PlanKind.values.toVector,
         PlanKind.BinaryTool,
@@ -190,7 +194,7 @@ private[config] object ManifestDecoder:
       ))
       val description = acc(optionalString(map, "description", s"$path.description"))
       val when        = acc(optionalWhen(map, s"$path.when"))
-      val spec        = acc(decodeBinaryToolSpec(requiredMap(map, s"$path.spec"), path))
+      val spec        = acc(decodeBinaryToolSpec(requiredMap(map, "spec", s"$path.spec"), path))
       PlanEntry(
         name = name,
         kind = kind,
@@ -229,14 +233,15 @@ private[config] object ManifestDecoder:
           "symlinks"
         )
       ))
-      val versionRef        = acc(requiredString(map, s"$path.versionRef"))
-      val installDir        = acc(requiredString(map, s"$path.installDir"))
+      val versionRef        = acc(requiredString(map, "versionRef", s"$path.versionRef"))
+      val installDir        = acc(requiredString(map, "installDir", s"$path.installDir"))
       val createDirectories =
         acc(optionalStringList(map, "createDirectories", s"$path.createDirectories"))
-      val download = acc(decodeDownload(requiredMap(map, s"$path.download"), path))
+      val download = acc(decodeDownload(requiredMap(map, "download", s"$path.download"), path))
       acc(unsupportedInstaller(map, s"$path.installer"))
-      val executables = acc(decodeExecutables(requiredList(map, s"$path.executables"), path))
-      val symlinks    = acc(decodeSymlinks(optionalList(map, "symlinks", s"$path.symlinks"), path))
+      val executables =
+        acc(decodeExecutables(requiredList(map, "executables", s"$path.executables"), path))
+      val symlinks = acc(decodeSymlinks(optionalList(map, "symlinks", s"$path.symlinks"), path))
       BinaryToolSpec(
         versionRef = versionRef,
         installDir = installDir,
@@ -254,8 +259,8 @@ private[config] object ManifestDecoder:
     DecodeResult.accumulate: acc =>
       val map = acc(input)
       acc.report(unknownKeyErrors(map, path, Set("url", "filename", "checksum", "archive")))
-      val url      = acc(requiredString(map, s"$path.url"))
-      val filename = acc(requiredString(map, s"$path.filename"))
+      val url      = acc(requiredString(map, "url", s"$path.url"))
+      val filename = acc(requiredString(map, "filename", s"$path.filename"))
       val checksum = acc(optionalChecksum(map, s"$path.checksum"))
       val archive  = acc(optionalArchive(map, s"$path.archive"))
       DownloadSpec(url, filename, checksum, archive)
@@ -267,7 +272,7 @@ private[config] object ManifestDecoder:
           val checksumMap = acc(asMap(value, path))
           acc.report(unknownKeyErrors(checksumMap, path, Set("algorithm", "value", "discover")))
           val algorithm = acc(enumValue(
-            requiredString(checksumMap, s"$path.algorithm"),
+            requiredString(checksumMap, "algorithm", s"$path.algorithm"),
             s"$path.algorithm",
             ChecksumAlgorithm.values.toVector,
             ChecksumAlgorithm.Sha256,
@@ -278,19 +283,23 @@ private[config] object ManifestDecoder:
           // The raw Option decides the "value or discover" shape rules; parsing happens after, so a
           // malformed digest is reported as a bad digest rather than as a missing one.
           acc.report(checksumShapeErrors(path, rawChecksum, discover))
-          val literal = rawChecksum.flatMap: value =>
-            Sha256Digest.fromString(value) match
-              case Right(digest) => Some(digest)
-              case Left(_)       =>
-                acc.report(Vector(ValidationError(
-                  s"$path.value",
-                  "sha256 checksum must be 64 hexadecimal characters"
-                )))
-                None
-          (rawChecksum, literal, discover) match
-            case (Some(_), Some(digest), None) => Some(ChecksumSpec(algorithm, digest))
-            case (None, _, Some(source))       => Some(ChecksumSpec.discovery(algorithm, source))
-            case _                             => None
+          parseLiteralChecksum(path, rawChecksum, acc) match
+            case Some(digest) => Some(ChecksumSpec(algorithm, digest))
+            case None         => discover.map(ChecksumSpec.discovery(algorithm, _))
+
+  private def parseLiteralChecksum(
+      path: String,
+      rawChecksum: Option[String],
+      acc: DecodeResult.Accumulator
+  ): Option[Sha256Digest] = rawChecksum.flatMap: value =>
+    Sha256Digest.fromString(value) match
+      case Right(digest) => Some(digest)
+      case Left(_)       =>
+        acc.report(Vector(ValidationError(
+          s"$path.value",
+          "sha256 checksum must be 64 hexadecimal characters"
+        )))
+        None
 
   private def optionalChecksumDiscovery(
       map: YamlMap,
@@ -298,13 +307,13 @@ private[config] object ManifestDecoder:
   ): DecodeResult[Option[ChecksumDiscoverySpec]] =
     optionalBlock(map, "discover", path, Set("type", "url", "file")): (sourceMap, acc) =>
       val kind = acc(enumValue(
-        requiredString(sourceMap, s"$path.type"),
+        requiredString(sourceMap, "type", s"$path.type"),
         s"$path.type",
         ChecksumDiscoveryKind.values.toVector,
         ChecksumDiscoveryKind.Sha256Sum,
         _.value
       ))
-      val url  = acc(requiredString(sourceMap, s"$path.url"))
+      val url  = acc(requiredString(sourceMap, "url", s"$path.url"))
       val file = acc(optionalString(sourceMap, "file", s"$path.file"))
       ChecksumDiscoverySpec(kind, url, file)
 
@@ -321,13 +330,14 @@ private[config] object ManifestDecoder:
   private def optionalArchive(map: YamlMap, path: String): DecodeResult[Option[ArchiveSpec]] =
     optionalBlock(map, "archive", path, Set("type", "extract")): (archiveMap, acc) =>
       val archiveType = acc(enumValue(
-        requiredString(archiveMap, s"$path.type"),
+        requiredString(archiveMap, "type", s"$path.type"),
         s"$path.type",
         ArchiveType.values.toVector,
         ArchiveType.Zip,
         _.value
       ))
-      val extract = acc(decodeArchiveExtract(requiredMap(archiveMap, s"$path.extract"), path))
+      val extract =
+        acc(decodeArchiveExtract(requiredMap(archiveMap, "extract", s"$path.extract"), path))
       ArchiveSpec(archiveType, extract)
 
   private def decodeArchiveExtract(
@@ -351,8 +361,8 @@ private[config] object ManifestDecoder:
       path: String
   ): DecodeResult[Vector[ExtractMapping]] =
     decodeItems(input, path, Set("from", "to")): (item, itemPath, acc) =>
-      val from = acc(requiredString(item, s"$itemPath.from"))
-      val to   = acc(requiredString(item, s"$itemPath.to"))
+      val from = acc(requiredString(item, "from", s"$itemPath.from"))
+      val to   = acc(requiredString(item, "to", s"$itemPath.to"))
       ExtractMapping(from, to)
 
   private def unsupportedInstaller(map: YamlMap, path: String): DecodeResult[Unit] =
@@ -371,7 +381,7 @@ private[config] object ManifestDecoder:
       specPath: String
   ): DecodeResult[Vector[ExecutableSpec]] =
     decodeItems(input, s"$specPath.executables", Set("path", "mode")): (item, itemPath, acc) =>
-      val file = acc(requiredString(item, s"$itemPath.path"))
+      val file = acc(requiredString(item, "path", s"$itemPath.path"))
       val mode = acc(optionalMode(item, s"$itemPath.mode"))
       ExecutableSpec(file, mode)
 
@@ -381,8 +391,8 @@ private[config] object ManifestDecoder:
   ): DecodeResult[Vector[SymlinkSpec]] =
     decodeItems(input, s"$specPath.symlinks", Set("path", "target", "sudo")):
       (item, itemPath, acc) =>
-        val file   = acc(requiredString(item, s"$itemPath.path"))
-        val target = acc(requiredString(item, s"$itemPath.target"))
+        val file   = acc(requiredString(item, "path", s"$itemPath.path"))
+        val target = acc(requiredString(item, "target", s"$itemPath.target"))
         val sudo   = acc(optionalBoolean(item, "sudo", s"$itemPath.sudo", default = false)
           .map(SymlinkPrivilege.fromBoolean))
         SymlinkSpec(file, target, sudo)
@@ -453,8 +463,8 @@ private[config] object ManifestDecoder:
    * Producing the sentinel on failure keeps decoding total, so the rest of the manifest's errors
    * are still accumulated and reported in the same pass.
    */
-  private def requiredToolName(map: YamlMap, path: String): DecodeResult[ToolName] =
-    val decoded = requiredString(map, path)
+  private def requiredToolName(map: YamlMap, key: String, path: String): DecodeResult[ToolName] =
+    val decoded = requiredString(map, key, path)
     if decoded.errors.nonEmpty then DecodeResult(ToolName.invalidSentinel, decoded.errors)
     else
       val raw = decoded.value

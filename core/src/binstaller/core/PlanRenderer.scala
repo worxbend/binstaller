@@ -77,17 +77,12 @@ private[core] object PlanRenderer:
   private def renderVersion(version: ResolvedVersion): String = version match
     case ResolvedVersion.Concrete(value, provenance) =>
       s"concrete $value${UrlProvenance.redirectSuffix(provenance)}"
-    case ResolvedVersion.DynamicLatestUrl(_) => "dynamic latest-url"
+    case dynamic @ ResolvedVersion.DynamicLatestUrl(_) => ResolvedVersion.render(dynamic)
 
   private def renderChecksum(checksum: Option[ResolvedChecksum]): String = checksum match
-    case Some(value) => s"${value.algorithm.value} ${value.value} (${checksumStatus(value)})"
-    case None        => "missing (not configured) - NO integrity verification will be performed"
-
-  private def checksumStatus(checksum: ResolvedChecksum): String = checksum.source match
-    case ResolvedChecksumSource.Configured                        => "configured (pinned by author)"
-    case ResolvedChecksumSource.Discovered(url, file, provenance) =>
-      s"discovered from $url for $file" + UrlProvenance.redirectSuffix(Some(provenance)) +
-        "; trust-on-first-use: fetched from the same release, not independent integrity"
+    case Some(value) =>
+      s"${value.algorithm.value} ${value.value} (${ResolvedChecksum.sourceDescription(value)})"
+    case None => "missing (not configured) - NO integrity verification will be performed"
 
   private def renderCreateDirectories(tool: ResolvedTool): Vector[String] =
     if tool.createDirectories.isEmpty then Vector.empty

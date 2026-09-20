@@ -32,7 +32,12 @@ enum ConfigLoadError:
 /** A manifest validation error with a YAML-like path suitable for CLI display. */
 final case class ValidationError(path: String, message: String)
 
-/** Root manifest for the supported binary-distribution profile schema. */
+/**
+ * Root manifest for the supported binary-distribution profile schema.
+ *
+ * Every field participates in the lock-file manifest fingerprint; adding or renaming one must be
+ * mirrored in `binstaller.core.ManifestFingerprint`, whose exhaustiveness test fails otherwise.
+ */
 final case class BinaryDistributionProfile private[config] (
     apiVersion: ApiVersion,
     kind: ManifestKind,
@@ -62,14 +67,24 @@ enum ApiVersion(val value: String):
 enum ManifestKind(val value: String):
   case BinaryDistributionProfile extends ManifestKind("BinaryDistributionProfile")
 
-/** Human and machine metadata attached to a profile. */
+/**
+ * Human and machine metadata attached to a profile.
+ *
+ * Fields participate in the lock-file manifest fingerprint; see
+ * `binstaller.core.ManifestFingerprint`.
+ */
 final case class ManifestMetadata(
     name: String,
     labels: Map[String, String],
     annotations: Map[String, String]
 )
 
-/** Install policy, variables, version sources, and ordered plan entries. */
+/**
+ * Install policy, variables, version sources, and ordered plan entries.
+ *
+ * Fields participate in the lock-file manifest fingerprint; see
+ * `binstaller.core.ManifestFingerprint`.
+ */
 final case class ProfileSpec(
     policy: InstallPolicy,
     vars: Map[String, String],
@@ -77,7 +92,12 @@ final case class ProfileSpec(
     plan: Vector[PlanEntry]
 )
 
-/** Profile-wide execution policy decoded from `spec.policy`. */
+/**
+ * Profile-wide execution policy decoded from `spec.policy`.
+ *
+ * Fields participate in the lock-file manifest fingerprint; see
+ * `binstaller.core.ManifestFingerprint`.
+ */
 final case class InstallPolicy(
     mode: PolicyMode,
     continueOnError: PolicyOverride,
@@ -108,7 +128,12 @@ object PolicyOverride:
   /** Convert `true` to [[Enabled]] and `false` to [[Disabled]]. */
   def fromBoolean(value: Boolean): PolicyOverride = if value then Enabled else Disabled
 
-/** A declared source for a tool version. */
+/**
+ * A declared source for a tool version.
+ *
+ * Case fields participate in the lock-file manifest fingerprint; see
+ * `binstaller.core.ManifestFingerprint`.
+ */
 enum VersionSource:
   case Pinned(value: String)
   case Dynamic(kind: DynamicVersionKind, note: Option[String])
@@ -122,7 +147,12 @@ enum DynamicVersionKind(val value: String):
 enum VersionResolverKind(val value: String):
   case HttpText extends VersionResolverKind("http-text")
 
-/** One ordered item in `spec.plan`. */
+/**
+ * One ordered item in `spec.plan`.
+ *
+ * Fields participate in the lock-file manifest fingerprint; see
+ * `binstaller.core.ManifestFingerprint`.
+ */
 final case class PlanEntry(
     name: ToolName,
     kind: PlanKind,
@@ -135,13 +165,28 @@ final case class PlanEntry(
 enum PlanKind(val value: String):
   case BinaryTool extends PlanKind("binary-tool")
 
-/** Optional host selectors for a plan entry. */
+/**
+ * Optional host selectors for a plan entry.
+ *
+ * Fields participate in the lock-file manifest fingerprint; see
+ * `binstaller.core.ManifestFingerprint`.
+ */
 final case class WhenClause(os: Option[OsClause], architecture: Option[String])
 
-/** Optional operating-system selector. */
+/**
+ * Optional operating-system selector.
+ *
+ * Fields participate in the lock-file manifest fingerprint; see
+ * `binstaller.core.ManifestFingerprint`.
+ */
 final case class OsClause(family: Option[String])
 
-/** Binary tool install specification after schema decoding, before interpolation. */
+/**
+ * Binary tool install specification after schema decoding, before interpolation.
+ *
+ * Fields participate in the lock-file manifest fingerprint; see
+ * `binstaller.core.ManifestFingerprint`.
+ */
 final case class BinaryToolSpec(
     versionRef: String,
     installDir: String,
@@ -151,7 +196,12 @@ final case class BinaryToolSpec(
     symlinks: Vector[SymlinkSpec]
 )
 
-/** Download location, local filename, checksum, and optional archive extraction plan. */
+/**
+ * Download location, local filename, checksum, and optional archive extraction plan.
+ *
+ * Fields participate in the lock-file manifest fingerprint; see
+ * `binstaller.core.ManifestFingerprint`.
+ */
 final case class DownloadSpec(
     url: String,
     filename: String,
@@ -164,7 +214,12 @@ enum ChecksumSource:
   case Literal(value: Sha256Digest)
   case Discovery(spec: ChecksumDiscoverySpec)
 
-/** Declared checksum source. Current validation supports SHA-256 only. */
+/**
+ * Declared checksum source. Current validation supports SHA-256 only.
+ *
+ * Fields participate in the lock-file manifest fingerprint; see
+ * `binstaller.core.ManifestFingerprint`.
+ */
 final case class ChecksumSpec(
     algorithm: ChecksumAlgorithm,
     source: ChecksumSource
@@ -197,7 +252,12 @@ object ChecksumSpec:
 enum ChecksumAlgorithm(val value: String):
   case Sha256 extends ChecksumAlgorithm("sha256")
 
-/** Typed checksum discovery source that reads a published checksum file. */
+/**
+ * Typed checksum discovery source that reads a published checksum file.
+ *
+ * Fields participate in the lock-file manifest fingerprint; see
+ * `binstaller.core.ManifestFingerprint`.
+ */
 final case class ChecksumDiscoverySpec(
     kind: ChecksumDiscoveryKind,
     url: String,
@@ -208,7 +268,12 @@ final case class ChecksumDiscoverySpec(
 enum ChecksumDiscoveryKind(val value: String):
   case Sha256Sum extends ChecksumDiscoveryKind("sha256sum")
 
-/** Archive extraction specification for downloaded artifacts. */
+/**
+ * Archive extraction specification for downloaded artifacts.
+ *
+ * Fields participate in the lock-file manifest fingerprint; see
+ * `binstaller.core.ManifestFingerprint`.
+ */
 final case class ArchiveSpec(archiveType: ArchiveType, extract: ArchiveExtract)
 
 /** Supported archive formats. */
@@ -217,16 +282,31 @@ enum ArchiveType(val value: String):
   case TarGz extends ArchiveType("tar.gz")
   case TarXz extends ArchiveType("tar.xz")
 
-/** File and directory mappings selected from an archive. */
+/**
+ * File and directory mappings selected from an archive.
+ *
+ * Fields participate in the lock-file manifest fingerprint; see
+ * `binstaller.core.ManifestFingerprint`.
+ */
 final case class ArchiveExtract(
     files: Vector[ExtractMapping],
     directories: Vector[ExtractMapping]
 )
 
-/** Relative archive source to relative install-target mapping. */
+/**
+ * Relative archive source to relative install-target mapping.
+ *
+ * Fields participate in the lock-file manifest fingerprint; see
+ * `binstaller.core.ManifestFingerprint`.
+ */
 final case class ExtractMapping(from: String, to: String)
 
-/** Executable path inside an installed tool and its optional POSIX mode. */
+/**
+ * Executable path inside an installed tool and its optional POSIX mode.
+ *
+ * Fields participate in the lock-file manifest fingerprint; see
+ * `binstaller.core.ManifestFingerprint`.
+ */
 final case class ExecutableSpec(path: String, mode: Option[ExecutableMode])
 
 /** Four-digit octal executable mode accepted from the manifest. */
@@ -256,5 +336,10 @@ object SymlinkPrivilege:
   /** Convert `true` to [[Sudo]] and `false` to [[User]]. */
   def fromBoolean(value: Boolean): SymlinkPrivilege = if value then Sudo else User
 
-/** Symlink declaration from a resolved executable target to an exposed path. */
+/**
+ * Symlink declaration from a resolved executable target to an exposed path.
+ *
+ * Fields participate in the lock-file manifest fingerprint; see
+ * `binstaller.core.ManifestFingerprint`.
+ */
 final case class SymlinkSpec(path: String, target: String, privilege: SymlinkPrivilege)

@@ -18,24 +18,24 @@ private[cli] final class CliApplyEventRenderer(
     outputStyle: CliOutputStyle = CliOutputStyle.Ansi
 ) extends InstallerEventObserver:
   private val width                                   = 30
+  private val display                                 = ProgressBlockDisplay(out)
   private var lastBuckets: Map[ToolName, Int]         = Map.empty
   private var activeTools: Set[ToolName]              = Set.empty
   private var downloadOrder: Vector[ToolName]         = Vector.empty
   private var downloads: Map[ToolName, DownloadRow]   = Map.empty
-  private var concurrentLineMode: Boolean             = false
-  private var progressBlockTools: Vector[ToolName]    = Vector.empty
-  private var progressBlockHeight: Int                = 0
-  private var activeLineLength: Int                   = 0
   private var summary: Option[InstallerEvent.Summary] = None
 
   def onEvent(event: InstallerEvent): Unit = event match
     case progress: InstallerEvent.DownloadProgress => renderProgress(progress)
     case value: InstallerEvent.Summary             => summary = Some(value)
-    case _                                         => ()
+    // The state path already reaches the terminal through core's rendered result lines, so there
+    // is nothing for a progress row to add here.
+    case _: InstallerEvent.StateLoading => ()
+    case _                              => ()
 
   def finish(): Unit =
-    if concurrentLineMode then finishProgressBlock()
-    else clearActiveLine()
+    if display.enabled then display.finish()
+    else display.clearActiveLine()
 
   def summaryLines: Vector[String] = summary match
     case Some(value) => CliApplyOutput.summary(value, outputStyle)
@@ -56,77 +56,42 @@ private[cli] final class CliApplyEventRenderer(
       case DownloadProgressStatus.Finished => activeTools = activeTools - progress.toolName
       case DownloadProgressStatus.Advanced => ()
 
-    downloads = downloads.updated(
-      progress.toolName,
-      DownloadRow(
-        progress.toolName,
-        progress.url,
-        progress.downloadedBytes,
-        progress.totalBytes,
-        progress.status
-      )
-    )
+    downloads = downloads.updated(progress.toolName, rowOf(progress))
 
   private def renderStarted(progress: InstallerEvent.DownloadProgress): Unit =
     lastBuckets = lastBuckets.updated(progress.toolName, -1)
     if outputStyle.supportsAnsi then
-      if !concurrentLineMode && activeTools.size > 1 then enableConcurrentLineMode()
-      else if concurrentLineMode then
-        addToProgressBlock(progress.toolName)
+      if !display.enabled && activeTools.size > 1 then enableConcurrentLineMode()
+      else if display.enabled then
+        display.add(progress.toolName)
         redrawProgressBlock()
-      else renderInPlace(renderActive(progress))
+      else display.renderInPlace(renderActive(progress))
 
   private def renderAdvanced(progress: InstallerEvent.DownloadProgress): Unit =
-    val bucket = progressBucket(progress.downloadedBytes, progress.totalBytes, concurrentLineMode)
+    val bucket = progressBucket(progress.downloadedBytes, progress.totalBytes, display.enabled)
     if outputStyle.supportsAnsi && bucket != lastBuckets.getOrElse(progress.toolName, -1) then
       lastBuckets = lastBuckets.updated(progress.toolName, bucket)
-      if concurrentLineMode then redrawProgressBlock()
-      else renderInPlace(renderActive(progress))
+      if display.enabled then redrawProgressBlock()
+      else display.renderInPlace(renderActive(progress))
 
   private def renderFinished(progress: InstallerEvent.DownloadProgress): Unit =
     lastBuckets = lastBuckets.updated(progress.toolName, 100)
-    if concurrentLineMode then
-      addToProgressBlock(progress.toolName)
+    if display.enabled then
+      display.add(progress.toolName)
       redrawProgressBlock()
-      if activeTools.isEmpty then finishProgressBlock()
-    else if outputStyle.supportsAnsi then renderCompleted(renderCompletedLine(progress))
+      if activeTools.isEmpty then display.finish()
+    else if outputStyle.supportsAnsi then display.renderCompleted(renderCompletedLine(progress))
     else renderCompletedPlain(renderCompletedLine(progress))
 
   private def enableConcurrentLineMode(): Unit =
-    clearActiveLine()
-    concurrentLineMode = true
-    progressBlockTools = activeRows.map(_.toolName)
+    display.enable(activeRows.map(_.toolName))
     redrawProgressBlock()
 
-  private def addToProgressBlock(toolName: ToolName): Unit =
-    if !progressBlockTools.contains(toolName) then
-      progressBlockTools = progressBlockTools :+ toolName
-
   private def redrawProgressBlock(): Unit =
-    val rows = progressBlockRows
-    if progressBlockHeight > 0 then out.print(s"\u001b[${progressBlockHeight}A")
-    rows.foreach: row =>
-      val line = renderRow(row)
-      out.print(s"\r\u001b[2K${line.styled}\n")
-    out.flush()
-    progressBlockHeight = rows.size
-
-  private def progressBlockRows: Vector[DownloadRow] = progressBlockTools.flatMap(downloads.get)
-
-  private def finishProgressBlock(): Unit =
-    out.flush()
-    concurrentLineMode = false
-    progressBlockTools = Vector.empty
-    progressBlockHeight = 0
-    activeLineLength = 0
+    display.redraw(toolName => downloads.get(toolName).map(renderRow))
 
   private def activeRows: Vector[DownloadRow] = downloadOrder.flatMap: toolName =>
     downloads.get(toolName).filter(row => activeTools.contains(row.toolName))
-
-  private def clearActiveLine(): Unit = if activeLineLength > 0 then
-    out.print("\r\u001b[K")
-    out.flush()
-    activeLineLength = 0
 
   private def progressBucket(
       downloadedBytes: Long,
@@ -138,15 +103,16 @@ private[cli] final class CliApplyEventRenderer(
       if lineMode then (percent / 10) * 10 else percent
     case None => (downloadedBytes / (1024L * 1024L)).toInt
 
-  private def renderActive(progress: InstallerEvent.DownloadProgress): ProgressLine = renderActive(
-    DownloadRow(
-      progress.toolName,
-      progress.url,
-      progress.downloadedBytes,
-      progress.totalBytes,
-      progress.status
-    )
+  private def rowOf(progress: InstallerEvent.DownloadProgress): DownloadRow = DownloadRow(
+    progress.toolName,
+    progress.url,
+    progress.downloadedBytes,
+    progress.totalBytes,
+    progress.status
   )
+
+  private def renderActive(progress: InstallerEvent.DownloadProgress): ProgressLine =
+    renderActive(rowOf(progress))
 
   private def renderRow(row: DownloadRow): ProgressLine = row.status match
     case DownloadProgressStatus.Finished => renderCompletedLine(row)
@@ -165,13 +131,7 @@ private[cli] final class CliApplyEventRenderer(
     ProgressLine(plain, styled)
 
   private def renderCompletedLine(progress: InstallerEvent.DownloadProgress): ProgressLine =
-    renderCompletedLine(DownloadRow(
-      progress.toolName,
-      progress.url,
-      progress.downloadedBytes,
-      progress.totalBytes,
-      progress.status
-    ))
+    renderCompletedLine(rowOf(progress))
 
   private def renderCompletedLine(row: DownloadRow): ProgressLine =
     val label  = downloadLabel(row.toolName, row.url)
@@ -181,16 +141,6 @@ private[cli] final class CliApplyEventRenderer(
     val styled = outputStyle.color(s"✅ completed $label")(fansi.Color.Green) +
       s" ${bar.styled} ${outputStyle.color(bytes)(fansi.Color.Green)}"
     ProgressLine(plain, styled)
-
-  private def renderInPlace(line: ProgressLine): Unit =
-    out.print(s"\r${line.styled}\u001b[K")
-    out.flush()
-    activeLineLength = line.visibleLength
-
-  private def renderCompleted(line: ProgressLine): Unit =
-    out.print(s"\r${line.styled}\u001b[K\n")
-    out.flush()
-    activeLineLength = 0
 
   private def renderCompletedPlain(line: ProgressLine): Unit =
     out.println(line.plain)
@@ -249,6 +199,60 @@ private[cli] final class CliApplyEventRenderer(
       .map(RenderSafety.terminalLine(_))
       .getOrElse(fallback)
 
+/**
+ * Terminal cursor state for apply progress: a single in-place line while one download runs, or a
+ * multi-line block redrawn under the cursor once downloads overlap.
+ *
+ * The renderer keeps the event journal (download rows, active tools); this owns only how rows reach
+ * the terminal, so the enable/redraw/finish transitions live behind explicit operations instead of
+ * being scattered across the renderer's event handlers.
+ */
+private[cli] final class ProgressBlockDisplay(out: PrintWriter):
+  private var concurrentLineMode: Boolean          = false
+  private var progressBlockTools: Vector[ToolName] = Vector.empty
+  private var progressBlockHeight: Int             = 0
+  private var activeLinePresent: Boolean           = false
+
+  def enabled: Boolean = concurrentLineMode
+
+  def enable(tools: Vector[ToolName]): Unit =
+    clearActiveLine()
+    concurrentLineMode = true
+    progressBlockTools = tools
+
+  def add(toolName: ToolName): Unit = if !progressBlockTools.contains(toolName) then
+    progressBlockTools = progressBlockTools :+ toolName
+
+  def redraw(renderRow: ToolName => Option[ProgressLine]): Unit =
+    val lines = progressBlockTools.flatMap(renderRow)
+    if progressBlockHeight > 0 then out.print(s"\u001b[${progressBlockHeight}A")
+    lines.foreach: line =>
+      out.print(s"\r\u001b[2K${line.styled}\n")
+    out.flush()
+    progressBlockHeight = lines.size
+
+  def finish(): Unit =
+    out.flush()
+    concurrentLineMode = false
+    progressBlockTools = Vector.empty
+    progressBlockHeight = 0
+    activeLinePresent = false
+
+  def renderInPlace(line: ProgressLine): Unit =
+    out.print(s"\r${line.styled}\u001b[K")
+    out.flush()
+    activeLinePresent = true
+
+  def renderCompleted(line: ProgressLine): Unit =
+    out.print(s"\r${line.styled}\u001b[K\n")
+    out.flush()
+    activeLinePresent = false
+
+  def clearActiveLine(): Unit = if activeLinePresent then
+    out.print("\r\u001b[K")
+    out.flush()
+    activeLinePresent = false
+
 private[cli] final case class DownloadRow(
     toolName: ToolName,
     url: String,
@@ -257,8 +261,7 @@ private[cli] final case class DownloadRow(
     status: DownloadProgressStatus
 )
 
-private[cli] final case class ProgressLine(plain: String, styled: String):
-  def visibleLength: Int = plain.length
+private[cli] final case class ProgressLine(plain: String, styled: String)
 
 private[cli] object CliApplyOutput:
 
@@ -275,6 +278,7 @@ private[cli] object CliApplyOutput:
       renderedTerminalLines: Vector[RenderedTerminalLine],
       outputStyle: CliOutputStyle = CliOutputStyle.Ansi
   ): Vector[String] =
+    // Keyed by rendered text, so byte-identical lines collapse into one entry (the last wins).
     val statusByText = renderedTerminalLines.map(rendered => rendered.text -> rendered.status).toMap
     lines.map: line =>
       statusByText.get(line) match

@@ -1,11 +1,14 @@
 package binstaller.core
 
+import binstaller.config.Diagnostics
 import binstaller.config.ToolName
 
 import java.time.Duration
 import ox.Ox
 import ox.channels.Actor
 import ox.channels.BufferCapacity
+import scala.util.Try
+import scala.util.control.NonFatal
 
 /** Coarse lifecycle phases emitted by plan/apply execution. */
 enum InstallerPhase:
@@ -42,6 +45,9 @@ enum InstallerEvent:
       stateFilePath: Option[String],
       elapsedTime: Duration
   )
+
+  /** Loading the state file is not a tool, so it carries the state path instead of a ToolName. */
+  case StateLoading(path: String, elapsedTime: Duration)
 
   case ToolStarted(toolName: ToolName, phase: InstallerPhase, elapsedTime: Duration)
   case ToolPhaseChanged(toolName: ToolName, phase: InstallerPhase, elapsedTime: Duration)
@@ -115,7 +121,9 @@ private[core] final case class InstallerEventContext(
 ):
   def elapsedTime: Duration = Duration.ofNanos(nanoTime() - startedAtNanos)
 
-  def emit(event: Duration => InstallerEvent): Unit = observer.onEvent(event(elapsedTime))
+  def emit(event: Duration => InstallerEvent): Unit =
+    try observer.onEvent(event(elapsedTime))
+    catch case NonFatal(error) => InstallerEventContext.observerFailed(error)
 
   def serialized(using Ox, BufferCapacity): InstallerEventContext =
     val sink = Actor.create(SerializedInstallerEventSink(observer))
@@ -129,8 +137,18 @@ private[core] object InstallerEventContext:
   def start(observer: InstallerEventObserver, nanoTime: () => Long): InstallerEventContext =
     InstallerEventContext(observer, nanoTime(), nanoTime)
 
+  // Reporting must never fail the operation it reports on: a throwing observer loses its event
+  // and one diagnostic line, not the install.
+  private[core] def observerFailed(error: Throwable): Unit =
+    val _ = Try(System.err.println(
+      s"binstaller: event observer failed: ${Diagnostics.describe(error)}"
+    ))
+
 private[core] final class SerializedInstallerEventSink(observer: InstallerEventObserver):
-  def emit(event: InstallerEvent): Unit = observer.onEvent(event)
+
+  def emit(event: InstallerEvent): Unit =
+    try observer.onEvent(event)
+    catch case NonFatal(error) => InstallerEventContext.observerFailed(error)
 
 /** Terminal result emitted for state persistence and renderer summaries. */
 enum TerminalToolResult:

@@ -24,10 +24,12 @@ private[config] object ProfileValidator:
       profile: BinaryDistributionProfile,
       failedDecoderPaths: Set[String]
   ): Vector[ValidationError] = profile.spec.plan.zipWithIndex
-    .filterNot((_, index) => failedDecoderPaths.contains(s"spec.plan[$index].name"))
-    .map((entry, _) => entry)
-    .groupBy(_.name)
+    .collect:
+      case (entry, index) if !failedDecoderPaths.contains(ManifestPath.planEntryName(index)) =>
+        entry.name -> index
+    .groupBy((name, _) => name)
     .toVector
+    .sortBy((_, entries) => entries.map((_, index) => index).min)
     .collect:
       case (name, entries) if entries.size > 1 =>
         ValidationError("spec.plan", s"duplicate tool name '$name'")
@@ -37,8 +39,7 @@ private[config] object ProfileValidator:
   ): Vector[ValidationError] =
     val versionNames = profile.spec.versions.keySet
     profile.spec.plan.zipWithIndex.collect:
-      case (entry, index)
-          if entry.spec.versionRef.nonEmpty && !versionNames(entry.spec.versionRef) =>
+      case (entry, index) if !versionNames(entry.spec.versionRef) =>
         ValidationError(
           s"spec.plan[$index].spec.versionRef",
           s"tool '${entry.name}' references unknown version '${entry.spec.versionRef}'"

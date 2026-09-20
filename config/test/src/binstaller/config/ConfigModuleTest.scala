@@ -18,6 +18,11 @@ object ConfigModuleTest extends TestSuite:
       assert(
         Diagnostics.describe(RuntimeException(null, IllegalStateException("inner"))) == "inner"
       )
+      // A cause without its own message must not fall back to the outer class name.
+      assert(
+        Diagnostics.describe(RuntimeException(null, IllegalStateException())) ==
+          "java.lang.IllegalStateException"
+      )
 
     test("an uppercase manifest checksum is normalized to lowercase"):
       // The digest is normalized once, at decode, so the comparison that decides whether a
@@ -156,10 +161,10 @@ object ConfigModuleTest extends TestSuite:
       ))
       assert(sudoSymlinks.map(_.target).distinct == Vector("${appsDir}/neovim/bin/nvim"))
       assert(exampleWithSudoPolicy(allowSudoSymlinks = true).isRight)
-      val expectedErrorPaths = Vector.range(2, 7)
-        .map(index =>
-          s"spec.plan[${exampleToolNames.indexOf("neovim")}].spec.symlinks[$index].sudo"
-        )
+      val neovimIndex        = profile.spec.plan.indexWhere(_.name.value == "neovim")
+      val expectedErrorPaths = neovim.spec.symlinks.zipWithIndex.collect:
+        case (symlink, index) if symlink.privilege == SymlinkPrivilege.Sudo =>
+          s"spec.plan[$neovimIndex].spec.symlinks[$index].sudo"
       val rejectedErrors = exampleWithSudoPolicy(allowSudoSymlinks = false) match
         case Left(ConfigLoadError.ValidationFailed(errors)) => errors
         case Left(error)    => abort(s"expected sudo policy validation errors, got $error")
@@ -203,6 +208,29 @@ object ConfigModuleTest extends TestSuite:
       val errors = profileValidationErrors(profile, unknownVersionSpec)
 
       assert(errors.exists(errorAt("spec.plan[0].spec.versionRef")))
+
+    test("validated profile construction rejects empty version references"):
+      // The `validated` factory reaches the validator with no decode pass, so an empty ref must be
+      // flagged here rather than assumed impossible after decoding.
+      val profile      = exampleProfile
+      val first        = profile.spec.plan.head
+      val emptyRefSpec = profile.spec.copy(
+        plan = first.copy(spec = first.spec.copy(versionRef = "")) +:
+          profile.spec.plan.tail
+      )
+      val errors = profileValidationErrors(profile, emptyRefSpec)
+
+      assert(errors.exists(errorAt("spec.plan[0].spec.versionRef")))
+
+    test("an empty version ref reports once, from the decoder only"):
+      val errors = validationErrors(
+        policyModeYaml("").replace("        versionRef: alpha", "        versionRef: \"\"")
+      )
+
+      assert(errors == Vector(ValidationError(
+        "spec.plan[0].spec.versionRef",
+        "required string must not be empty"
+      )))
 
     test("validated profile construction rejects forbidden sudo symlinks"):
       val profile           = exampleProfile
@@ -435,11 +463,13 @@ object ConfigModuleTest extends TestSuite:
   private def exampleWithSudoPolicy(
       allowSudoSymlinks: Boolean
   ): Either[ConfigLoadError, BinaryDistributionProfile] =
-    val yaml = Files.readString(exampleConfigPath).replace(
+    val source = Files.readString(exampleConfigPath)
+    // Silent false-pass guard: if the example config drifts, the replace below is a no-op.
+    assert(source.contains("allowSudoSymlinks: true"))
+    ConfigModule.loadString(source.replace(
       "allowSudoSymlinks: true",
       s"allowSudoSymlinks: $allowSudoSymlinks"
-    )
-    ConfigModule.loadString(yaml)
+    ))
 
   private def errorAt(path: String)(error: ValidationError): Boolean = error.path == path
 

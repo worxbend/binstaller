@@ -17,6 +17,7 @@ import java.nio.file.Path
 import java.time.Duration
 import java.util.Optional
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
@@ -29,25 +30,22 @@ import scala.jdk.CollectionConverters.*
 
 private[core] final class FakeHttpTextClient(text: String) extends HttpTextClient:
 
-  def getText(url: String): Either[HttpTextError, String] =
-    if url == "https://dl.k8s.io/release/stable.txt" then Right(text)
+  def getTextWithProvenance(url: String): Either[HttpTextError, HttpTextResponse] =
+    if url == "https://dl.k8s.io/release/stable.txt" then
+      Right(HttpTextResponse(text, UrlProvenance.direct(url)))
     else Left(HttpTextError(url, s"unexpected URL $url"))
 
 private[core] final class RoutingHttpTextClient(
     responses: Map[String, Either[HttpTextError, HttpTextResponse]]
 ) extends HttpTextClient:
 
-  def getText(url: String): Either[HttpTextError, String] = getTextWithProvenance(url).map(_.text)
-
-  override def getTextWithProvenance(url: String): Either[HttpTextError, HttpTextResponse] =
+  def getTextWithProvenance(url: String): Either[HttpTextError, HttpTextResponse] =
     responses.getOrElse(url, Left(HttpTextError(url, s"unexpected URL $url")))
 
 private[core] final class LockHttpTextClient(text: String, provenance: UrlProvenance)
     extends HttpTextClient:
 
-  def getText(url: String): Either[HttpTextError, String] = getTextWithProvenance(url).map(_.text)
-
-  override def getTextWithProvenance(url: String): Either[HttpTextError, HttpTextResponse] =
+  def getTextWithProvenance(url: String): Either[HttpTextError, HttpTextResponse] =
     if url == provenance.initialUrl then Right(HttpTextResponse(text, provenance))
     else Left(HttpTextError(url, s"unexpected URL $url"))
 
@@ -156,6 +154,13 @@ private object RoutingBinaryDownloadClient:
     "https://example.invalid/beta"  -> Right("beta".getBytes(StandardCharsets.UTF_8))
   ))
 
+private[core] def requireRendezvous(
+    latch: CountDownLatch,
+    timeout: Duration,
+    description: String
+): Unit = if !latch.await(timeout.toMillis, TimeUnit.MILLISECONDS) then
+  throw java.lang.AssertionError(s"rendezvous timed out: $description")
+
 private[core] final class ConcurrentTrackingDownloadClient(urls: Vector[String])
     extends BytesBinaryDownloadClient:
 
@@ -177,7 +182,11 @@ private[core] final class ConcurrentTrackingDownloadClient(urls: Vector[String])
       val current = active.incrementAndGet()
       updatePeak(current)
       expectedStarts.countDown()
-      val _ = expectedStarts.await(5, TimeUnit.SECONDS)
+      requireRendezvous(
+        expectedStarts,
+        Duration.ofSeconds(5),
+        s"${urls.size} downloads to start together"
+      )
       try
         progressObserver.onProgress(BinaryDownloadProgress.Started(url, Some(bytes.length.toLong)))
         progressObserver.onProgress(
@@ -210,6 +219,9 @@ private[core] final class ParallelismProbeDownloadClient extends BytesBinaryDown
     val current = active.incrementAndGet()
     val _       = peak.updateAndGet(previous => math.max(previous, current))
     bothStarted.countDown()
+    // Not a required rendezvous: under applyParallelism(1) the second download only starts after
+    // this one finishes, so the timeout expiring is the very serialization signal the probe
+    // measures. A hard requireRendezvous here would fail the serialized case it exists to prove.
     val _ = bothStarted.await(150, TimeUnit.MILLISECONDS)
     try
       val bytes = url.split('/').last.getBytes(StandardCharsets.UTF_8)
@@ -261,6 +273,10 @@ private[core] final class RecordingApplyStateStore(delegate: ApplyStateStore)
 
 private[core] final class StaticHttpClient[T](response: HttpResponse[T]) extends HttpClient:
 
+  private val sentRequests = AtomicInteger(0)
+
+  def requestCount: Int = sentRequests.get()
+
   override def cookieHandler(): Optional[CookieHandler] = Optional.empty()
 
   override def connectTimeout(): Optional[Duration] = Optional.empty()
@@ -282,7 +298,15 @@ private[core] final class StaticHttpClient[T](response: HttpResponse[T]) extends
   override def send[A](
       request: HttpRequest,
       responseBodyHandler: HttpResponse.BodyHandler[A]
-  ): HttpResponse[A] = response.asInstanceOf[HttpResponse[A]]
+  ): HttpResponse[A] =
+    val _ = sentRequests.incrementAndGet()
+    unsafeCast(response)
+
+  // The canned response's body type is fixed at construction, but `send` is generic in the
+  // caller's BodyHandler type — the two only agree because tests always pair a client with the
+  // handler shape its response was built for. Unchecked, so it lives in one named place.
+  private def unsafeCast[A](canned: HttpResponse[T]): HttpResponse[A] =
+    canned.asInstanceOf[HttpResponse[A]]
 
   override def sendAsync[A](
       request: HttpRequest,
@@ -440,15 +464,18 @@ private[core] final class RecordingInstallFileSystem(
     discardFailure: Option[RuntimeException] = None
 ) extends InstallFileSystem:
 
-  private var modes: Vector[ExecutableModeRequest] = Vector.empty
-  private var replacements: Int                    = 0
-  private var discards: Int                        = 0
+  // Modes are keyed by stage rather than held in one shared var: installs prepared in parallel
+  // interleave applyExecutableModes and replaceInstall across tools, so a single slot both races
+  // and silently hands one tool's modes to another's replacement.
+  private val modes        = ConcurrentHashMap[StagedInstall, Vector[ExecutableModeRequest]]()
+  private val replacements = AtomicInteger(0)
+  private val discards     = AtomicInteger(0)
 
-  def recordedModes: Vector[ExecutableModeRequest] = modes
+  def recordedModes: Vector[ExecutableModeRequest] = modes.values().asScala.toVector.flatten
 
-  def replaceCalls: Int = replacements
+  def replaceCalls: Int = replacements.get()
 
-  def discardCalls: Int = discards
+  def discardCalls: Int = discards.get()
 
   def stageDirectBinaryFromFile(
       installDir: Path,
@@ -472,7 +499,7 @@ private[core] final class RecordingInstallFileSystem(
       stagedInstall: StagedInstall,
       executables: Vector[ExecutableModeRequest]
   ): Either[InstallFileSystemError.ModeApplicationFailed, Unit] =
-    modes = executables
+    val _ = modes.put(stagedInstall, executables)
     modeFailure match
       case Some(message) =>
         val first = executables.head
@@ -488,15 +515,15 @@ private[core] final class RecordingInstallFileSystem(
   def replaceInstall(
       stagedInstall: StagedInstall
   ): Either[InstallFileSystemError.ReplacementFailed, Unit] =
-    replacements = replacements + 1
-    modes.foreach: mode =>
+    val _ = replacements.incrementAndGet()
+    modes.getOrDefault(stagedInstall, Vector.empty).foreach: mode =>
       val target = stagedInstall.installDir.resolve(mode.path)
       Files.createDirectories(target.getParent)
       Files.writeString(target, "installed")
     Right(())
 
   def discardStaged(stagedInstall: StagedInstall): Unit =
-    discards = discards + 1
+    val _ = discards.incrementAndGet()
     discardFailure.foreach(throw _)
 
   private def stageSuccess(

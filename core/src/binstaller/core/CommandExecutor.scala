@@ -244,6 +244,6 @@ private[core] final class ProcessCommandExecutor(timeout: Duration) extends Comm
       else clipped = true
       read = stream.read(buffer)
     val suffix =
-      if clipped then "\n... output truncated after 65536 bytes ..."
+      if clipped then s"\n... output truncated after $capturedOutputLimitBytes bytes ..."
       else ""
     output.toString(StandardCharsets.UTF_8) + suffix

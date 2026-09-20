@@ -67,6 +67,9 @@ binstaller plan --locked --lock-file binstaller.lock.json
 | `--locked` | Require a compatible JSON lock file before running. |
 | `--lock-file FILE` | Path to the lock file used by `--locked`. |
 
+> **Note:** `--lock-file` deliberately means *read from* for `plan`/`apply` (with `--locked`) and
+> *write to* for `lock`.
+
 Read the header first:
 
 ```text
@@ -151,6 +154,9 @@ binstaller lock --only helm --only kubectl
 |---|---|
 | `--lock-file FILE` | Lock file to write. Default: `binstaller.lock.json`. |
 
+> **Note:** `--lock-file` deliberately means *write to* for `lock` and *read from* for
+> `plan`/`apply` (with `--locked`).
+
 Resolves versions, URLs and digests and writes them as JSON. Installs nothing.
 See 🧊 [Lock Files & Reproducibility](Lock-Files-and-Reproducibility).
 
@@ -162,7 +168,7 @@ See 🧊 [Lock Files & Reproducibility](Lock-Files-and-Reproducibility).
 |---|---|
 | `0` | Completed successfully — including `--help` and `plan`. |
 | `1` | Manifest loading or resolution failed, selection was invalid, apply failed, or state persistence failed. |
-| `2` | Command-line usage error. |
+| `2` | Command-line usage error — including running `binstaller` with no command (usage is printed). |
 
 Scripting example:
 

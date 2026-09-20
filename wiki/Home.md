@@ -83,6 +83,7 @@ If you need those, `binstaller` is meant to sit *next to* the tool that does the
 | Security model | [`docs/security.md`](https://github.com/worxbend/binstaller/blob/main/docs/security.md) |
 | Release guide | [`docs/release.md`](https://github.com/worxbend/binstaller/blob/main/docs/release.md) |
 
-> 📝 **Editing this wiki:** pages are generated from the [`wiki/`](https://github.com/worxbend/binstaller/tree/main/wiki)
-> directory in the main repository and synced by CI. Edit the files there and open a pull request —
-> direct wiki edits will be overwritten on the next sync.
+> 📝 **Editing this wiki:** the [`wiki/`](https://github.com/worxbend/binstaller/tree/main/wiki)
+> directory in the main repository is the source of truth for this wiki. Pages are synced by CI,
+> so edit the files there and open a pull request — direct wiki edits will be overwritten on the
+> next sync.

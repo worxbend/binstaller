@@ -47,6 +47,46 @@ object SudoAndRedactionTest extends TestSuite with CoreTestSupport:
         SensitiveValueRedactions.fromRuntimeVariables(allowlisted) == SensitiveValueRedactions.empty
       )
 
+    test("sensitive-name substrings and the length threshold drive runtime-variable redaction"):
+      // One row per marker isSensitiveName matches on: the uppercased name contains the marker
+      // and the value meets the >= 4 length floor. The last row pins case-insensitivity.
+      val sensitiveNames = Vector(
+        "GH_TOKEN",
+        "SERVICE_SECRET",
+        "DB_PASSWORD",
+        "SUDO_PASS",
+        "APP_API_KEY",
+        "AWS_ACCESS_KEY_ID",
+        "TLS_PRIVATE_KEY",
+        "CLIENT_CREDENTIAL",
+        "PROXY_AUTHORIZATION",
+        "AUTH_BEARER",
+        "APP_SESSION",
+        "HTTP_COOKIE",
+        "lowercase_token"
+      )
+      sensitiveNames.foreach: name =>
+        val value      = s"value-for-$name"
+        val redactions = SensitiveValueRedactions.fromRuntimeVariables(Map(name -> value))
+        assert(redactions.values == Vector(value))
+
+      // A marker-free name, and a marked name whose value is under the length floor, stay out.
+      assert(SensitiveValueRedactions.fromRuntimeVariables(Map(
+        "HOME"        -> "/home/test",
+        "SHORT_TOKEN" -> "abc"
+      )).values.isEmpty)
+
+    test("overlapping sensitive values redact longest-first without leaving a suffix"):
+      // "shared-secret" is a prefix of "shared-secret-suffix": redacting the shorter first would
+      // turn the longer into "<redacted>-suffix", leaking its tail. The constructor sorts
+      // longest-first so the whole longer value is consumed in one replacement.
+      val redactions = SensitiveValueRedactions.fromRuntimeVariables(Map(
+        "FIRST_TOKEN"  -> "shared-secret",
+        "SECOND_TOKEN" -> "shared-secret-suffix"
+      ))
+
+      assert(redactions.redact("auth shared-secret-suffix!") == "auth <redacted>!")
+
     test("apply errors redact sensitive runtime values and scrub terminal controls"):
       val secret = "secret-token-value"
       val plan   = ResolvedPlan(

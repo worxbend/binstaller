@@ -6,11 +6,51 @@ import binstaller.config.DownloadSpec
 import binstaller.config.ExtractMapping
 import binstaller.config.PlanEntry
 import binstaller.config.PolicyOverride
+import binstaller.config.SymlinkPrivilege
 import binstaller.config.VersionSource
 
 import java.nio.charset.StandardCharsets
 
 private[core] object ManifestFingerprint:
+
+  /**
+   * Every field of the fingerprint-relevant config schema types, keyed by type name.
+   *
+   * This is the exhaustiveness contract for the 'edit manifest ⇒ lock invalid' guarantee: a test in
+   * `PlanResolutionTest` reflects over those case classes and fails when a field exists that no
+   * `append*` method below hashes. Adding a config field means updating this map and the matching
+   * `append*` method together; the config-side types carry a comment pointing back here.
+   */
+  val coveredFields: Map[String, Set[String]] = Map(
+    "BinaryDistributionProfile" -> Set("apiVersion", "kind", "metadata", "spec"),
+    "ManifestMetadata"          -> Set("name", "labels", "annotations"),
+    "ProfileSpec"               -> Set("policy", "vars", "versions", "plan"),
+    "InstallPolicy"             -> Set(
+      "mode",
+      "continueOnError",
+      "appsDir",
+      "allowSudoSymlinks",
+      "allowDynamicLatestUrls",
+      "allowMissingChecksums",
+      "stateFile"
+    ),
+    "PlanEntry"      -> Set("name", "kind", "description", "when", "spec"),
+    "WhenClause"     -> Set("os", "architecture"),
+    "OsClause"       -> Set("family"),
+    "BinaryToolSpec" ->
+      Set("versionRef", "installDir", "createDirectories", "download", "executables", "symlinks"),
+    "DownloadSpec"           -> Set("url", "filename", "checksum", "archive"),
+    "ChecksumSpec"           -> Set("algorithm", "source"),
+    "ChecksumDiscoverySpec"  -> Set("kind", "url", "file"),
+    "ArchiveSpec"            -> Set("archiveType", "extract"),
+    "ArchiveExtract"         -> Set("files", "directories"),
+    "ExtractMapping"         -> Set("from", "to"),
+    "ExecutableSpec"         -> Set("path", "mode"),
+    "SymlinkSpec"            -> Set("path", "target", "privilege"),
+    "VersionSource.Pinned"   -> Set("value"),
+    "VersionSource.Dynamic"  -> Set("kind", "note"),
+    "VersionSource.Resolver" -> Set("kind", "url")
+  )
 
   def profile(profile: BinaryDistributionProfile): String =
     Sha256.digest(canonicalProfile(profile).getBytes(StandardCharsets.UTF_8))
@@ -32,7 +72,11 @@ private[core] object ManifestFingerprint:
     append(builder, "spec.policy.mode", policy.mode.value)
     append(builder, "spec.policy.continueOnError", renderPolicyFlag(policy.continueOnError))
     append(builder, "spec.policy.appsDir", policy.appsDir)
-    append(builder, "spec.policy.allowSudoSymlinks", policy.allowSudoSymlinks.toString)
+    append(
+      builder,
+      "spec.policy.allowSudoSymlinks",
+      renderAllowSudoSymlinks(policy.allowSudoSymlinks)
+    )
     appendOverride(builder, "spec.policy.allowDynamicLatestUrls", policy.allowDynamicLatestUrls)
     appendOverride(builder, "spec.policy.allowMissingChecksums", policy.allowMissingChecksums)
     append(builder, "spec.policy.stateFile", policy.stateFile.getOrElse(""))
@@ -42,6 +86,13 @@ private[core] object ManifestFingerprint:
   private def renderPolicyFlag(value: PolicyOverride): String = value match
     case PolicyOverride.Enabled  => "true"
     case PolicyOverride.Disabled => "false"
+
+  // allowSudoSymlinks hashed as the enum case names ("Enabled"/"Disabled") before the rendering
+  // was made explicit. Pinning that spelling keeps existing lock files valid; a case rename no
+  // longer changes the fingerprint silently.
+  private def renderAllowSudoSymlinks(value: PolicyOverride): String = value match
+    case PolicyOverride.Enabled  => "Enabled"
+    case PolicyOverride.Disabled => "Disabled"
 
   private def appendOverride(
       builder: StringBuilder,
@@ -130,7 +181,13 @@ private[core] object ManifestFingerprint:
     case (symlink, index) =>
       append(builder, s"$base[$index].path", symlink.path)
       append(builder, s"$base[$index].target", symlink.target)
-      append(builder, s"$base[$index].privilege", symlink.privilege.toString)
+      append(builder, s"$base[$index].privilege", renderSymlinkPrivilege(symlink.privilege))
+
+  // Same pinning as renderAllowSudoSymlinks: the case names were the historical hash input, so
+  // they stay the hash input now that the rendering is explicit and rename-safe.
+  private def renderSymlinkPrivilege(value: SymlinkPrivilege): String = value match
+    case SymlinkPrivilege.User => "User"
+    case SymlinkPrivilege.Sudo => "Sudo"
 
   private def appendMappings(
       builder: StringBuilder,

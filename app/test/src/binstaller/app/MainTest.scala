@@ -24,12 +24,32 @@ object MainTest extends TestSuite:
       assert(commands.nonEmpty)
       assert(commands.toSet.subsetOf(configured))
 
+      val cliAncestors = commands.flatMap(superclassChain).filter(_.startsWith("binstaller.cli."))
+      assert(cliAncestors.toSet.subsetOf(configured))
+
+  private def superclassChain(className: String): Vector[String] = Iterator
+    .iterate(Class.forName(className): Class[?])(_.getSuperclass)
+    .takeWhile(_ != null)
+    .map(_.getName)
+    .toVector
+
   private def reflectionConfigClassNames(): Set[String] =
-    val root = Path.of(System.getProperty("binstaller.repoRoot"))
-    val json = Files.readString(
-      root.resolve("app/resources/META-INF/native-image/binstaller/binstaller/reflect-config.json")
-    )
-    "\"name\"\\s*:\\s*\"([^\"]+)\"".r.findAllMatchIn(json).map(_.group(1)).toSet
+    val entries = ujson.read(Files.readString(reflectConfigPath))
+    entries.arr.map(entry => entry("name").str).toSet
+
+  private def reflectConfigPath: Path = repoRootCandidates
+    .map(_.resolve("app/resources/META-INF/native-image/binstaller/binstaller/reflect-config.json"))
+    .find(Files.exists(_))
+    .getOrElse(abort("could not locate reflect-config.json"))
+
+  private def repoRootCandidates: Iterator[Path] =
+    sys.props.get("binstaller.repoRoot").iterator.map(Path.of(_).toAbsolutePath) ++
+      upwardPaths(Path.of("").toAbsolutePath)
+
+  private def upwardPaths(start: Path): Iterator[Path] =
+    Iterator.iterate(start)(_.getParent).takeWhile(_ != null)
+
+  private def abort(message: String): Nothing = throw java.lang.AssertionError(message)
 
   private def cliClasses(): Vector[String] =
     System.getProperty("java.class.path").split(java.io.File.pathSeparator).toVector

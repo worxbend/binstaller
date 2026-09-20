@@ -48,32 +48,23 @@ private[core] final class JdkBinaryMetadataClient(
   private val maxBytes = BinaryDownloadLimits.default.maxBytes
 
   def metadata(url: String): Either[BinaryMetadataError, BinaryMetadata] =
-    RuntimeUrl.httpsUri(url) match
-      case Left(message) => Left(BinaryMetadataError(url, message))
-      case Right(_)      => Try(RuntimeHttpClient.getInputStream(client, url, hostGuard)) match
-          case Success(Right(result))
-              if result.response.statusCode() >= 200 &&
-                result.response.statusCode() < 300 =>
-            Try(RuntimeHttpBody.readWithDeadline(
-              result.response.body(),
-              bodyTimeout,
-              BinaryMetadataError(
-                url,
-                s"metadata response body timed out after ${bodyTimeout.toSeconds}s",
-                Some(result.provenance)
-              )
-            )(inspectBody(url, _, result.provenance))).toEither.left.map(error =>
-              BinaryMetadataError(url, Diagnostics.describe(error), Some(result.provenance))
-            ).flatten
-          case Success(Right(result)) =>
-            RuntimeHttpBody.closeAfterFailure(result.response.body())
-            Left(BinaryMetadataError(
-              url,
-              s"HTTP ${result.response.statusCode()}",
-              Some(result.provenance)
-            ))
-          case Success(Left(message)) => Left(BinaryMetadataError(url, message))
-          case Failure(error)         => Left(BinaryMetadataError(url, Diagnostics.describe(error)))
+    RuntimeHttpClient.withSuccessfulStream(
+      client,
+      url,
+      hostGuard,
+      (message, provenance) => BinaryMetadataError(url, message, provenance)
+    ): result =>
+      Try(RuntimeHttpBody.readWithDeadline(
+        result.response.body(),
+        bodyTimeout,
+        BinaryMetadataError(
+          url,
+          s"metadata response body timed out after ${bodyTimeout.toSeconds}s",
+          Some(result.provenance)
+        )
+      )(inspectBody(url, _, result.provenance))).toEither.left.map(error =>
+        BinaryMetadataError(url, Diagnostics.describe(error), Some(result.provenance))
+      ).flatten
 
   private def inspectBody(
       url: String,

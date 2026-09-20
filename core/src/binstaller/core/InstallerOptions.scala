@@ -18,6 +18,14 @@ object VerboseOutput:
   /** Convert a boolean CLI flag into [[VerboseOutput]]. */
   def fromFlag(value: Boolean): VerboseOutput = if value then Enabled else Disabled
 
+/** Runtime options specific to the `lock` command. */
+final case class LockOptions(outputPath: String)
+
+/** Lock command option defaults. */
+object LockOptions:
+  /** Default lock file path shared by `lock` and `apply --locked`. */
+  val defaultOutputPath: String = "binstaller.lock.json"
+
 /**
  * Legacy CLI-shaped request shared by the rendered command entrypoints.
  *

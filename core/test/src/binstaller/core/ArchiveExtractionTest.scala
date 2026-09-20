@@ -1,6 +1,7 @@
 package binstaller.core
 
 import binstaller.config.ArchiveType
+import binstaller.config.ChecksumAlgorithm
 import utest.*
 
 import java.nio.charset.StandardCharsets
@@ -106,6 +107,60 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
 
       assert(result.left.exists(_.isInstanceOf[ToolInstallError.ArchiveExtractionFailed]))
       assert(Files.readString(existingFile) == "existing")
+
+    test("tar members that escape staging are rejected and preserve existing install"):
+      assertTarMembersRejected(
+        tarGzArchive,
+        Vector(
+          "../evil"       -> "escapes staging directory",
+          "/etc/evil"     -> "archive path is absolute",
+          "pkg\\..\\evil" -> "contains backslash"
+        )
+      )
+
+    test("tar members whose escaping names arrive via GNU long links are rejected"):
+      // The header's 100-byte name field holds only a benign prefix; the escaping name reaches
+      // the reader solely through the "@LongLink" payload, which is what must be validated.
+      assertTarMembersRejected(
+        tarGzArchiveWithLongNames,
+        Vector(
+          s"pkg/${"nested/" * 14}../evil"   -> "escapes staging directory",
+          "/etc/evil"                       -> "archive path is absolute",
+          s"pkg/${"nested/" * 14}evil\\win" -> "contains backslash"
+        )
+      )
+
+    test("tar members whose escaping names arrive via PAX path records are rejected"):
+      // Same shape as the GNU long-link case, with the name carried by a 'x' header's "path"
+      // record instead of a "@LongLink" pseudo-entry.
+      assertTarMembersRejected(
+        tarGzArchiveWithPaxNames,
+        Vector(
+          s"pkg/${"nested/" * 14}../evil"   -> "escapes staging directory",
+          "/etc/evil"                       -> "archive path is absolute",
+          s"pkg/${"nested/" * 14}evil\\win" -> "contains backslash"
+        )
+      )
+
+    test("archive install verifies the checksum before extraction and leaves no staging dir"):
+      // The archive's only member escapes staging: if extraction ran before digest verification
+      // the result would be ArchiveExtractionFailed, so ChecksumMismatch here proves the order.
+      val tempRoot   = tempDirectory("core-targz-checksum")
+      val installDir = tempRoot.resolve("alpha")
+
+      val result = installArchive(
+        installDir,
+        tarGzArchive(Vector("../evil" -> "bad")),
+        checksum = Some(ResolvedChecksum(
+          ChecksumAlgorithm.Sha256,
+          digest("0" * 64),
+          ResolvedChecksumSource.Configured
+        ))
+      )
+
+      assert(result.left.exists(_.isInstanceOf[ToolInstallError.ChecksumMismatch]))
+      assert(!hasStagedInstall(tempRoot, "alpha"))
+      assert(!Files.exists(installDir))
 
     test("duplicate zip archive members are rejected before replacement"):
       val tempRoot     = tempDirectory("core-zip-duplicate")
@@ -540,3 +595,23 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
 
       assertInstallSuccess(result, installDir.toString)
       assert(Files.readString(installDir.resolve("bin/alpha")) == "base256")
+
+  /**
+   * Install one tar.gz whose single member is named `evilName`, asserting the extraction failure
+   * message and that a pre-existing install is untouched. Mirrors the zip-slip test above across
+   * the three ways a tar member name can reach the reader.
+   */
+  private def assertTarMembersRejected(
+      archive: Vector[(String, String)] => Array[Byte],
+      cases: Vector[(String, String)]
+  ): Unit = cases.foreach: (evilName, fragment) =>
+    val tempRoot     = tempDirectory("core-targz-slip")
+    val installDir   = tempRoot.resolve("alpha")
+    val existingFile = installDir.resolve("bin/alpha")
+    Files.createDirectories(existingFile.getParent)
+    Files.writeString(existingFile, "existing")
+
+    val result = installArchive(installDir, archive(Vector(evilName -> "bad")))
+
+    assertArchiveExtractionFailed(result, fragment)
+    assert(Files.readString(existingFile) == "existing")

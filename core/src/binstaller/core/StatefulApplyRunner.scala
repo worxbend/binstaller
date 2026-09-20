@@ -6,10 +6,6 @@ import java.nio.file.Path
 
 private[core] object StatefulApplyRunner:
 
-  // Loading the state file is not a tool, but the phase event is keyed by tool name. This label
-  // stands in for it rather than the event contract growing a second shape for one case.
-  private val stateLoadingLabel: ToolName = ToolName.unsafe("state")
-
   def run(
       options: InstallerOptions,
       prepared: PreparedPlan,
@@ -30,11 +26,7 @@ private[core] object StatefulApplyRunner:
         RenderSafety.display(s"state file: $path", prepared.plan.redactions),
         _
       ))
-      eventContext.emit(InstallerEvent.ToolPhaseChanged(
-        StatefulApplyRunner.stateLoadingLabel,
-        InstallerPhase.LoadingState,
-        _
-      ))
+      eventContext.emit(InstallerEvent.StateLoading(path, _))
       loadInitialState(path, options.resetState, prepared, stateStore) match
         case Left(error) => InstallerResult(
             Vector(RenderSafety.display(
@@ -64,7 +56,8 @@ private[core] object StatefulApplyRunner:
   ): Either[ApplyStateError, (Path, ApplyState)] =
     for
       // State files are intentionally CWD-local filenames only; this prevents a profile or CLI
-      // option from writing outside the working directory or targeting an install path.
+      // option from writing outside the working directory or targeting an install path. The check
+      // is lexical: a symlink at that filename is still followed when the file is read.
       path  <- StatePathResolver.resolve(rawPath, stateStore.cwd)
       state <- resetState match
         case ResetState.Enabled => Right(
@@ -112,16 +105,15 @@ private[core] object StatefulApplyRunner:
       .map(_.name)
       .toSet
     val pendingTools = prepared.plan.tools.filterNot(tool => completed(tool.name))
-    val skippedLines = prepared.plan.tools
-      .filter(tool => completed(tool.name))
-      .map: tool =>
-        eventContext.emit(InstallerEvent.ToolSkipped(
-          tool.name,
-          "already completed in state",
-          Some(path.toString),
-          _
-        ))
-        s"skipped ${tool.name}: already completed in state"
+    val skippedTools = prepared.plan.tools.filter(tool => completed(tool.name))
+    skippedTools.foreach: tool =>
+      eventContext.emit(InstallerEvent.ToolSkipped(
+        tool.name,
+        "already completed in state",
+        Some(path.toString),
+        _
+      ))
+    val skippedLines = skippedTools.map(tool => s"skipped ${tool.name}: already completed in state")
     val pendingPlan  = prepared.plan.copy(tools = pendingTools)
     var currentState = state
     val terminalObserver: TerminalToolResult => Either[String, Unit] = terminal =>

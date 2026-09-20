@@ -127,7 +127,7 @@
 <tspan fill="#c9d1d9">   checksum: </tspan>
 <tspan fill="#3fb950">sha256 45d49e06…78633d</tspan>
 <tspan fill="#c9d1d9"> </tspan>
-<tspan fill="#8b949e">(pinned by author)</tspan>
+<tspan fill="#8b949e">(configured in manifest)</tspan>
 </text>
 <text x="20.0" y="675.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
 <tspan fill="#c9d1d9">   archive: </tspan>

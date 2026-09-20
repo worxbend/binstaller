@@ -42,7 +42,22 @@ The publish job then:
 3. Signs every artifact with keyless Sigstore (`cosign sign-blob`, using the
    workflow's GitHub OIDC identity via `id-token: write`), producing a
    `.sigstore.json` bundle per artifact.
-4. Publishes the GitHub Release assets.
+4. Publishes the GitHub Release assets. If a non-draft release already exists
+   for the tag, the job fails instead of replacing its assets; asset
+   replacement via `--clobber` is only allowed on draft releases.
+
+The snap job then builds the classic snap for amd64 and arm64 from the native
+tarballs, smoke-tests it (`snap install --dangerous --classic` plus
+`binstaller --help`), uploads the `.snap` as a build artifact, and publishes
+to the Snap Store stable channel. The store upload only runs when the
+`SNAPCRAFT_STORE_CREDENTIALS` repository secret is set; otherwise the job
+skips it with an explicit `::notice::` and a job-summary entry.
+
+The release and snap jobs run in the `release` GitHub environment; configure
+required reviewers for that environment in the repository settings so every
+publish is manually approved. Manual `workflow_dispatch` runs are restricted
+to `refs/heads/main`, and tag pushes are rejected unless the tagged commit is
+an ancestor of `origin/main`.
 
 All GitHub Actions are pinned to commit SHAs, and Mill is pinned via
 `.mill-version`.
@@ -117,7 +132,8 @@ If a release is bad:
 - Delete or mark the GitHub Release as prerelease if the tag should no longer
   be promoted.
 - Publish a fixed patch tag rather than mutating a release that users may have
-  checksummed.
+  checksummed. The release workflow enforces this: it fails when a published
+  (non-draft) release already exists for the tag instead of replacing assets.
 - Keep the bad artifact checksum in incident notes for user verification.
 - If the issue is manifest compatibility rather than binary behavior, document
   the required manifest change and link to the fixed docs.

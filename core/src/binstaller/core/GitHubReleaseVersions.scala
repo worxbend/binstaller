@@ -4,6 +4,8 @@ import binstaller.config.Diagnostics
 import binstaller.config.ToolName
 
 import java.net.URI
+import ox.flow.Flow
+import ox.supervised
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
@@ -17,13 +19,33 @@ private[core] object GitHubReleaseVersions:
     case UpToDate
     case Unknown
 
+  // Small bound: these are rate-limited GitHub API calls, not bulk transfers.
+  private val maxParallelism = 4
+
+  /** One status per plan tool; tools without a checkable GitHub release are Unknown. */
   def versionStatusByTool(
       plan: ResolvedPlan,
       httpTextClient: HttpTextClient
-  ): Map[ToolName, LatestReleaseStatus] = candidates(plan)
-    .view
-    .map(candidate => candidate.toolName -> latestStatus(candidate, httpTextClient))
+  ): Map[ToolName, LatestReleaseStatus] =
+    val candidatesByTool = candidates(plan).map(candidate => candidate.toolName -> candidate).toMap
+    val latestTags       = latestTagsByRepo(candidatesByTool.values.toVector, httpTextClient)
+    plan.tools.map: tool =>
+      val status = candidatesByTool.get(tool.name) match
+        case Some(candidate) => latestStatus(candidate, latestTags.getOrElse(candidate.repo, None))
+        case None            => LatestReleaseStatus.Unknown
+      tool.name -> status
     .toMap
+
+  // One fetch per repo, not per tool: several tools can pin releases from the same repository.
+  private def latestTagsByRepo(
+      candidates: Vector[GitHubReleaseCandidate],
+      httpTextClient: HttpTextClient
+  ): Map[GitHubRepo, Option[String]] = supervised:
+    Flow
+      .fromIterable(candidates.map(_.repo).distinct)
+      .mapPar(maxParallelism)(repo => repo -> latestTag(repo, httpTextClient).toOption)
+      .runToList()
+      .toMap
 
   private def candidates(
       plan: ResolvedPlan
@@ -42,10 +64,10 @@ private[core] object GitHubReleaseVersions:
   // pair yields Unknown so callers can distinguish "could not check" from a genuine "up to date".
   private def latestStatus(
       candidate: GitHubReleaseCandidate,
-      httpTextClient: HttpTextClient
-  ): LatestReleaseStatus = latestTag(candidate.repo, httpTextClient) match
-    case Left(_)    => LatestReleaseStatus.Unknown
-    case Right(tag) => VersionOrdering.compare(tag, candidate.current) match
+      latestTag: Option[String]
+  ): LatestReleaseStatus = latestTag match
+    case None      => LatestReleaseStatus.Unknown
+    case Some(tag) => VersionOrdering.compare(tag, candidate.current) match
         case VersionOrder.Greater                   => LatestReleaseStatus.Newer(tag)
         case VersionOrder.Equal | VersionOrder.Less => LatestReleaseStatus.UpToDate
         case VersionOrder.Unknown                   => LatestReleaseStatus.Unknown

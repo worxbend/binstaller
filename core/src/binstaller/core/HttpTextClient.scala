@@ -24,11 +24,10 @@ final case class HttpTextResponse(text: String, provenance: UrlProvenance)
 /** Boundary for fetching small text values such as version resolver endpoints. */
 trait HttpTextClient:
   /** Fetch text from a URL, returning domain errors rather than throwing expected failures. */
-  def getText(url: String): Either[HttpTextError, String]
+  def getText(url: String): Either[HttpTextError, String] = getTextWithProvenance(url).map(_.text)
 
   /** Fetch text and report the initial URL, final URL, and redirect chain. */
-  def getTextWithProvenance(url: String): Either[HttpTextError, HttpTextResponse] =
-    getText(url).map(text => HttpTextResponse(text, UrlProvenance.direct(url)))
+  def getTextWithProvenance(url: String): Either[HttpTextError, HttpTextResponse]
 
 /** HTTP text client constructors. */
 object HttpTextClient:
@@ -43,28 +42,21 @@ private[core] final class JdkHttpTextClient(
 
   private val maxResponseBytes = 4L * 1024L * 1024L
 
-  def getText(url: String): Either[HttpTextError, String] = getTextWithProvenance(url).map(_.text)
-
-  override def getTextWithProvenance(
+  def getTextWithProvenance(
       url: String
-  ): Either[HttpTextError, HttpTextResponse] = RuntimeUrl.httpsUri(url) match
-    case Left(message) => Left(HttpTextError(url, message))
-    case Right(_)      => Try(RuntimeHttpClient.getInputStream(client, url, hostGuard)) match
-        case Success(Right(result))
-            if result.response.statusCode() >= 200 &&
-              result.response.statusCode() < 300 =>
-          Try(RuntimeHttpBody.readWithDeadline(
-            result.response.body(),
-            bodyTimeout,
-            s"text response body timed out after ${bodyTimeout.toSeconds}s"
-          )(readBounded(_, maxResponseBytes))).toEither.left.map(Diagnostics.describe).flatten
-            .map(text => HttpTextResponse(text, result.provenance))
-            .left.map(message => HttpTextError(url, message, Some(result.provenance)))
-        case Success(Right(result)) =>
-          RuntimeHttpBody.closeAfterFailure(result.response.body())
-          Left(HttpTextError(url, s"HTTP ${result.response.statusCode()}", Some(result.provenance)))
-        case Success(Left(message)) => Left(HttpTextError(url, message))
-        case Failure(error)         => Left(HttpTextError(url, Diagnostics.describe(error)))
+  ): Either[HttpTextError, HttpTextResponse] = RuntimeHttpClient.withSuccessfulStream(
+    client,
+    url,
+    hostGuard,
+    (message, provenance) => HttpTextError(url, message, provenance)
+  ): result =>
+    Try(RuntimeHttpBody.readWithDeadline(
+      result.response.body(),
+      bodyTimeout,
+      s"text response body timed out after ${bodyTimeout.toSeconds}s"
+    )(readBounded(_, maxResponseBytes))).toEither.left.map(Diagnostics.describe).flatten
+      .map(text => HttpTextResponse(text, result.provenance))
+      .left.map(message => HttpTextError(url, message, Some(result.provenance)))
 
   private def readBounded(input: InputStream, maxBytes: Long): Either[String, String] = Try:
     val output = ByteArrayOutputStream()

@@ -11,6 +11,28 @@ line first.
 
 ---
 
+## 🐧 Linux: glibc too old
+
+`install.sh` stops with one of:
+
+```text
+error: glibc 2.35 is too old; binstaller requires glibc 2.39 or newer
+error: unsupported C library: musl libc (x86_64) (binstaller requires glibc 2.39 or newer)
+```
+
+The release binary is a GraalVM native image built on **ubuntu-24.04** and dynamically
+linked against **glibc 2.39** — that is the floor. Older glibc, and non-glibc systems
+such as Alpine (musl), cannot run it.
+
+| Situation | Fix |
+|---|---|
+| `ldd --version` reports glibc older than 2.39 | Upgrade to a newer distro release (Ubuntu 24.04+, Debian 13+, Fedora 40+). |
+| musl-based distro (Alpine, some containers) | No musl build is published — run binstaller inside a glibc-based container or VM. |
+
+macOS is unaffected: the `macos-amd64` / `macos-arm64` tarballs have no glibc dependency.
+
+---
+
 ## 📄 Manifest won't load
 
 | Message | Meaning | Fix |

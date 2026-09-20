@@ -1,7 +1,13 @@
 package binstaller.core
 
-/** Values that must be redacted when raw runtime data reaches output surfaces. */
-final case class SensitiveValueRedactions(values: Vector[String]):
+/**
+ * Values that must be redacted when raw runtime data reaches output surfaces.
+ *
+ * The constructor is private so `values` is always longest-first: when one secret is a prefix of
+ * another, redacting the shorter one first would leave the tail of the longer one visible. The
+ * companion [[SensitiveValueRedactions.apply]] enforces the order for every construction path.
+ */
+final case class SensitiveValueRedactions private (values: Vector[String]):
 
   /** Replace every configured sensitive value with `<redacted>`. */
   def redact(value: String): String = values.foldLeft(value): (current, secret) =>
@@ -11,6 +17,10 @@ final case class SensitiveValueRedactions(values: Vector[String]):
 object SensitiveValueRedactions:
   /** Redaction policy that does not hide any values. */
   val empty: SensitiveValueRedactions = SensitiveValueRedactions(Vector.empty)
+
+  /** Build a redaction policy, sorting values longest-first for overlap safety. */
+  def apply(values: Vector[String]): SensitiveValueRedactions =
+    new SensitiveValueRedactions(values.sortBy(value => -value.length))
 
   /**
    * Derive sensitive values from environment-like variables by inspecting variable names.
@@ -24,7 +34,7 @@ object SensitiveValueRedactions:
   def fromRuntimeVariables(values: Map[String, String]): SensitiveValueRedactions =
     val redactedValues = values.toVector.collect:
       case (name, value) if isSensitiveName(name) && value.length >= 4 => value
-    SensitiveValueRedactions(redactedValues.distinct.sortBy(value => -value.length))
+    SensitiveValueRedactions(redactedValues.distinct)
 
   private def isSensitiveName(name: String): Boolean =
     val upper = name.toUpperCase(java.util.Locale.ROOT)

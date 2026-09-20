@@ -25,14 +25,6 @@ object LockFileError:
     case LockFileError.DecodeFailed(path, message) => s"lock decode failed for $path: $message"
     case LockFileError.WriteFailed(path, message)  => s"lock write failed for $path: $message"
 
-/** Runtime options specific to the `lock` command. */
-final case class LockOptions(outputPath: String)
-
-/** Lock command option defaults. */
-object LockOptions:
-  /** Default lock file path shared by `lock` and `apply --locked`. */
-  val defaultOutputPath: String = "binstaller.lock.json"
-
 /** Serialized lock file tied to one profile and manifest fingerprint. */
 final case class LockFile(
     schemaVersion: Int,

@@ -165,20 +165,12 @@ final class DirectBinaryInstaller(
     if tool.symlinks.exists(_.privilege == SymlinkPrivilege.Sudo) then
       Left(ToolInstallError.SudoSymlinkNotAllowed(tool.name))
     else
-      installTool(
+      installDownloadedBinaryOrArchive(
         policy,
         tool,
         InstallerEventContext.start(InstallerEventObserver.none),
         SensitiveValueRedactions.empty
       )
-
-  private def installTool(
-      policy: ResolvedPolicy,
-      tool: ResolvedTool,
-      eventContext: InstallerEventContext,
-      redactions: SensitiveValueRedactions
-  ): Either[ToolInstallError, TerminalToolResult.Completed] =
-    installDownloadedBinaryOrArchive(policy, tool, eventContext, redactions)
 
   private def terminalResult(
       result: Either[ToolInstallError, TerminalToolResult.Completed],

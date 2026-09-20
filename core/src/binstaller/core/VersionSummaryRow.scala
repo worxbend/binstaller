@@ -16,6 +16,18 @@ final case class VersionSummaryRow(
     newer: NewerVersionStatus
 )
 
+/** Rendering helpers for the versions table. */
+object VersionSummaryRow:
+
+  /** Column widths of the versions table, computed over every rendered row, header included. */
+  final case class Layout(packageWidth: Int, versionWidth: Int)
+
+  /** Compute the widths both core's plain table and the CLI's styled one align their columns to. */
+  def layoutFor(rows: Vector[VersionSummaryRow]): Layout = Layout(
+    rows.map(_.packageName.length).maxOption.getOrElse(0),
+    rows.map(_.version.length).maxOption.getOrElse(0)
+  )
+
 /** Whether a newer upstream release is known for a tool. */
 enum NewerVersionStatus:
 

@@ -4,7 +4,6 @@ import binstaller.config.Diagnostics
 import binstaller.config.ValidationError
 
 import java.nio.file.Path
-import scala.jdk.CollectionConverters.*
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
@@ -49,16 +48,9 @@ private[core] object ResolvedPathValidator:
         case Success(_) => Vector.empty
 
   def pathSyntax(value: String, path: String, label: String): Vector[ValidationError] =
-    if value.trim.isEmpty then Vector(ValidationError(path, s"$label must not be empty"))
-    else if value.exists(Character.isISOControl) then
-      Vector(ValidationError(path, s"$label must not contain control characters"))
-    else if value.contains('\\') then
-      Vector(ValidationError(path, s"$label must not contain backslashes"))
-    else if value.matches("^[A-Za-z]:.*") then
-      Vector(ValidationError(path, s"$label must not be drive-prefixed"))
-    else if hasTraversalSegment(value) then
-      Vector(ValidationError(path, s"$label must not contain traversal segments"))
-    else Vector.empty
+    PathSyntaxRules.validate(value) match
+      case Left(violation) => Vector(ValidationError(path, s"$label ${violation.message}"))
+      case Right(())       => Vector.empty
 
   private def filename(value: String, path: String, label: String): Vector[ValidationError] =
     val syntaxErrors = pathSyntax(value, path, label)
@@ -80,11 +72,10 @@ private[core] object ResolvedPathValidator:
       path: String,
       label: String,
       allowCurrentDirectory: Boolean
-  ): Vector[ValidationError] = RelativeInstallPath.fromString(value, allowCurrentDirectory) match
-    case Right(_)                                           => Vector.empty
-    case Left(message) if message.startsWith("is invalid:") =>
-      Vector(ValidationError(path, s"invalid $label:${message.stripPrefix("is invalid:")}"))
-    case Left(message) => Vector(ValidationError(path, s"$label $message"))
-
-  private def hasTraversalSegment(value: String): Boolean =
-    Try(Path.of(value).iterator().asScala.exists(_.toString == "..")).getOrElse(false)
+  ): Vector[ValidationError] =
+    val syntaxErrors = pathSyntax(value, path, label)
+    if syntaxErrors.nonEmpty then syntaxErrors
+    else
+      RelativeInstallPath.fromString(value, allowCurrentDirectory) match
+        case Right(_)      => Vector.empty
+        case Left(message) => Vector(ValidationError(path, s"$label $message"))

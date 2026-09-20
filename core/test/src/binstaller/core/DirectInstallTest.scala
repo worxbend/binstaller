@@ -314,7 +314,7 @@ object DirectInstallTest extends TestSuite with CoreTestSupport:
       assert(Files.readString(installDir.resolve("bin/alpha")) == "tool-bytes")
       assert(Files.readString(installDir.resolve("share/tool")) == "tool-bytes")
 
-    test("observer failure during staged verification discards the staged install"):
+    test("observer failure during staged verification does not fail the install"):
       val tempRoot                         = tempDirectory("core-stage-observer")
       val installDir                       = tempRoot.resolve("alpha")
       val failed                           = AtomicBoolean(false)
@@ -340,10 +340,13 @@ object DirectInstallTest extends TestSuite with CoreTestSupport:
         InstallerEventContext.start(observer)
       )
 
-      assert(result.status == InstallerRunStatus.Failed)
+      // Reporting must never fail the operation it reports on.
+      assert(failed.get())
+      assert(result.status == InstallerRunStatus.Succeeded)
+      assert(Files.isRegularFile(installDir.resolve("bin/alpha")))
       assert(!hasStagedInstall(tempRoot, "alpha"))
 
-    test("failure before first replacement discards every prepared stage"):
+    test("observer failure before replacement does not fail prepared installs"):
       val tempRoot = tempDirectory("core-stage-batch")
       val alpha    = directTool(tempRoot.resolve("alpha"))
       val beta     = alpha.copy(
@@ -367,29 +370,27 @@ object DirectInstallTest extends TestSuite with CoreTestSupport:
         SensitiveValueRedactions.empty
       )
 
-      val thrown = assertThrows[IllegalStateException]:
-        val _ = installer.installPlanWithObserver(
-          plan,
-          VerboseOutput.Disabled,
-          _ => Right(()),
-          InstallerEventContext.start(observer),
-          parallelism(2)
-        )
+      val result = installer.installPlanWithObserver(
+        plan,
+        VerboseOutput.Disabled,
+        _ => Right(()),
+        InstallerEventContext.start(observer),
+        parallelism(2)
+      )
 
-      assert(thrown.getMessage.contains("observer failed before replacement"))
+      assert(result.status == InstallerRunStatus.Succeeded)
+      assert(Files.isRegularFile(tempRoot.resolve("alpha/bin/alpha")))
+      assert(Files.isRegularFile(tempRoot.resolve("beta/bin/beta")))
       assert(!hasStagedInstall(tempRoot, "alpha"))
       assert(!hasStagedInstall(tempRoot, "beta"))
-      assert(!Files.exists(tempRoot.resolve("alpha")))
-      assert(!Files.exists(tempRoot.resolve("beta")))
 
-    test("stage cleanup attempts every stage without masking a replacement observer failure"):
+    test("stage cleanup attempts every stage after a replacement observer failure"):
       val tempRoot = tempDirectory("core-stage-cleanup-errors")
       val alpha    = directTool(tempRoot.resolve("alpha"))
       val beta     = alpha.copy(
         name = toolName("beta"),
         installDir = tempRoot.resolve("beta").toString,
-        download = alpha.download.copy(url = "https://example.invalid/beta", filename = "beta"),
-        executables = Vector(ResolvedExecutable("bin/beta", None))
+        download = alpha.download.copy(url = "https://example.invalid/beta", filename = "beta")
       )
       val fileSystem = RecordingInstallFileSystem(
         discardFailure = Some(IllegalStateException("discard failed"))
@@ -406,16 +407,15 @@ object DirectInstallTest extends TestSuite with CoreTestSupport:
         SensitiveValueRedactions.empty
       )
 
-      val thrown = assertThrows[IllegalArgumentException]:
-        val _ = installer.installPlanWithObserver(
-          plan,
-          VerboseOutput.Disabled,
-          _ => Right(()),
-          InstallerEventContext.start(observer),
-          parallelism(2)
-        )
+      val result = installer.installPlanWithObserver(
+        plan,
+        VerboseOutput.Disabled,
+        _ => Right(()),
+        InstallerEventContext.start(observer),
+        parallelism(2)
+      )
 
-      assert(thrown.getMessage == "replacement observer failed")
+      assert(result.status == InstallerRunStatus.Succeeded)
       assert(fileSystem.discardCalls >= 2)
 
     test("cancelling parallel preparation discards ready stages and preserves existing installs"):

@@ -179,7 +179,7 @@ object BinaryInstallerApiTest extends TestSuite:
   private final class ThrowingHttpTextClient extends HttpTextClient:
     var calls: Int = 0
 
-    def getText(url: String): Either[HttpTextError, String] =
+    def getTextWithProvenance(url: String): Either[HttpTextError, HttpTextResponse] =
       calls += 1
       throw new java.lang.AssertionError(s"unexpected HTTP resolver call for $url")
 

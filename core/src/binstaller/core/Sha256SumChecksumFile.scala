@@ -33,18 +33,18 @@ private[core] object Sha256SumChecksumFile:
         else Lookup.Ambiguous(many.map((_, candidate) => candidate))
 
   private def parseLine(line: String): Option[(Sha256Digest, String)] =
-    val trimmed = line.trim
-    if trimmed.isEmpty || trimmed.startsWith("#") then None
+    // Never trim the line: the filename is part of it and may legitimately end with spaces.
+    if line.isBlank || line.startsWith("#") then None
     else
       // GNU coreutils prefixes a line with `\` when the filename contains a backslash or newline,
       // escaping those characters in the filename token that follows the digest.
-      val escaped = trimmed.startsWith("\\")
-      val body    = if escaped then trimmed.drop(1) else trimmed
+      val escaped = line.startsWith("\\")
+      val body    = if escaped then line.drop(1) else line
       // A line whose first token is not a valid digest is skipped, exactly as the old regex
       // rejection did -- checksum files routinely carry headers and comments.
       body.split("\\s+", 2).toVector match
         case Vector(hash, path) => Sha256Digest.fromString(hash).toOption.map: digest =>
-            val name = path.stripPrefix("*").trim
+            val name = path.stripPrefix("*")
             digest -> (if escaped then unescape(name) else name)
         case _ => None
 

@@ -140,10 +140,13 @@ private[core] final class ResolutionBuilder(
   ): ResolvedValue[ResolvedVersion] =
     val path        = s"spec.versions.$name.resolver.url"
     val resolvedUrl = interpolate(url, path, vars)
-    val fetched     =
-      if resolvedUrl.errors.nonEmpty then
-        ResolvedValue.valid(HttpTextResponse("", UrlProvenance.direct(resolvedUrl.value)))
-      else if httpsUrlErrors(resolvedUrl.value, path).nonEmpty then
+    // The https rule only applies to a cleanly interpolated URL; validating the raw template
+    // would report a second, spurious error for the same field.
+    val urlErrors =
+      if resolvedUrl.errors.nonEmpty then Vector.empty
+      else httpsUrlErrors(resolvedUrl.value, path)
+    val fetched =
+      if resolvedUrl.errors.nonEmpty || urlErrors.nonEmpty then
         ResolvedValue.valid(HttpTextResponse("", UrlProvenance.direct(resolvedUrl.value)))
       else
         httpTextClient.getTextWithProvenance(resolvedUrl.value) match
@@ -159,7 +162,7 @@ private[core] final class ResolutionBuilder(
 
     ResolvedValue(
       ResolvedVersion.Concrete(fetched.value.text, Some(fetched.value.provenance)),
-      resolvedUrl.errors ++ httpsUrlErrors(resolvedUrl.value, path) ++ fetched.errors ++
+      resolvedUrl.errors ++ urlErrors ++ fetched.errors ++
         missingConcreteVersionErrors(fetched.value.text, path, name)
     )
 
@@ -541,6 +544,9 @@ private[core] final class ResolutionBuilder(
       version: ResolvedVersion
   ): ResolvedValue[String] = resolveTemplate(raw, path, vars, version, (_, _) => Vector.empty)
 
+  private def normalizedBarePath(value: String): Option[Path] =
+    Try(Path.of(value).toAbsolutePath.normalize()).toOption
+
   /**
    * Normalize a manifest path, or report why it is not a usable path.
    *
@@ -593,8 +599,9 @@ private[core] final class ResolutionBuilder(
 
   private def nestedInstallDirectoryErrors(tools: Vector[ResolvedTool]): Vector[ValidationError] =
     val indexed = tools.zipWithIndex.flatMap:
-      case (tool, index) => Try(Path.of(tool.installDir).toAbsolutePath.normalize()).toOption.map:
-          path => (tool, index, path)
+      // Syntax failures are already reported by containmentErrors; only comparable paths matter.
+      case (tool, index) => normalizedBarePath(tool.installDir).map: path =>
+          (tool, index, path)
 
     indexed.flatMap:
       case (tool, index, installDir) => indexed.collect:

@@ -31,6 +31,7 @@ import binstaller.core.ToolSelection
 import binstaller.core.ApplyStateStore
 import binstaller.core.UrlProvenance
 import binstaller.core.UrlRedirectHop
+import picocli.CommandLine
 import utest.*
 
 import scala.jdk.CollectionConverters.*
@@ -108,6 +109,14 @@ object CliModuleTest extends TestSuite:
       assert(!result.out.contains("apt"))
       assert(!result.out.contains("dotfiles"))
       assert(!result.out.contains("Nerd Fonts"))
+
+    test("bare invocation prints usage and exits with a usage error"):
+      val result = runCli(Vector.empty)
+
+      assert(result.exitCode == CommandLine.ExitCode.USAGE)
+      assert(result.out.contains("Usage:"))
+      assert(result.out.contains("plan"))
+      assert(result.out.contains("apply"))
 
     test("plan help describes non-mutating output"):
       val result = runCli(Vector("plan", "--help"))
@@ -776,7 +785,7 @@ private object ExceptionalApplyInstallerService extends BinaryInstallerService:
       eventObserver: InstallerEventObserver
   ): InstallerResult =
     eventObserver.onEvent(InstallerEvent.DownloadProgress(
-      ToolName.unsafe("alpha"),
+      ToolName.trusted("alpha"),
       "https://example.invalid/alpha",
       0L,
       Some(10L),
@@ -793,18 +802,28 @@ private object ExceptionalApplyInstallerService extends BinaryInstallerService:
 
 private final class FakeHttpTextClient(text: String) extends HttpTextClient:
 
-  def getText(url: String): Either[HttpTextError, String] =
-    if url == "https://dl.k8s.io/release/stable.txt" then Right(text)
+  def getTextWithProvenance(url: String): Either[HttpTextError, HttpTextResponse] =
+    if url == "https://dl.k8s.io/release/stable.txt" then
+      Right(HttpTextResponse(text, UrlProvenance.direct(url)))
     else Left(HttpTextError(url, s"unexpected URL $url"))
 
 private final class RedirectingHttpTextClient(text: String, provenance: UrlProvenance)
     extends HttpTextClient:
 
-  def getText(url: String): Either[HttpTextError, String] = getTextWithProvenance(url).map(_.text)
+  override def getText(url: String): Either[HttpTextError, String] =
+    getTextWithProvenance(url).map(_.text)
 
   override def getTextWithProvenance(url: String): Either[HttpTextError, HttpTextResponse] =
     if url == provenance.initialUrl then Right(HttpTextResponse(text, provenance))
     else Left(HttpTextError(url, s"unexpected URL $url"))
+
+/**
+ * Await a test rendezvous latch, aborting with a named message on timeout rather than silently
+ * proceeding (the old `val _ = await(...)` shape) or hanging the suite.
+ */
+private def requireRendezvous(latch: CountDownLatch, description: String): Unit =
+  if !latch.await(5, TimeUnit.SECONDS) then
+    throw java.lang.AssertionError(s"rendezvous timed out waiting for $description")
 
 /**
  * Writes a literal payload to a temp artifact, so a CLI fake states only its progress behaviour.
@@ -852,7 +871,7 @@ private final class ConcurrentProgressBinaryDownloadClient(payloads: Map[String,
       val halfway = bytes.length.toLong / 2L
       progressObserver.onProgress(BinaryDownloadProgress.Started(url, total))
       starts.countDown()
-      val _ = starts.await(5, TimeUnit.SECONDS)
+      requireRendezvous(starts, "all concurrent downloads to start")
       progressObserver.onProgress(BinaryDownloadProgress.Advanced(url, halfway, total))
       progressObserver.onProgress(BinaryDownloadProgress.Finished(url, bytes.length.toLong, total))
       Right(testArtifact(url, bytes))

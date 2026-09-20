@@ -70,5 +70,6 @@ object app extends BinstallerModule, NativeImageModule:
   }
 
   def nativeImageOptions: T[Seq[String]] = Task {
+    // Precautionary: removal is unverified; a native-image build is too slow to check here.
     Seq("--no-fallback", "-O2", "--initialize-at-build-time=scala")
   }

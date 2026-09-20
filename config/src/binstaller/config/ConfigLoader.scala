@@ -52,21 +52,17 @@ object ConfigLoader:
 
   private def loadParsedYaml(value: Any): Either[ConfigLoadError, BinaryDistributionProfile] =
     val decoded = ManifestDecoder.decode(value)
-    // Decode always yields sentinel fallbacks on failure, so ProfileValidator would otherwise
-    // re-flag fields that already failed to decode -- reporting one mistake as two errors at the
-    // same path. A wholesale `if decoded.errors.nonEmpty then skip validate` is rejected: it would
-    // DROP the validator's only errors for fields that decode accepts, such as an unknown
-    // `versionRef` or a sudo symlink that policy forbids, whose sole diagnostics come from
-    // ProfileValidator. Instead we run the validator and drop only validator errors whose exact
-    // path already carries a decode error. The validator also receives those paths so aggregate
-    // checks such as duplicate-name detection can exclude only entries whose prerequisite name
-    // failed to decode. Paths the validator alone covers survive.
-    val decodedPaths     = decoded.errors.map(_.path).toSet
-    val validationErrors = ProfileValidator.validate(decoded.value, decodedPaths)
-      .filterNot(error => decodedPaths.contains(error.path))
-    val errors = decoded.errors ++ validationErrors
+    val errors  = decoded.errors ++ deduplicateValidationErrors(decoded)
     if errors.isEmpty then Right(decoded.value)
     else Left(ConfigLoadError.ValidationFailed(errors))
+
+  // Validator errors at a path the decoder already flagged are duplicates; validator-only paths survive.
+  private def deduplicateValidationErrors(
+      decoded: DecodeResult[BinaryDistributionProfile]
+  ): Vector[ValidationError] =
+    val decodedPaths = decoded.errors.map(_.path).toSet
+    ProfileValidator.validate(decoded.value, decodedPaths)
+      .filterNot(error => decodedPaths.contains(error.path))
 
   private def convertYaml(value: Any, depth: Int): Either[String, Any] =
     if depth > maxYamlDepth then
