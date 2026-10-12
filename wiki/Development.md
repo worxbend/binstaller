@@ -10,7 +10,7 @@ launcher for everything.
 | Need | Version |
 |---|---|
 | JDK | 21+ |
-| GraalVM | 21, **only** for building native images locally |
+| GraalVM | 25.4; 25.0.1 on Intel macOS, **only** for building native images locally |
 | Mill | Pinned by `.mill-version`; the `./mill` launcher fetches it |
 
 ---
@@ -135,7 +135,7 @@ Releases are GraalVM native binaries built by `.github/workflows/release.yml`, t
 
 Per target (`linux-amd64`, `linux-arm64`, `macos-amd64`, `macos-arm64`) the workflow:
 
-1. Checks out and sets up GraalVM 21 with `native-image`
+1. Checks out and sets up GraalVM 25.4 with `native-image` (25.0.1 for Intel macOS)
 2. Runs `./mill __.test`
 3. Builds `./mill app.nativeImage`
 4. Packages `binstaller-<version>-<target>.tar.gz`

@@ -203,7 +203,7 @@ final class DirectBinaryInstaller(
       )
 
   private def rootCauseSummary(message: String): String =
-    message.linesIterator.nextOption.getOrElse(message)
+    message.linesIterator.nextOption().getOrElse(message)
 
   private def verboseLines(
       tool: ResolvedTool,

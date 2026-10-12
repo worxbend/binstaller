@@ -122,8 +122,9 @@ private[cli] final class TerminalSudoCredentialProvider(err: PrintWriter)
       .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPLACE)
     val charBuffer = decoder.decode(java.nio.ByteBuffer.wrap(bytes, 0, length))
     val chars      = Array.ofDim[Char](charBuffer.remaining())
-    val _          = charBuffer.get(chars)
-    if charBuffer.hasArray then java.util.Arrays.fill(charBuffer.array(), ' ')
+    // A named binding avoids Scala 3.10 inspecting JDK-internal buffer fields for `val _`.
+    val consumedBuffer = charBuffer.get(chars)
+    if consumedBuffer.hasArray then java.util.Arrays.fill(consumedBuffer.array(), ' ')
     TerminalSudoCredentialProvider.passwordFromChars(Some(chars))
 
   /**

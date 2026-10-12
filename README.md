@@ -15,8 +15,8 @@ with a dry-run plan you read first, SHA-256 verification you can trust, and a lo
 [![Pages](https://github.com/worxbend/binstaller/actions/workflows/pages.yml/badge.svg)](https://worxbend.github.io/binstaller/)
 [![Latest release](https://img.shields.io/github/v/release/worxbend/binstaller?logo=github&color=6366f1)](https://github.com/worxbend/binstaller/releases/latest)
 
-![Scala 3](https://img.shields.io/badge/Scala-3.8.2-dc322f?logo=scala&logoColor=white)
-![Mill](https://img.shields.io/badge/Mill-1.1.7-5b5bd6)
+![Scala 3](https://img.shields.io/badge/Scala-3.10.0-dc322f?logo=scala&logoColor=white)
+![Mill](https://img.shields.io/badge/Mill-1.3.0-5b5bd6)
 ![GraalVM](https://img.shields.io/badge/GraalVM-native%20image-f2a900?logo=graalvm&logoColor=111111)
 ![Linux](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-2ea44f?logo=linux&logoColor=white)
 ![macOS](https://img.shields.io/badge/macOS-amd64%20%7C%20arm64-000000?logo=apple&logoColor=white)
@@ -283,7 +283,8 @@ fingerprint, so a later apply can skip tools already completed for the same prof
 
 ## 🛠️ Build From Source
 
-**Requirements:** JDK 21+ · GraalVM 21 only for local native images.
+**Requirements:** JDK 21+ (CI also tests JDK 27) · GraalVM 25.4 for local native images
+(25.0.1 on Intel macOS).
 
 ```bash
 ./mill __.compile                          # 🏗️  compile everything

@@ -61,7 +61,7 @@ both platforms. Windows is not supported.
 ### ☕ Do I need a JVM?
 
 No. Releases are GraalVM native images. You only need a JDK 21+ if you build from source, and
-GraalVM 21 only if you build native images locally.
+GraalVM 25.4 (25.0.1 on Intel macOS) only if you build native images locally.
 
 ---
 

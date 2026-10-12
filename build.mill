@@ -1,3 +1,5 @@
+//| mill-jvm-version: system
+
 package build
 
 import mill.*
@@ -5,25 +7,33 @@ import mill.javalib.NativeImageModule
 import mill.scalalib.*
 
 object Versions:
-  val scala: String = "3.8.2"
+  val scala: String = "3.10.0"
 
 object Deps:
   val picocli: mill.javalib.Dep = mvn"info.picocli:picocli:4.7.7"
-  val snakeYamlEngine: mill.javalib.Dep = mvn"org.snakeyaml:snakeyaml-engine:3.0.1"
-  val oxCore: mill.javalib.Dep = mvn"com.softwaremill.ox::core:1.0.5"
+  val snakeYamlEngine: mill.javalib.Dep = mvn"org.snakeyaml:snakeyaml-engine:3.2"
+  val oxCore: mill.javalib.Dep = mvn"com.softwaremill.ox::core:1.0.9"
   val upickle: mill.javalib.Dep = mvn"com.lihaoyi::upickle:4.4.3"
   val osLib: mill.javalib.Dep = mvn"com.lihaoyi::os-lib:0.11.8"
   val fansi: mill.javalib.Dep = mvn"com.lihaoyi::fansi:0.5.1"
-  val xz: mill.javalib.Dep = mvn"org.tukaani:xz:1.10"
+  val xz: mill.javalib.Dep = mvn"org.tukaani:xz:1.12"
   val utest: mill.javalib.Dep = mvn"com.lihaoyi::utest:0.9.5"
+  val sourcecode: mill.javalib.Dep = mvn"com.lihaoyi::sourcecode:0.4.4"
+  val collectionCompat: mill.javalib.Dep = mvn"org.scala-lang.modules::scala-collection-compat:2.14.0"
 
 trait BinstallerModule extends ScalaModule:
+  def depManagement: T[Seq[mill.javalib.Dep]] = Task {
+    // Align the transitive dependencies of os-lib, fansi, and utest with stable releases.
+    Seq(Deps.sourcecode, Deps.collectionCompat)
+  }
+
   def scalaVersion: T[String] = Task {
     Versions.scala
   }
 
   def scalacOptions: T[Seq[String]] = Task {
     Seq(
+      "-java-output-version:21",
       "-deprecation",
       "-feature",
       "-Werror",
@@ -70,6 +80,6 @@ object app extends BinstallerModule, NativeImageModule:
   }
 
   def nativeImageOptions: T[Seq[String]] = Task {
-    // Precautionary: removal is unverified; a native-image build is too slow to check here.
+    // Keep --no-fallback for the older GraalVM release used on Intel macOS.
     Seq("--no-fallback", "-O2", "--initialize-at-build-time=scala")
   }

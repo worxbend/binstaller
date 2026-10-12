@@ -1,6 +1,6 @@
 # Release Guide
 
-Date: 2026-07-18
+Date: 2026-10-13
 
 Releases are GraalVM native binaries produced by
 `.github/workflows/release.yml`, built for Linux amd64/arm64 and macOS
@@ -26,7 +26,7 @@ tag input.
 The GitHub Actions build matrix, per target:
 
 1. Checks out the repository.
-2. Sets up GraalVM 21 with `native-image`.
+2. Sets up GraalVM 25.4 with `native-image` (25.0.1 for Intel macOS).
 3. Runs `java -version` and `native-image --version`.
 4. Runs `./mill __.test`.
 5. Builds `./mill app.nativeImage`.
@@ -46,7 +46,8 @@ The publish job then:
    for the tag, the job fails instead of replacing its assets; asset
    replacement via `--clobber` is only allowed on draft releases.
 
-The snap job then builds the classic snap for amd64 and arm64 from the native
+The snap job then uses Snapcraft 9.x and the core26 base on Ubuntu 26.04
+runners to build the classic snap for amd64 and arm64 from the native
 tarballs, smoke-tests it (`snap install --dangerous --classic` plus
 `binstaller --help`), uploads the `.snap` as a build artifact, and publishes
 to the Snap Store stable channel. The store upload only runs when the

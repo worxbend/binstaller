@@ -1,6 +1,9 @@
 # Testing Guide
 
-Date: 2026-06-30
+Date: 2026-10-13
+
+CI runs on JDK 21 and the latest stable JDK 27. Mill uses the selected system
+JDK, and Scala emits Java 21 bytecode.
 
 Use the checked-in Mill launcher. The project is a Scala 3/Mill build; do not
 add sbt, Maven, Gradle, npm, or Make for normal validation.
@@ -132,5 +135,5 @@ GRAALVM_HOME=/path/to/graalvm ./mill app.nativeImage
 ```
 
 If `native-image` is missing, record the blocker and the `java -version`
-details. The release workflow uses GraalVM 21 and runs `./mill app.nativeImage`
-on Ubuntu 24.04.
+details. The release workflow uses GraalVM 25.4 (25.0.1 for Intel macOS) and
+runs `./mill app.nativeImage` on Ubuntu 24.04 and macOS 15.
