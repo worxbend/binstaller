@@ -54,6 +54,12 @@ to the Snap Store stable channel. The store upload only runs when the
 `SNAPCRAFT_STORE_CREDENTIALS` repository secret is set; otherwise the job
 skips it with an explicit `::notice::` and a job-summary entry.
 
+If Snap packaging fails after the GitHub release is published, dispatch the
+release workflow on `main` with the same `version` and the original release
+workflow ID in `snap-retry-run-id`. This skips native builds and GitHub release
+publication, and packages the existing native artifacts for the Snap Store.
+The retry requires the original workflow artifacts to remain available.
+
 The release and snap jobs run in the `release` GitHub environment; configure
 required reviewers for that environment in the repository settings so every
 publish is manually approved. Manual `workflow_dispatch` runs are restricted
