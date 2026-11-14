@@ -49,8 +49,9 @@ happens.
   lines, while ANSI output uses `VersionSummaryRow` values for styling.
 - `app`: owns process entry and exit-code propagation only.
 - `build/release`: `build.mill` defines modules and native-image settings;
-  `.github/workflows/release.yml` builds, smokes, packages, checksums,
-  and publishes Linux amd64 artifacts.
+  `.github/workflows/release.yml` builds, smokes, packages, checksums, signs,
+  and publishes `linux-amd64`, `linux-arm64`, `macos-amd64`, and `macos-arm64`
+  artifacts, then builds the amd64 and arm64 snaps from the Linux tarballs.
 
 ## Data Flow
 
@@ -60,14 +61,18 @@ happens.
    (`ProfileSource.yamlFile`) delegates to `ConfigModule.load`; tests can
    substitute `ProfileSource.yamlText` to resolve a manifest without touching
    the filesystem.
-3. `PlanResolver` resolves runtime variables, manifest vars, policy paths,
+3. `ToolSelector` picks the plan entries that take part in the run. It keeps
+   the entries whose `when:` selector matches the host, then applies `--only`
+   first and `--skip` second while preserving manifest order. Host OS and
+   architecture are an explicit `ResolutionOptions` input with no default;
+   only `ResolutionOptions.fromEnvironment()` detects them. Every command that
+   resolves a plan — `plan`, `apply`, `versions` and `lock` — applies the
+   selection.
+4. `PlanResolver` resolves runtime variables, manifest vars, policy paths,
    version sources, download URLs, archive mappings, executable paths, and
-   symlinks into `ResolvedPlan`. Host OS and architecture — which decide the
-   `when:` selectors — are an explicit `ResolutionOptions` input with no
-   default; only `ResolutionOptions.fromEnvironment()` detects them.
-4. `ToolSelection` applies `--only` first and `--skip` second while preserving
-   manifest order. Every command that resolves a plan — `plan`, `apply`,
-   `versions` and `lock` — applies the selection.
+   symlinks of the selected entries into `ResolvedPlan`. An entry that was not
+   selected is never resolved, so it makes no network request and cannot fail
+   the run.
 5. `plan` renders the selected `ResolvedPlan` directly as script-friendly text.
 6. `apply` checks state compatibility, executes each selected tool, writes apply
    state after terminal tool results, and emits `InstallerEvent` values. Tools
@@ -97,6 +102,7 @@ Core emits the following renderer-agnostic events:
 
 - `ResolvingStarted(configPath, elapsedTime)`
 - `PlanReady(toolNames, stateFilePath, elapsedTime)`
+- `StateLoading(path, elapsedTime)`
 - `ToolStarted(toolName, phase, elapsedTime)`
 - `ToolPhaseChanged(toolName, phase, elapsedTime)`
 - `DownloadProgress(toolName, url, downloadedBytes, totalBytes, status, elapsedTime)`

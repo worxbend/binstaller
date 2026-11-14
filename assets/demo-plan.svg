@@ -50,7 +50,7 @@
 <tspan fill="#c9d1d9">filesystem: </tspan>
 <tspan fill="#3fb950">no changes will be made</tspan>
 <tspan fill="#c9d1d9"> </tspan>
-<tspan fill="#8b949e">(version resolution may use the network)</tspan>
+<tspan fill="#8b949e">(version and checksum resolution may use the network)</tspan>
 </text>
 <text x="20.0" y="255.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14.0" fill="#c9d1d9" xml:space="preserve">
 <tspan fill="#c9d1d9">sudo risk: </tspan>

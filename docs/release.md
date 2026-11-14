@@ -19,19 +19,27 @@ per-file SHA-256 checksum and a keyless Sigstore bundle:
 
 Targets are `linux-amd64`, `linux-arm64`, `macos-amd64`, and `macos-arm64`.
 The workflow is triggered by `v*` tags or manual `workflow_dispatch` with a
-tag input.
+tag input. Prerelease versions such as `v1.0.0-rc.1` are rejected before the
+build starts: every release is published as the latest GitHub release and to
+the stable snap channel, so there is no prerelease flow.
 
 ## Workflow Summary
 
 The GitHub Actions build matrix, per target:
 
 1. Checks out the repository.
-2. Sets up GraalVM 25.4 with `native-image` (25.0.1 for Intel macOS).
+2. Sets up GraalVM 25.5 with `native-image` (25.0.1 for Intel macOS).
 3. Runs `java -version` and `native-image --version`.
 4. Runs `./mill __.test`.
-5. Builds `./mill app.nativeImage`.
+5. Builds `./mill app.nativeImage` with `BINSTALLER_VERSION` set to the release
+   version, which `binstaller --version` prints.
 6. Copies the native executable into a `binstaller-<version>-<target>` tarball.
-7. Smokes native `--help`, `plan`, and `versions`.
+7. Smokes native `--help`, `--version`, `plan`, `versions`, `apply`, and `lock`.
+   The step fails when `--version` does not match the release or when help
+   writes anything to stderr, such as a JDK warning. `apply` and `lock` run
+   against a temporary manifest whose only tool is skipped, so they need no
+   network and write only under the runner temp directory. The step also
+   requires `apply --parallelism 0` to exit with the usage error code 2.
 8. Writes a per-file `.sha256` checksum.
 9. Uploads the tarball as a build artifact.
 
@@ -64,7 +72,11 @@ The release and snap jobs run in the `release` GitHub environment; configure
 required reviewers for that environment in the repository settings so every
 publish is manually approved. Manual `workflow_dispatch` runs are restricted
 to `refs/heads/main`, and tag pushes are rejected unless the tagged commit is
-an ancestor of `origin/main`.
+an ancestor of `origin/main`. A manual run for a version whose tag already
+exists fails before building unless that tag points at the dispatched commit,
+because the release would stay attached to the tag's commit. To rebuild an
+existing tag, re-run the release run of the tag push; otherwise publish a new
+patch tag.
 
 All GitHub Actions are pinned to commit SHAs, and Mill is pinned via
 `.mill-version`.

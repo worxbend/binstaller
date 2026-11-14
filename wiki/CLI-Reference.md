@@ -43,6 +43,12 @@ Available on `plan`, `apply`, `versions` and `lock`. Both flags are repeatable.
 `--only` is applied **first**, `--skip` **second**, and manifest order is always preserved.
 Unknown tool names are a selection error (exit `1`), not a silent no-op.
 
+Selection runs before anything is resolved: a deselected tool makes no network request, and its
+resolution errors cannot fail the run. The whole manifest is still validated when it loads, and
+install directories are still compared, so a selected tool cannot install into, inside or over a
+deselected tool's directory. `--skip` accepts a tool that a `when:` selector excludes on this host.
+`--only` reports that tool as excluded for this host (exit `1`).
+
 ```bash
 binstaller plan  --only yazi --only zig
 binstaller apply --skip neovim
@@ -83,6 +89,12 @@ filesystem: no changes will be made (version and checksum resolution may use the
 sudo risk: YES - 5 sudo symlink command(s) require elevated privileges
 ```
 
+`state file:` names the file `apply` would use with the same flags: `--state FILE` when given,
+otherwise `spec.policy.stateFile`. Plan holds that name to the rule apply uses, so a `--state` value
+that apply would refuse fails the plan with the same message. With `--locked`, a tool that has no manifest checksum shows the
+digest from the lock file as `checksum: sha256 <digest> (pinned by lock file <path>)`, because
+that is the value `apply --locked` verifies.
+
 ---
 
 ## 🚀 `apply`
@@ -107,7 +119,8 @@ binstaller apply --parallelism 1
 
 **Output style:** colour, in-place progress bars and a concurrent progress block when a terminal
 is attached; plain, line-oriented, script-friendly text when it is not. Piping to a file or
-another process is safe.
+another process is safe. A progress row wider than the terminal is clipped at the right edge, not
+wrapped, so widen the terminal to see the percentage and byte counts of a long file name.
 
 **Failure behaviour:** by default the run stops at the first failed tool. Set
 `spec.policy.continueOnError: true` to keep going — the run still exits non-zero if anything
@@ -157,8 +170,26 @@ binstaller lock --only helm --only kubectl
 > **Note:** `--lock-file` deliberately means *write to* for `lock` and *read from* for
 > `plan`/`apply` (with `--locked`).
 
-Resolves versions, URLs and digests and writes them as JSON. Installs nothing.
+Resolves versions, URLs and digests and writes them as JSON. Installs nothing. When the file
+already holds a lock for the same profile and manifest, the entries of tools this run did not lock
+are kept, so `lock --only` refreshes some pins without dropping the others.
 See 🧊 [Lock Files & Reproducibility](Lock-Files-and-Reproducibility).
+
+---
+
+## 📤 Output streams
+
+| Stream | What is written there |
+|---|---|
+| stdout | Help, the version, the plan, the versions table, the lock report and the whole `apply` report, including a failed one. |
+| stderr | Usage errors such as an unknown option, and the reason a `plan`, `versions` or `lock` run failed. |
+
+`binstaller plan >/dev/null` therefore still shows why a profile did not resolve, and
+`binstaller versions > versions.txt` never writes an error into the file.
+
+Colour follows one rule for all output, help and usage errors included: it is on when a terminal
+is attached or `FORCE_COLOR` / `CLICOLOR_FORCE` is set to anything but `0`, and always off when
+`NO_COLOR` is set or `TERM` is `dumb`.
 
 ---
 

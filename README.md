@@ -15,8 +15,8 @@ with a dry-run plan you read first, SHA-256 verification you can trust, and a lo
 [![Pages](https://github.com/worxbend/binstaller/actions/workflows/pages.yml/badge.svg)](https://worxbend.github.io/binstaller/)
 [![Latest release](https://img.shields.io/github/v/release/worxbend/binstaller?logo=github&color=6366f1)](https://github.com/worxbend/binstaller/releases/latest)
 
-![Scala 3](https://img.shields.io/badge/Scala-3.10.0-dc322f?logo=scala&logoColor=white)
-![Mill](https://img.shields.io/badge/Mill-1.3.0-5b5bd6)
+![Scala 3](https://img.shields.io/badge/Scala-3.10.1-dc322f?logo=scala&logoColor=white)
+![Mill](https://img.shields.io/badge/Mill-1.3.1-5b5bd6)
 ![GraalVM](https://img.shields.io/badge/GraalVM-native%20image-f2a900?logo=graalvm&logoColor=111111)
 ![Linux](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-2ea44f?logo=linux&logoColor=white)
 ![macOS](https://img.shields.io/badge/macOS-amd64%20%7C%20arm64-000000?logo=apple&logoColor=white)
@@ -141,6 +141,11 @@ binstaller plan --only lazygit,neovim --skip neovim
 There's no separate "single tool" command — `--only`/`--skip` is the whole selection mechanism,
 and it works the same way across `plan`, `apply`, `versions` and `lock`.
 
+Selection runs before anything is resolved. A deselected tool makes no network request, and its
+resolution errors cannot fail the run. The whole manifest is still validated when it loads, and a
+selected tool may not install into, inside or over a deselected tool's directory. A name that a `when:` selector excludes on this host is
+accepted by `--skip`. `--only` reports it as excluded for this host and exits `1`.
+
 **Pin everything to a lock file:**
 
 ```bash
@@ -156,7 +161,7 @@ binstaller apply --locked --lock-file binstaller.lock.json
 |---|---|---|
 | 🔍 **Plan before apply**<br>Every version, URL, archive mapping and symlink resolved and printed. Zero filesystem writes. | 🔐 **Checksums, loudly**<br>SHA-256 verified when configured — and a missing checksum is called out in the plan. | 🧊 **Lock files**<br>`lock` writes resolved versions and digests; `apply --locked` refuses to drift. |
 | 🛡️ **SSRF-guarded**<br>HTTPS only. Loopback, private and cloud-metadata hosts rejected — on every redirect hop. | ↩️ **Resumable state**<br>State is saved after each tool and keyed to the manifest fingerprint, so re-runs skip what worked. | ⚡ **Native, no JVM**<br>GraalVM native images for Linux and macOS, amd64 and arm64. |
-| 📦 **Archives handled**<br>Direct binaries, `zip`, `tar.gz`, `tar.xz` — member paths validated so nothing escapes staging. | 🔗 **Sudo is opt-in**<br>System-wide symlinks need `allowSudoSymlinks` and are flagged `sudo risk` in the plan. | 🧱 **Strict mode**<br>`policy.mode: strict` rejects latest-URLs, missing checksums, sudo symlinks and `tar.xz` fallbacks. |
+| 📦 **Archives handled**<br>Direct binaries, `zip`, `tar.gz`, `tar.xz` — member paths validated so nothing escapes staging. | 🔗 **Sudo is opt-in**<br>System-wide symlinks need `allowSudoSymlinks` and are flagged `sudo risk` in the plan. | 🧱 **Strict mode**<br>`policy.mode: strict` rejects latest-URLs, missing checksums and sudo symlinks. |
 
 > [!IMPORTANT]
 > The scope is deliberately narrow. `binstaller` is **not** a package manager, a dotfiles runner,
@@ -272,7 +277,9 @@ spec:
 ## ↩️ State And Resume
 
 `apply` writes state after each per-tool result. State is tied to the profile name and the manifest
-fingerprint, so a later apply can skip tools already completed for the same profile.
+fingerprint, so a later apply can skip tools already completed for the same profile. A completed
+tool is installed again when its resolved download URL changes, for example after a version
+resolver starts returning a newer release.
 
 - 📍 The state path comes from `--state` or `spec.policy.stateFile`.
 - 🔒 State paths are current-directory filenames only — absolute, nested and empty paths are rejected.
@@ -283,7 +290,7 @@ fingerprint, so a later apply can skip tools already completed for the same prof
 
 ## 🛠️ Build From Source
 
-**Requirements:** JDK 21+ (CI also tests JDK 27) · GraalVM 25.4 for local native images
+**Requirements:** JDK 21+ (CI also tests JDK 27) · GraalVM 25.5 for local native images
 (25.0.1 on Intel macOS).
 
 ```bash

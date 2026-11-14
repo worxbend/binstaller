@@ -68,3 +68,16 @@ BinaryInstaller.useDefault: installer =>
 `ProfileInput.File` reads YAML from a path and `ProfileInput.Yaml` accepts in-memory YAML. The
 new request types are additive. See the [prerelease config API](architecture.md#prerelease-config-api)
 for the validated configuration model and compatibility notes.
+
+Source-incompatible changes to the prerelease core types:
+
+- `ResolvedChecksum.isConfigured` and `ResolvedChecksum.isDiscovered` are removed. Match on
+  `ResolvedChecksum.source` instead.
+- `ResolvedChecksumSource` has a third case, `Locked(lockPath)`: a digest that `--locked` took
+  from the lock file for a tool whose manifest declares no checksum. Exhaustive matches need the
+  new case.
+- `ToolInstallError.ChecksumMismatch` has a fifth field, `suggestion`.
+- `LockReport` has a third field, `keptEntries`: how many entries a lock run kept from a
+  compatible existing lock file.
+- `UrlProvenance.fromResponse` is removed. Build `UrlProvenance(initialUrl, finalUrl, redirects)`
+  directly.

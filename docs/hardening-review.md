@@ -45,8 +45,8 @@ reporting, tests, and release workflow.
 - Require checksums, lock-file entries, or signed provenance for dynamic sources
   before encouraging production use. Current output calls missing checksums out
   as `not configured`, but absence is still accepted.
-- Add max download size enforcement and optional content-length checks before
-  buffering downloads into memory.
+- Implemented: Downloads stream to a temp file instead of memory and stop at a
+  512 MiB cap. A `Content-Length` above the cap fails before the body is read.
 - Add redirect provenance to plan/lock output, including the final effective URL
   where the JDK client exposes it.
 - Add retry policy for transient HTTP failures, keeping retries off for scripts
@@ -129,7 +129,7 @@ reporting, tests, and release workflow.
   or fingerprints fail unless `--reset-state` is used.
 - Are error messages actionable without exposing secrets? Validation and apply
   failures include paths/actions. Some filesystem and process errors still
-  include paths by design.
+  include paths by design; a filesystem error names its reason after the path.
 - Are plan and apply close enough? Plan and apply share resolution and
   selection. Apply has extra preflight and executor phases.
 - Do tests cover real failure modes? Tests cover invalid manifests, URL scheme,

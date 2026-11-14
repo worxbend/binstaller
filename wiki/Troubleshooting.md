@@ -75,6 +75,7 @@ and reviewable**, not so they become the default.
 | Host rejected | It names or resolves to loopback, link-local, private, site-local, multicast or a cloud-metadata endpoint. | Use a public host. This guard also applies to **every redirect hop**. |
 | `http-text resolver failed: …` | The `resolver.url` fetch failed. | Check the URL by hand: `curl -sSfL <url>`. |
 | `version 'X' did not resolve to a concrete value` | A resolver returned nothing usable. | Verify the endpoint returns a bare version string. |
+| `binstaller-download-*.artifact` files in the temp directory | A run was interrupted in the middle of a download. | Nothing to do. Ctrl-C and SIGTERM remove them on exit. After a hard kill, the next download removes any that are over an hour old. |
 
 ---
 
@@ -95,6 +96,10 @@ The error deliberately tells you to *verify the downloaded artifact before updat
 checksum*. Do that. Then update the value, or switch to `checksum.discover` so the digest comes
 from the upstream `SHA256SUMS` file.
 
+Under `--locked`, a tool with no manifest checksum is verified against the lock file. The error
+then reads `checksum source: pinned by lock file <path>`. Verify the artifact, then re-run
+`binstaller lock` to record the new digest.
+
 > ⚠️ A checksum must be exactly 64 hexadecimal characters. Anything else is rejected at load time.
 
 ---
@@ -108,6 +113,10 @@ from the upstream `SHA256SUMS` file.
 | `… must not be drive-prefixed` / `must not contain backslashes` | Windows-style path in a `to:` target. |
 | `… must not contain control characters` | Non-printable characters in a resolved path. |
 | `verify executable: missing <path>` | The declared executable isn't there after extraction. |
+| `staging: <path>: permission denied` | The account running `apply` can't write next to the install directory. Filesystem failures name the reason after the path: `permission denied`, `no such file`, `already exists` or `directory not empty`. |
+| `symlink path must not equal its target` | A symlink's `path` and `target` name the same file. Creating the link would delete the executable it should expose. Give the link its own name. |
+| `installDir must not be nested inside tool 'X' installDir` / `installDir must not contain the installDir of tool 'X'` | Two tools share an install directory, or one sits inside the other. Installing one would replace the other, so this fails even when `--only` or `--skip` leaves X out. Give each tool its own directory. |
+| `archive source must not be current directory` / `archive target must not be current directory` | A `files` mapping uses `.` as its `from:` or `to:`. Only a `directories` mapping may: `from: "."` is the whole archive, `to: "."` the install directory. |
 
 **Debugging a `from:` mismatch** — list the archive's real member names:
 
@@ -158,8 +167,9 @@ All rendered as `locked apply refused by <path>: <reason>`.
 | `lock file … is missing` | Run `binstaller lock`, or drop `--locked`. |
 | `manifest fingerprint changed: …` | You edited the profile. Re-run `binstaller lock` and commit both files together. |
 | `tool 'X' version changed: lock has 'A', resolved 'B'` | Upstream moved. Re-lock deliberately. |
-| `tool 'X' has no locked sha256 digest` | Add a checksum to that tool, then re-lock. |
-| `missing lock entry for tool 'X'` | The tool was added after locking. Re-lock. |
+| `tool 'X' has no locked sha256 digest` | The lock entry lost its digest, usually through a hand edit. Re-run `binstaller lock`; it records a digest for every tool. |
+| `tool 'X' sha256 changed`, `size changed` or `download provenance changed` | The gate downloaded the artifact and it no longer matches the lock. Find out why upstream changed it before you re-lock. |
+| `missing lock entry for tool 'X'` | The lock file never got an entry for X. It was written for a subset of tools: by `lock --only` without X, or by `lock` on a host whose `when` selectors leave X out. (A tool added to the manifest later shows up as `manifest fingerprint changed` instead.) Run `binstaller lock --only X` with the same `--lock-file`; the entries already there are kept. |
 
 ---
 
@@ -168,6 +178,7 @@ All rendered as `locked apply refused by <path>: <reason>`.
 | Symptom | Explanation |
 |---|---|
 | No colours, no progress bars | Output isn't a terminal. Plain line-oriented text is intentional so piping stays safe. |
+| `WARNING: A terminally deprecated method in sun.misc.Unsafe has been called` | Harmless. Older release binaries print this JDK notice once per run, because some dependencies still use an old Scala lazy-initialization scheme. Nothing is wrong with the install; upgrade binstaller to get rid of it. |
 | Progress bars overwrite each other | Concurrent downloads share a redrawn progress block. It settles once downloads finish. |
 | A download label shows an opaque ID instead of a filename | The label comes from the **final** URL, and some CDNs use signed, opaque asset paths. The install itself is unaffected. |
 

@@ -147,6 +147,8 @@ When the tool ships a whole tree that must stay together:
       - path: bin/nvim
 ```
 
+An archive with no top-level directory installs whole with `from: "."`.
+
 ---
 
 ## 🤐 Recipe: `zip` with several executables
@@ -174,7 +176,7 @@ When the tool ships a whole tree that must stay together:
 ```
 
 Supported archive types: `zip`, `tar.gz`, `tar.xz`. All are extracted natively in-process —
-no `unzip`, `tar` or shell involved. Member names are normalized and confined to a private
+no `unzip`, `tar` or shell involved. Member names are normalized and confined to a
 staging directory, and only declared mappings are copied into the install directory.
 
 ---
@@ -253,6 +255,10 @@ when:
 Entries whose `when` clause doesn't match the host are skipped during resolution. Use it to keep
 Linux and macOS entries in one profile.
 
+`os.family` is exactly one of `linux`, `darwin` (or `macos`, `mac`, `osx`) or `windows`; one entry
+cannot name two families. `architecture` is `amd64` (or `x86_64`, `x64`), `arm64` (or `aarch64`) or
+`"386"`. Any other value is a load-time error, because it could match no host.
+
 ---
 
 ## 🔤 Interpolation
@@ -265,7 +271,7 @@ Literal `${name}` only. Shell forms such as `$(cmd)` are **not** executed.
 | Anything under `spec.vars` | Your manifest. |
 | `${appsDir}` | `policy.appsDir`. |
 | `${version}` | The resolved `versionRef`. |
-| `${installDir}`, `${downloadPath}`, `${tool}` | Per-tool context. |
+| `${installDir}`, `${tool}` | Per-tool context. |
 
 Arbitrary process environment values are **not** exposed, so a manifest cannot read a secret out
 of the environment and into a resolved URL.
@@ -284,7 +290,6 @@ Rejects, by default:
 - `dynamic.latest-url` version sources and download URLs containing `/latest`
 - missing `download.checksum` values
 - `sudo: true` symlinks
-- archive candidate fallback extraction
 
 Reviewed exceptions are explicit:
 
@@ -305,9 +310,13 @@ policy:
 | `installer:` block | ❌ `installer scripts are not supported; use direct binary or archive download` |
 | `http://` URL | ❌ HTTPS is required. |
 | Duplicate tool names | ❌ Load-time validation error. |
+| Tool name with whitespace or a comma, or starting with `-` | ❌ Rejected — `--only` / `--skip` split names on both and read `-` as an option. |
+| `<<: *anchor` merge key | ❌ Not supported — `<<` is an ordinary key, so nothing is merged. |
+| Unquoted `mode: 0755` | ❌ Rejected — YAML reads it as the number 755. Write `"0755"`. |
 | `versionRef` with no matching entry | ❌ Load-time validation error. |
 | Archive `to:` with `..`, absolute path, or backslash | ❌ Rejected before extraction. |
 | Duplicate archive `from:` or `to:` | ❌ Rejected. |
+| `.` as the `from:` or `to:` of a `files` mapping | ❌ Rejected — only a `directories` mapping may name `.`. |
 | Checksum that isn't 64 hex characters | ❌ Rejected. |
 | `sudo: true` without `allowSudoSymlinks` | ❌ Rejected. |
 | Absolute or nested `stateFile` | ❌ Rejected — current-directory filenames only. |
