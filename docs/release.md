@@ -20,8 +20,8 @@ per-file SHA-256 checksum and a keyless Sigstore bundle:
 Targets are `linux-amd64`, `linux-arm64`, `macos-amd64`, and `macos-arm64`.
 The workflow is triggered by `v*` tags or manual `workflow_dispatch` with a
 tag input. Prerelease versions such as `v1.0.0-rc.1` are rejected before the
-build starts: every release is published as the latest GitHub release and to
-the stable snap channel, so there is no prerelease flow.
+build starts: every release is published as the latest GitHub release, so
+there is no prerelease flow.
 
 ## Workflow Summary
 
@@ -54,21 +54,7 @@ The publish job then:
    for the tag, the job fails instead of replacing its assets; asset
    replacement via `--clobber` is only allowed on draft releases.
 
-The snap job then uses Snapcraft 9.x and the core26 base on Ubuntu 26.04
-runners to build the classic snap for amd64 and arm64 from the native
-tarballs, smoke-tests it (`snap install --dangerous --classic` plus
-`binstaller --help`), uploads the `.snap` as a build artifact, and publishes
-to the Snap Store stable channel. The store upload only runs when the
-`SNAPCRAFT_STORE_CREDENTIALS` repository secret is set; otherwise the job
-skips it with an explicit `::notice::` and a job-summary entry.
-
-If Snap packaging fails after the GitHub release is published, dispatch the
-release workflow on `main` with the same `version` and the original release
-workflow ID in `snap-retry-run-id`. This skips native builds and GitHub release
-publication, and packages the existing native artifacts for the Snap Store.
-The retry requires the original workflow artifacts to remain available.
-
-The release and snap jobs run in the `release` GitHub environment; configure
+The publish job runs in the `release` GitHub environment; configure
 required reviewers for that environment in the repository settings so every
 publish is manually approved. Manual `workflow_dispatch` runs are restricted
 to `refs/heads/main`, and tag pushes are rejected unless the tagged commit is
