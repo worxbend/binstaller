@@ -20,10 +20,15 @@ object LockCommandError:
     case LockCommandError.ResolutionFailed(resolveError) =>
       ResolvePlanError.renderLines(resolveError, redactions)
     case LockCommandError.InspectionFailed(toolName, message) =>
-      Vector(s"lock inspection failed for tool '$toolName': $message")
+      // The message can quote response headers from the download host, so it is scrubbed too.
+      Vector(RenderSafety.display(
+        s"lock inspection failed for tool '$toolName': $message",
+        redactions
+      ))
     case LockCommandError.InvalidPath(path, message) =>
       Vector(RenderSafety.display(s"lock path '$path' is invalid: $message", redactions))
-    case LockCommandError.SaveFailed(lockFileError) => Vector(LockFileError.render(lockFileError))
+    case LockCommandError.SaveFailed(lockFileError) =>
+      Vector(RenderSafety.display(LockFileError.render(lockFileError), redactions))
 
 /** Expected failure before an apply run is allowed to perform side effects. */
 enum ApplyPreflightError:
@@ -53,8 +58,13 @@ enum ToolInstallError(val toolName: ToolName):
       provenance: Option[UrlProvenance] = None
   ) extends ToolInstallError(name)
 
-  case ChecksumMismatch(name: ToolName, expected: String, actual: String, source: String)
-      extends ToolInstallError(name)
+  case ChecksumMismatch(
+      name: ToolName,
+      expected: String,
+      actual: String,
+      source: String,
+      suggestion: String
+  ) extends ToolInstallError(name)
 
   case StagingFailed(name: ToolName, message: String) extends ToolInstallError(name)
 
@@ -93,14 +103,15 @@ object ToolInstallError:
               "run `binstaller plan` to see the resolved URL")),
         redactions
       )
-    case ToolInstallError.ChecksumMismatch(toolName, expected, actual, source) => detailBlock(
+    case ToolInstallError.ChecksumMismatch(toolName, expected, actual, source, suggestion) =>
+      detailBlock(
         s"checksum: sha256 expected $expected, got $actual",
         Vector(
           "tool"            -> toolName.value,
           "expected sha256" -> expected,
           "actual sha256"   -> actual,
           "checksum source" -> source,
-          "suggestion" -> "verify the downloaded artifact before updating the manifest checksum"
+          "suggestion"      -> suggestion
         ),
         redactions
       )

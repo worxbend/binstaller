@@ -15,6 +15,15 @@ object MainTest extends TestSuite:
       val mainClass = Class.forName("binstaller.app.Main$")
       assert(mainClass.getName == "binstaller.app.Main$")
 
+    test("the DNS guard is registered as a process-wide address resolver provider"):
+      // Nothing else fails when the service file or the class it names is moved: the guard just
+      // stops being installed and every request resolves through the unfiltered JDK resolver.
+      val providers = java.util.ServiceLoader
+        .load(classOf[java.net.spi.InetAddressResolverProvider])
+        .iterator().asScala.toVector
+
+      assert(providers.exists(_.isInstanceOf[binstaller.core.GuardedInetAddressResolverProvider]))
+
     test("native reflection config covers every picocli command class"):
       val configured = reflectionConfigClassNames()
       val commands   = cliClasses().filter: className =>

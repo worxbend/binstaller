@@ -1,5 +1,6 @@
 package binstaller.core
 
+import binstaller.config.Sha256Digest
 import utest.*
 
 import java.io.ByteArrayInputStream
@@ -7,14 +8,19 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.attribute.FileTime
 import java.time.Duration
+import java.time.Instant
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import ox.forkCancellable
 import ox.unsupervised
+import scala.jdk.CollectionConverters.*
 
-/** The JDK HTTP clients: redirect provenance, redirect refusal, and body limits. */
+/** The JDK HTTP clients: redirect provenance, redirect refusal, body limits, and artifact files. */
 object HttpClientTest extends TestSuite with CoreTestSupport:
 
   val tests: Tests = Tests:
@@ -40,21 +46,24 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
       val first = FakeHttpResponse[InputStream](
         responseUri = "https://example.invalid/stable.txt",
         responseStatusCode = 302,
-        responseBody = ByteArrayInputStream(Array.emptyByteArray)
+        responseBody = ByteArrayInputStream(Array.emptyByteArray),
+        responseHeaders =
+          Map("Location" -> Vector("https://cdn.example.invalid/releases/stable.txt"))
       )
       val second = FakeHttpResponse[InputStream](
         responseUri = "https://cdn.example.invalid/releases/stable.txt",
         responseStatusCode = 301,
         responseBody = ByteArrayInputStream(Array.emptyByteArray),
-        previous = Some(first)
+        responseHeaders =
+          Map("Location" -> Vector("https://mirror.example.invalid/releases/stable.txt"))
       )
       val finalResponse = FakeHttpResponse[InputStream](
         responseUri = "https://mirror.example.invalid/releases/stable.txt",
         responseStatusCode = 200,
-        responseBody = ByteArrayInputStream("v1.0.1".getBytes(StandardCharsets.UTF_8)),
-        previous = Some(second)
+        responseBody = ByteArrayInputStream("v1.0.1".getBytes(StandardCharsets.UTF_8))
       )
-      val client = JdkHttpTextClient(StaticHttpClient(finalResponse), _ => Right(()))
+      val client =
+        JdkHttpTextClient(RoutingHttpClient(first, second, finalResponse), _ => Right(()))
 
       val result = client.getTextWithProvenance("https://example.invalid/stable.txt")
 
@@ -75,6 +84,49 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
               "https://mirror.example.invalid/releases/stable.txt"
             ))
         case Left(error) => abort(s"expected text response, got $error")
+
+    test("HTTP clients follow a redirect, guarding each hop host and closing the hop body"):
+      val hopBody   = CloseTrackingInputStream(Array.emptyByteArray)
+      val transport = RoutingHttpClient(
+        FakeHttpResponse[InputStream](
+          responseUri = "https://example.invalid/stable.txt",
+          responseStatusCode = 302,
+          responseBody = hopBody,
+          responseHeaders = Map("Location" -> Vector("https://cdn.example.invalid/stable.txt"))
+        ),
+        FakeHttpResponse[InputStream](
+          responseUri = "https://cdn.example.invalid/stable.txt",
+          responseStatusCode = 200,
+          responseBody = ByteArrayInputStream("v1.0.1".getBytes(StandardCharsets.UTF_8))
+        )
+      )
+      var guardedHosts = Vector.empty[String]
+      val client       = JdkHttpTextClient(
+        transport,
+        host =>
+          guardedHosts = guardedHosts :+ host
+          Right(())
+      )
+
+      val result = client.getTextWithProvenance("https://example.invalid/stable.txt")
+
+      assert(result ==
+        Right(HttpTextResponse(
+          "v1.0.1",
+          UrlProvenance(
+            "https://example.invalid/stable.txt",
+            "https://cdn.example.invalid/stable.txt",
+            Vector(UrlRedirectHop(
+              "https://example.invalid/stable.txt",
+              "https://cdn.example.invalid/stable.txt",
+              302
+            ))
+          )
+        )))
+      assert(guardedHosts == Vector("example.invalid", "cdn.example.invalid"))
+      assert(transport.requestedUrls ==
+        Vector("https://example.invalid/stable.txt", "https://cdn.example.invalid/stable.txt"))
+      assert(hopBody.isClosed)
 
     test("HTTP clients reject local redirect targets before following them"):
       val redirect = FakeHttpResponse[InputStream](
@@ -156,7 +208,11 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
       ))
       val guard: String => Either[String, Unit] = _ => Left("host guard rejected example.invalid")
       val text                                  = JdkHttpTextClient(transport, guard)
-      val binary   = JdkBinaryDownloadClient(transport, hostGuard = guard)
+      val binary                                = JdkBinaryDownloadClient(
+        transport,
+        hostGuard = guard,
+        artifactFiles = ScopedArtifacts("core-http-guard").files
+      )
       val metadata = JdkBinaryMetadataClient(transport, hostGuard = guard)
 
       assert(text.getTextWithProvenance("https://example.invalid/stable.txt")
@@ -174,7 +230,11 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
         responseBody = ByteArrayInputStream("alpha".getBytes(StandardCharsets.UTF_8)),
         responseHeaders = Map("Content-Length" -> Vector("5"))
       )
-      val client = JdkBinaryDownloadClient(StaticHttpClient(response), hostGuard = _ => Right(()))
+      val client = JdkBinaryDownloadClient(
+        StaticHttpClient(response),
+        hostGuard = _ => Right(()),
+        artifactFiles = ScopedArtifacts("core-http-direct").files
+      )
 
       val result = client.downloadWithProvenance("https://example.invalid/alpha")
 
@@ -185,21 +245,24 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
         case Left(error) => abort(s"expected binary response, got $error")
 
     test("JDK binary download client records redirects and emits final URL progress"):
-      val first = FakeHttpResponse[ByteArrayInputStream](
+      val first = FakeHttpResponse[InputStream](
         responseUri = "https://example.invalid/alpha",
         responseStatusCode = 302,
-        responseBody = ByteArrayInputStream(Array.emptyByteArray)
+        responseBody = ByteArrayInputStream(Array.emptyByteArray),
+        responseHeaders = Map("Location" -> Vector("https://cdn.example.invalid/alpha"))
       )
-      val finalResponse = FakeHttpResponse[ByteArrayInputStream](
+      val finalResponse = FakeHttpResponse[InputStream](
         responseUri = "https://cdn.example.invalid/alpha",
         responseStatusCode = 200,
         responseBody = ByteArrayInputStream("alpha".getBytes(StandardCharsets.UTF_8)),
-        previous = Some(first),
         responseHeaders = Map("Content-Length" -> Vector("5"))
       )
       val progress = RecordingBinaryDownloadProgressObserver()
-      val client   =
-        JdkBinaryDownloadClient(StaticHttpClient(finalResponse), hostGuard = _ => Right(()))
+      val client   = JdkBinaryDownloadClient(
+        RoutingHttpClient(first, finalResponse),
+        hostGuard = _ => Right(()),
+        artifactFiles = ScopedArtifacts("core-http-redirect").files
+      )
 
       val result = client.downloadWithProvenance("https://example.invalid/alpha", progress)
 
@@ -257,10 +320,29 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
 
       assert(result.left.exists(_.message.contains("download body timed out")))
 
+    test("lock inspection and install download report the same digest and size"):
+      val bytes = "alpha".getBytes(StandardCharsets.UTF_8)
+
+      val inspected = Sha256.digestStream(ByteArrayInputStream(bytes), maxBytes = 5L)
+      val installed = boundedWrite(bytes, maxBytes = 5L)
+
+      assert(inspected.map((digest, size) => digest.value -> size) ==
+        Right(Sha256.digest(bytes) -> 5L))
+      assert(installed == inspected)
+
+    test("lock inspection and install download report an oversized body with the same message"):
+      val bytes = "alpha".getBytes(StandardCharsets.UTF_8)
+
+      val inspected = Sha256.digestStream(ByteArrayInputStream(bytes), maxBytes = 4L)
+      val installed = boundedWrite(bytes, maxBytes = 4L)
+
+      assert(inspected == Left("download size 5 exceeds max allowed 4 bytes"))
+      assert(installed == inspected)
+
     test("binary client times out a stalled body and closes it"):
-      val temporaryPath = tempDirectory("core-http-timeout").resolve("artifact")
-      val body          = InterruptibleStalledInputStream()
-      val response      = FakeHttpResponse[InputStream](
+      val artifacts = ScopedArtifacts("core-http-timeout")
+      val body      = InterruptibleStalledInputStream()
+      val response  = FakeHttpResponse[InputStream](
         responseUri = "https://example.invalid/alpha",
         responseStatusCode = 200,
         responseBody = body
@@ -269,7 +351,7 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
         StaticHttpClient(response),
         limits = BinaryDownloadLimits(1024L, Duration.ofMillis(50)),
         hostGuard = _ => Right(()),
-        createTemporaryFile = () => Files.createFile(temporaryPath)
+        artifactFiles = artifacts.files
       )
 
       val startedAt = System.nanoTime()
@@ -277,7 +359,7 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
 
       assert(result.left.exists(_.message.contains("download body timed out")))
       assert(body.isClosed)
-      assert(!Files.exists(temporaryPath))
+      assert(artifacts.allDiscarded)
       assert(System.nanoTime() - startedAt < Duration.ofSeconds(2).toNanos)
 
     test("text client times out a stalled body and closes it"):
@@ -321,9 +403,9 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
       assert(System.nanoTime() - startedAt < Duration.ofSeconds(2).toNanos)
 
     test("cancelling a binary body read closes it and discards the temporary file"):
-      val temporaryPath = tempDirectory("core-http-cancel").resolve("artifact")
-      val body          = InterruptibleStalledInputStream()
-      val response      = FakeHttpResponse[InputStream](
+      val artifacts = ScopedArtifacts("core-http-cancel")
+      val body      = InterruptibleStalledInputStream()
+      val response  = FakeHttpResponse[InputStream](
         responseUri = "https://example.invalid/alpha",
         responseStatusCode = 200,
         responseBody = body
@@ -332,7 +414,7 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
         StaticHttpClient(response),
         limits = BinaryDownloadLimits(1024L, Duration.ofSeconds(30)),
         hostGuard = _ => Right(()),
-        createTemporaryFile = () => Files.createFile(temporaryPath)
+        artifactFiles = artifacts.files
       )
 
       val cancelled = unsupervised:
@@ -344,11 +426,11 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
 
       assert(cancelled.left.exists(_.isInstanceOf[InterruptedException]))
       assert(body.isClosed)
-      assert(!Files.exists(temporaryPath))
+      assert(artifacts.allDiscarded)
 
     test("response close failures remain typed and discard a completed binary artifact"):
-      val temporaryPath = tempDirectory("core-http-close").resolve("artifact")
-      def response      = FakeHttpResponse[InputStream](
+      val artifacts = ScopedArtifacts("core-http-close")
+      def response  = FakeHttpResponse[InputStream](
         responseUri = "https://example.invalid/alpha",
         responseStatusCode = 200,
         responseBody = new ByteArrayInputStream("alpha".getBytes(StandardCharsets.UTF_8)):
@@ -357,7 +439,7 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
       val binary = JdkBinaryDownloadClient(
         StaticHttpClient(response),
         hostGuard = _ => Right(()),
-        createTemporaryFile = () => Files.createFile(temporaryPath)
+        artifactFiles = artifacts.files
       )
       val text     = JdkHttpTextClient(StaticHttpClient(response), hostGuard = _ => Right(()))
       val metadata = JdkBinaryMetadataClient(StaticHttpClient(response), hostGuard = _ => Right(()))
@@ -368,7 +450,7 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
         .left.exists(_.message.contains("response close failed")))
       assert(metadata.metadata("https://example.invalid/alpha")
         .left.exists(_.message.contains("response close failed")))
-      assert(!Files.exists(temporaryPath))
+      assert(artifacts.allDiscarded)
 
     test("HTTP failures retain their status when closing a rejected response fails"):
       def response = FakeHttpResponse[InputStream](
@@ -377,7 +459,11 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
         responseBody = new ByteArrayInputStream(Array.emptyByteArray):
           override def close(): Unit = throw java.io.IOException("response close failed")
       )
-      val binary   = JdkBinaryDownloadClient(StaticHttpClient(response), hostGuard = _ => Right(()))
+      val binary = JdkBinaryDownloadClient(
+        StaticHttpClient(response),
+        hostGuard = _ => Right(()),
+        artifactFiles = ScopedArtifacts("core-http-status").files
+      )
       val text     = JdkHttpTextClient(StaticHttpClient(response), hostGuard = _ => Right(()))
       val metadata = JdkBinaryMetadataClient(StaticHttpClient(response), hostGuard = _ => Right(()))
 
@@ -400,16 +486,87 @@ object HttpClientTest extends TestSuite with CoreTestSupport:
         responseStatusCode = 200,
         responseBody = body
       )
-      val client = JdkBinaryDownloadClient(
+      val missingDirectory = tempDirectory("core-http-allocation").resolve("missing")
+      val client           = JdkBinaryDownloadClient(
         StaticHttpClient(response),
         hostGuard = _ => Right(()),
-        createTemporaryFile = () => throw java.io.IOException("temporary allocation failed")
+        artifactFiles = DownloadArtifactFiles(missingDirectory, _ => (), () => Instant.now())
       )
 
       val result = client.downloadArtifactWithProvenance("https://example.invalid/alpha")
 
-      assert(result.left.exists(_.message.contains("temporary allocation failed")))
+      assert(result.left.exists(_.message.contains(missingDirectory.toString)))
       assert(body.isClosed)
+
+    test("download artifact files reclaim stale artifacts and keep young or foreign files"):
+      val directory = tempDirectory("core-download-sweep")
+      val now       = Instant.parse("2026-01-01T12:00:00Z")
+
+      def aged(name: String, age: Duration): Path = Files.setLastModifiedTime(
+        Files.createFile(directory.resolve(name)),
+        FileTime.from(now.minus(age))
+      )
+
+      val stale   = aged("binstaller-download-stale.artifact", Duration.ofHours(2))
+      val young   = aged("binstaller-download-young.artifact", Duration.ofMinutes(59))
+      val foreign = aged("another-tool-download.artifact", Duration.ofHours(2))
+      val files   = DownloadArtifactFiles(directory, _ => (), () => now)
+
+      val created = files.create()
+
+      assert(!Files.exists(stale))
+      assert(Files.exists(young))
+      assert(Files.exists(foreign))
+      assert(Files.exists(created))
+
+    test("the default download client sweeps and exit-deletes artifacts in the system temp dir"):
+      val client = JdkBinaryDownloadClient(StaticHttpClient(FakeHttpResponse[InputStream](
+        responseUri = "https://example.invalid/alpha",
+        responseStatusCode = 200,
+        responseBody = ByteArrayInputStream(Array.emptyByteArray)
+      )))
+
+      assert(client.artifactFiles.directory == Path.of(System.getProperty("java.io.tmpdir")))
+      assert(client.artifactFiles.deleteAtExit eq DownloadArtifactFiles.exitDeletion)
+
+    test("download artifact files register each new artifact for deletion at exit"):
+      val directory  = tempDirectory("core-download-exit")
+      var registered = Vector.empty[Path]
+      val files      = DownloadArtifactFiles(
+        directory,
+        artifact => registered = registered :+ artifact,
+        () => Instant.now()
+      )
+
+      val created = files.create()
+
+      assert(registered == Vector(created))
+      assert(created.getParent == directory)
+
+  /** Artifact files in a directory of this test's own, recording each artifact created there. */
+  private final class ScopedArtifacts(name: String):
+    private val created = ConcurrentLinkedQueue[Path]()
+
+    val files: DownloadArtifactFiles =
+      DownloadArtifactFiles(tempDirectory(name), record, () => Instant.now())
+
+    private def record(artifact: Path): Unit =
+      val _ = created.add(artifact)
+
+    /** At least one artifact was created, and none is left. */
+    def allDiscarded: Boolean = !created.isEmpty && created.asScala.forall(!Files.exists(_))
+
+  private def boundedWrite(
+      bytes: Array[Byte],
+      maxBytes: Long
+  ): Either[String, (Sha256Digest, Long)] = BoundedBinaryBodyReader.write(
+    "https://example.invalid/alpha",
+    ByteArrayInputStream(bytes),
+    ByteArrayOutputStream(),
+    None,
+    BinaryDownloadLimits(maxBytes, bodyTimeout = Duration.ofSeconds(5)),
+    BinaryDownloadProgressObserver.none
+  ).left.map(_.message)
 
 private final class InterruptibleStalledInputStream extends InputStream:
   private val closed  = AtomicBoolean(false)

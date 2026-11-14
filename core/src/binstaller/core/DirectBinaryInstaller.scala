@@ -456,7 +456,8 @@ final class DirectBinaryInstaller(
               tool.name,
               checksum.value.value,
               actual.value,
-              ResolvedChecksum.sourceDescription(checksum)
+              ResolvedChecksum.sourceDescription(checksum),
+              ResolvedChecksum.mismatchSuggestion(checksum)
             ))
 
   private def stage(

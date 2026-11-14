@@ -4,12 +4,14 @@ import binstaller.config.SymlinkPrivilege
 
 private[core] object PlanRenderer:
 
+  /** `statePath` is the state file apply would use: `--state` when given, else the profile's. */
   def render(
       plan: ResolvedPlan,
-      lockedProvenance: Option[LockedApplyProvenance] = None
+      statePath: Option[String],
+      lockedProvenance: Option[LockedApplyProvenance]
   ): InstallerResult = InstallerResult(
     RenderSafety.displayLines(
-      header(plan, lockedProvenance) ++
+      header(plan, statePath, lockedProvenance) ++
         plan.tools.zipWithIndex.flatMap(renderTool(_, lockedProvenance)),
       plan.redactions
     ),
@@ -18,11 +20,12 @@ private[core] object PlanRenderer:
 
   private def header(
       plan: ResolvedPlan,
+      statePath: Option[String],
       lockedProvenance: Option[LockedApplyProvenance]
   ): Vector[String] =
     val sudoSymlinkCount =
       plan.tools.flatMap(_.symlinks).count(_.privilege == SymlinkPrivilege.Sudo)
-    val stateLine = plan.policy.stateFile match
+    val stateLine = statePath match
       case Some(path) => s"state file: $path (not created)"
       case None       => "state file: not configured"
     val lockLine = lockedProvenance match
@@ -54,7 +57,6 @@ private[core] object PlanRenderer:
       s"   destination: ${tool.installDir}",
       s"   version: ${renderVersion(tool.version)}",
       s"   download: ${tool.download.url}",
-      s"   download file: ${joinPath(tool.installDir, tool.download.filename)}",
       s"   checksum: ${renderChecksum(tool.download.checksum)}"
     ) ++ renderLockedProvenance(tool, lockedProvenance) ++
       renderCreateDirectories(tool) ++ renderStrategy(tool) ++ renderExecutables(tool) ++
@@ -118,8 +120,8 @@ private[core] object PlanRenderer:
     else Vector("   symlinks:") ++ tool.symlinks.map(renderSymlinkCommand(tool, _))
 
   private def renderSymlinkCommand(tool: ResolvedTool, symlink: ResolvedSymlink): String =
-    val destination = absoluteOrInstallPath(tool.installDir, symlink.path)
-    val target      = absoluteOrInstallPath(tool.installDir, symlink.target)
+    val destination = SymlinkPaths.planText(tool.installDir, symlink.path)
+    val target      = SymlinkPaths.planText(tool.installDir, symlink.target)
     val command     = symlink.privilege match
       case SymlinkPrivilege.User => s"ln -sfn ${shellQuote(target)} ${shellQuote(destination)}"
       case SymlinkPrivilege.Sudo => s"sudo ln -sfn ${shellQuote(target)} ${shellQuote(destination)}"
@@ -127,9 +129,6 @@ private[core] object PlanRenderer:
       case SymlinkPrivilege.User => "local"
       case SymlinkPrivilege.Sudo => "sudo risk"
     s"     [$risk] $command"
-
-  private def absoluteOrInstallPath(installDir: String, path: String): String =
-    if path.startsWith("/") then path else joinPath(installDir, path)
 
   private def joinPath(parent: String, child: String): String =
     if parent.endsWith("/") then s"$parent$child" else s"$parent/$child"

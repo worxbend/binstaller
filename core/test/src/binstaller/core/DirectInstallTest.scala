@@ -3,12 +3,17 @@ package binstaller.core
 import binstaller.config.ChecksumAlgorithm
 import binstaller.config.ExecutableMode
 import binstaller.config.ArchiveType
+import binstaller.config.SymlinkPrivilege
 import utest.*
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.attribute.FileTime
+import java.nio.file.attribute.PosixFilePermissions
 import java.time.Duration
+import java.time.Instant
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -79,6 +84,25 @@ object DirectInstallTest extends TestSuite with CoreTestSupport:
       assert(fileSystem.recordedModes.map(request => request.path -> request.mode.octal) ==
         Vector("bin/alpha" -> "0700", "bin/helper" -> "0755"))
       assert(fileSystem.recordedModes.map(_.mode.numeric) == Vector(448, 493))
+
+    test("recursive delete reports an unlistable directory as residue instead of throwing"):
+      val root   = tempDirectory("core-unlistable")
+      val locked = Files.createDirectory(root.resolve("locked"))
+      val _      = Files.createFile(locked.resolve("child"))
+      assert(locked.toFile.setReadable(false))
+      // Asked before the delete, which removes the directory when it can list it.
+      val unlistable = !Files.isReadable(locked)
+
+      try
+        val residue = SafePaths.deleteRecursively(root)
+        if unlistable then assert(residue.nonEmpty)
+        else
+          notVerified(
+            "recursive delete reports an unlistable directory as residue",
+            "a privileged user can list any directory"
+          )
+      finally
+        val _ = locked.toFile.setReadable(true)
 
     test("download failure preserves existing install and returns a typed error"):
       val tempRoot     = tempDirectory("core-download")
@@ -634,6 +658,74 @@ object DirectInstallTest extends TestSuite with CoreTestSupport:
       assert(!Files.exists(staleOrphan))
       assert(Files.exists(freshOrphan))
 
+    test("a backup made moments ago is not swept as stale, however old the install it holds"):
+      val tempRoot   = tempDirectory("core-sweep-live-backup")
+      val installDir = tempRoot.resolve("alpha")
+      val keep       = Files.createDirectories(installDir.resolve("keep"))
+      Files.writeString(keep.resolve("marker"), "previous")
+      val artifact = tempDirectory("core-sweep-live-backup-artifact").resolve("alpha.bin")
+      Files.writeString(artifact, "alpha")
+      def stage() = InstallFileSystem.nio.stageDirectBinaryFromFile(
+        installDir,
+        Vector.empty,
+        "bin/alpha",
+        artifact
+      )
+      // A backup is only observable while its cleanup fails, and a read-only directory arranges
+      // that: nothing inside it can be unlinked. This is the state a crash between the two renames
+      // leaves behind. A privileged user unlinks it anyway, which leaves nothing to observe.
+      assert(keep.toFile.setWritable(false))
+      val cleanupBlocked = !Files.isWritable(keep)
+      val twoHoursAgo    = FileTime.from(Instant.now().minus(Duration.ofHours(2)))
+      val _              = Files.setLastModifiedTime(installDir, twoHoursAgo)
+
+      val replaced = stage().flatMap(InstallFileSystem.nio.replaceInstall)
+      // Writable again, so the age guard is all that stands between the sweep and the backup.
+      backupsOf(installDir).foreach(_.resolve("keep").toFile.setWritable(true))
+      val restaged = stage()
+      restaged.foreach(InstallFileSystem.nio.discardStaged)
+
+      assert(replaced.isRight)
+      assert(restaged.isRight)
+      if cleanupBlocked then assert(backupsOf(installDir).size == 1)
+      else
+        notVerified(
+          "a backup made moments ago is not swept as stale",
+          "a privileged user unlinks inside a read-only directory, so no backup is left to observe"
+        )
+
+    test("install directory gets the mode a plain mkdir would give it"):
+      val tempRoot   = tempDirectory("core-install-dir-mode")
+      val installDir = tempRoot.resolve("alpha")
+      // Compared with a sibling mkdir instead of a fixed mode, so the umask of the machine running
+      // the test cannot decide the outcome.
+      val plainMkdir = Files.createDirectory(tempRoot.resolve("plain-mkdir"))
+      val installer  = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success("alpha".getBytes(StandardCharsets.UTF_8)),
+        InstallFileSystem.nio
+      )
+
+      val result = installer.installTool(directTool(installDir))
+
+      assertInstallSuccess(result, installDir.toString)
+      val plainMode = Files.getPosixFilePermissions(plainMkdir)
+      assert(Files.getPosixFilePermissions(installDir) == plainMode)
+      if plainMode == PosixFilePermissions.fromString("rwx------") then
+        notVerified(
+          "install directory gets the mode a plain mkdir would give it",
+          "under umask 077 a plain mkdir gets the private mode a temporary directory has anyway"
+        )
+
+    test("a failed replacement says why it failed, not only where"):
+      val tempRoot       = tempDirectory("core-replace-reason")
+      val missingStaging = tempRoot.resolve("missing-stage")
+
+      val result = InstallFileSystem.nio.replaceInstall(
+        StagedInstall(missingStaging, tempRoot.resolve("alpha"))
+      )
+
+      assert(result.left.exists(_.message.endsWith(s"$missingStaging: no such file")))
+
     test("direct install verifies expected executables"):
       val tempRoot   = tempDirectory("core-direct-missing")
       val installDir = tempRoot.resolve("alpha")
@@ -653,6 +745,28 @@ object DirectInstallTest extends TestSuite with CoreTestSupport:
       assert(result == Left(ToolInstallError.MissingExecutable(toolName("alpha"), "bin/missing")))
       assert(!hasStagedInstall(tempRoot, "alpha"))
 
+    test("apply refuses a symlink that is its own target and keeps the installed executable"):
+      val installDir = tempDirectory("core-symlink-self").resolve("alpha")
+      val executable = installDir.resolve("bin/alpha")
+      val installer  = DirectBinaryInstaller(
+        FakeBinaryDownloadClient.success("alpha".getBytes(StandardCharsets.UTF_8)),
+        InstallFileSystem.nio
+      )
+
+      val result = installer.installTool(directTool(
+        installDir,
+        symlinks = Vector(ResolvedSymlink("bin/alpha", "bin/alpha", SymlinkPrivilege.User))
+      ))
+
+      assert(result == Left(ToolInstallError.SymlinkFailed(
+        toolName("alpha"),
+        "bin/alpha",
+        "bin/alpha",
+        "symlink path must not equal its target"
+      )))
+      assert(Files.isRegularFile(executable, LinkOption.NOFOLLOW_LINKS))
+      assert(Files.readString(executable) == "alpha")
+
     test("apply failures end with an actionable suggestion line"):
       // Plan-time strict-policy errors always carry a suggestion; apply-time errors carried one in
       // exactly one of eleven cases, so the failures a user is most likely to hit were the least
@@ -665,6 +779,11 @@ object DirectInstallTest extends TestSuite with CoreTestSupport:
       assert(rendered.contains("verify executable: missing bin/alpha"))
       assert(rendered.contains("suggestion: check spec.plan[].spec.executables[].path"))
 
+  // Root ignores file permissions and umask 077 hides a mode difference, so some checks cannot run
+  // there. Printing that keeps a green run from claiming a check it did not make.
+  private def notVerified(test: String, reason: String): Unit =
+    println(s"not verified: $test: $reason")
+
   private def eventually(timeout: Duration)(condition: => Boolean): Boolean =
     val deadline = System.nanoTime() + timeout.toNanos
     while !condition && System.nanoTime() < deadline do Thread.sleep(10L)
@@ -672,3 +791,9 @@ object DirectInstallTest extends TestSuite with CoreTestSupport:
 
   private def processIsDead(pid: Long): Boolean = eventually(Duration.ofSeconds(2)):
     ProcessHandle.of(pid).isEmpty || !ProcessHandle.of(pid).get().isAlive
+
+  private def backupsOf(installDir: Path): Vector[Path] =
+    Using.resource(Files.list(installDir.getParent)): stream =>
+      stream.iterator().asScala
+        .filter(_.getFileName.toString.startsWith(s".${installDir.getFileName}.backup-"))
+        .toVector

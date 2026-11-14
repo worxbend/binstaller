@@ -4,6 +4,7 @@ import binstaller.config.ArchiveSpec
 import binstaller.config.ChecksumAlgorithm
 import binstaller.config.ConfigLoadError
 import binstaller.config.ExecutableMode
+import binstaller.config.HostVocabulary
 import binstaller.config.InstallPolicy
 import binstaller.config.PolicyMode
 import binstaller.config.PolicyOverride
@@ -11,6 +12,8 @@ import binstaller.config.Sha256Digest
 import binstaller.config.ToolName
 import binstaller.config.SymlinkPrivilege
 import binstaller.config.ValidationError
+
+import java.nio.file.Path
 
 /**
  * Variable-resolution inputs and display redaction policy for manifest resolution.
@@ -76,18 +79,12 @@ object HostPlatform:
   )
 
   /** Normalize common operating-system aliases. */
-  def normalizeOs(value: String): String = value.trim.toLowerCase match
-    case name if name.contains("linux")                          => "linux"
-    case name if name.contains("mac") || name.contains("darwin") => "darwin"
-    case name if name.contains("windows")                        => "windows"
-    case name                                                    => name.replaceAll("\\s+", "-")
+  def normalizeOs(value: String): String = HostVocabulary.hostOsFamily(value)
+    .getOrElse(value.trim.toLowerCase.replaceAll("\\s+", "-"))
 
   /** Normalize common CPU architecture aliases. */
-  def normalizeArchitecture(value: String): String = value.trim.toLowerCase match
-    case "amd64" | "x86_64" | "x64"                => "amd64"
-    case "aarch64" | "arm64"                       => "arm64"
-    case "x86" | "i386" | "i486" | "i586" | "i686" => "386"
-    case architecture                              => architecture
+  def normalizeArchitecture(value: String): String =
+    HostVocabulary.architecture(value).getOrElse(value.trim.toLowerCase)
 
 /** Resolved install plan after interpolation, version lookup, and validation. */
 final case class ResolvedPlan(
@@ -209,17 +206,14 @@ enum ResolvedChecksumSource:
    */
   case Discovered(url: String, file: String, provenance: UrlProvenance)
 
+  /**
+   * Digest taken from the lock file at `lockPath` for a tool whose manifest declares no checksum.
+   * `--locked` pins it, so the artifact is verified against the value `lock` recorded.
+   */
+  case Locked(lockPath: Path)
+
 /** Rendering helpers for resolved checksum provenance. */
 object ResolvedChecksum:
-
-  /** Whether the checksum came from an explicit manifest value. */
-  def isConfigured(checksum: ResolvedChecksum): Boolean = checksum.source ==
-    ResolvedChecksumSource.Configured
-
-  /** Whether the checksum was fetched from a typed discovery source. */
-  def isDiscovered(checksum: ResolvedChecksum): Boolean = checksum.source match
-    case ResolvedChecksumSource.Discovered(_, _, _) => true
-    case ResolvedChecksumSource.Configured          => false
 
   /** Render the checksum source for user-facing diagnostics. */
   def sourceDescription(checksum: ResolvedChecksum): String = checksum.source match
@@ -227,6 +221,14 @@ object ResolvedChecksum:
     case ResolvedChecksumSource.Discovered(url, file, provenance) =>
       s"discovered from $url for $file" + UrlProvenance.redirectSuffix(Some(provenance)) +
         "; trust-on-first-use: fetched from the same release, not independent integrity"
+    case ResolvedChecksumSource.Locked(lockPath) => s"pinned by lock file $lockPath"
+
+  /** What to do about a mismatch: the advice names the file that holds the expected digest. */
+  def mismatchSuggestion(checksum: ResolvedChecksum): String = checksum.source match
+    case ResolvedChecksumSource.Configured | ResolvedChecksumSource.Discovered(_, _, _) =>
+      "verify the downloaded artifact before updating the manifest checksum"
+    case ResolvedChecksumSource.Locked(_) =>
+      "verify the downloaded artifact before updating the lock file with `binstaller lock`"
 
 /** Resolved archive mappings paired with the original archive declaration. */
 final case class ResolvedArchive(

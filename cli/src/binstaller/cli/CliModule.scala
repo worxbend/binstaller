@@ -59,32 +59,38 @@ object CliModule:
       outputStyle: CliOutputStyle
   ): CommandLine =
     val root        = BinstallerCommand(out)
-    val commandLine = CommandLine(root)
-    commandLine.setOut(out)
-    commandLine.setErr(err)
+    val commandLine = newCommandLine(root, out, err)
     commandLine.addSubcommand(
       "plan",
-      subcommandLine(PlanCommand(root, service, out), out, err)
+      newCommandLine(PlanCommand(root, service, out, err), out, err)
     )
     commandLine.addSubcommand(
       "apply",
-      subcommandLine(ApplyCommand(root, service, out, err, outputStyle), out, err)
+      newCommandLine(ApplyCommand(root, service, out, err, outputStyle), out, err)
     )
     commandLine.addSubcommand(
       "versions",
-      subcommandLine(VersionsCommand(root, service, out, outputStyle), out, err)
+      newCommandLine(VersionsCommand(root, service, out, err, outputStyle), out, err)
     )
     commandLine.addSubcommand(
       "lock",
-      subcommandLine(LockCommand(root, service, out), out, err)
+      newCommandLine(LockCommand(root, service, out, err), out, err)
     )
     RootHelpLogo.install(commandLine, outputStyle)
+    // Left alone, picocli styles help and usage errors by its own terminal detection, which
+    // disagrees with CliOutputStyle for TERM=dumb, FORCE_COLOR and CLICOLOR. Set only after the
+    // subcommands are added: picocli copies the scheme to the subcommands present at that moment.
+    val _ = commandLine.setColorScheme(CommandLine.Help.defaultColorScheme(helpAnsi(outputStyle)))
     commandLine
+
+  private def helpAnsi(outputStyle: CliOutputStyle): CommandLine.Help.Ansi = outputStyle match
+    case CliOutputStyle.Ansi  => CommandLine.Help.Ansi.ON
+    case CliOutputStyle.Plain => CommandLine.Help.Ansi.OFF
 
   private def productionService(err: PrintWriter): BinaryInstallerService =
     BinaryInstallerService.resolving(HttpTextClient.jdk, TerminalSudoCredentialProvider(err))
 
-  private def subcommandLine(
+  private def newCommandLine(
       command: Callable[Integer],
       out: PrintWriter,
       err: PrintWriter
@@ -92,6 +98,10 @@ object CliModule:
     val commandLine = CommandLine(command)
     commandLine.setOut(out)
     commandLine.setErr(err)
+    // Set on the spec, not through @Command(versionProvider): picocli instantiates a provider
+    // reflectively, which the native-image reflect config would have to register. Every command
+    // mixes in -V, and picocli does not inherit the version text from the parent command.
+    val _ = commandLine.getCommandSpec.version(s"binstaller ${BuildInfo.version}")
     commandLine
 
 private[cli] final case class GlobalOptions(
@@ -176,7 +186,8 @@ private[cli] final class BinstallerCommand(out: PrintWriter) extends Callable[In
 
 private[cli] abstract class ConfiguredCommand(
     root: BinstallerCommand,
-    out: PrintWriter
+    out: PrintWriter,
+    err: PrintWriter
 ) extends Callable[Integer]:
 
   protected def installerOptions: InstallerOptions = root.installerOptions
@@ -188,19 +199,34 @@ private[cli] abstract class ConfiguredCommand(
   protected def executeWithOptions(
       action: InstallerOptions => InstallerResult,
       transformResult: InstallerResult => InstallerResult
-  ): Integer = render(transformResult(action(installerOptions)))
+  ): Integer =
+    val result = transformResult(action(installerOptions))
+    // A failed plan, versions or lock result holds only the reason for the failure. stdout is the
+    // stream a caller redirects, so the reason goes to stderr and survives `>/dev/null`. apply
+    // calls render itself: its failed report also lists the per-tool results.
+    result.status match
+      case InstallerRunStatus.Succeeded => render(result)
+      case InstallerRunStatus.Failed    => renderTo(err, result)
 
-  protected def render(result: InstallerResult): Integer =
-    result.lines.foreach(out.println)
+  protected def render(result: InstallerResult): Integer = renderTo(out, result)
+
+  private def renderTo(writer: PrintWriter, result: InstallerResult): Integer =
+    result.lines.foreach(writer.println)
     Integer.valueOf(CliExitCode.of(result.status))
 
 private[cli] abstract class SelectableCommand(
     root: BinstallerCommand,
-    out: PrintWriter
-) extends ConfiguredCommand(root, out):
+    out: PrintWriter,
+    err: PrintWriter
+) extends ConfiguredCommand(root, out, err):
 
-  private var onlyTools: Vector[String]    = Vector.empty
-  private var skippedTools: Vector[String] = Vector.empty
+  private var onlyTools: Vector[String]        = Vector.empty
+  private var skippedTools: Vector[String]     = Vector.empty
+  private var commandSpec: Option[CommandSpec] = None
+
+  // Method injection, as in BinstallerCommand: the reflect config registers methods, not fields.
+  @CliSpec
+  def setCommandSpec(spec: CommandSpec): Unit = commandSpec = Some(spec)
 
   @CliOption(
     names = Array("--only"),
@@ -212,7 +238,7 @@ private[cli] abstract class SelectableCommand(
       "Select only the named tool. Accepts a comma- or space-separated list, and the flag may also be repeated."
     )
   )
-  def addOnlyTool(values: Array[String]): Unit = onlyTools = onlyTools ++ values
+  def setOnlyTools(values: Array[String]): Unit = onlyTools = toolNames("--only", values)
 
   @CliOption(
     names = Array("--skip"),
@@ -224,10 +250,23 @@ private[cli] abstract class SelectableCommand(
       "Omit the named tool. Accepts a comma- or space-separated list, and the flag may also be repeated."
     )
   )
-  def addSkippedTool(values: Array[String]): Unit = skippedTools = skippedTools ++ values
+  def setSkippedTools(values: Array[String]): Unit = skippedTools = toolNames("--skip", values)
 
   override protected def installerOptions: InstallerOptions =
     super.installerOptions.copy(selection = ToolSelection(onlyTools, skippedTools))
+
+  // Picocli passes every value collected so far on each occurrence of the flag, so the result
+  // replaces the stored names. A leading separator or an empty value splits into an empty name,
+  // and a value made only of separators into nothing; accepting none would turn
+  // `apply --only ","` into "apply every tool".
+  private def toolNames(flag: String, values: Array[String]): Vector[String] =
+    val names = values.toVector.filter(_.nonEmpty)
+    if names.nonEmpty then names
+    else
+      val message = s"$flag needs at least one tool name"
+      commandSpec match
+        case Some(spec) => throw CommandLine.ParameterException(spec.commandLine(), message)
+        case None => throw IllegalStateException(s"picocli did not inject the command: $message")
 
 /**
  * A selectable command that can also be pinned to a lock file.
@@ -239,8 +278,9 @@ private[cli] abstract class SelectableCommand(
  */
 private[cli] abstract class LockAwareCommand(
     root: BinstallerCommand,
-    out: PrintWriter
-) extends SelectableCommand(root, out):
+    out: PrintWriter,
+    err: PrintWriter
+) extends SelectableCommand(root, out, err):
   private var lockedApply: LockedApplyMode = LockedApplyMode.Disabled
   private var lockPath: String             = LockOptions.defaultOutputPath
 
@@ -268,8 +308,9 @@ private[cli] abstract class LockAwareCommand(
 private[cli] final class PlanCommand(
     root: BinstallerCommand,
     service: BinaryInstallerService,
-    out: PrintWriter
-) extends LockAwareCommand(root, out):
+    out: PrintWriter,
+    err: PrintWriter
+) extends LockAwareCommand(root, out, err):
 
   override def call(): Integer = executeWithOptions(service.plan)
 
@@ -284,11 +325,11 @@ private[cli] final class ApplyCommand(
     out: PrintWriter,
     err: PrintWriter,
     outputStyle: CliOutputStyle
-) extends LockAwareCommand(root, out):
-  // Stored raw and validated in call(): validating in the setter would require throwing, and the
-  // @Spec-based ParameterException route needs field reflection that the native-image build does
-  // not register (it would NPE in the shipped binary), reintroducing the raw stack trace this
-  // guards against.
+) extends LockAwareCommand(root, out, err):
+  // Stored raw and validated in call(), which reports a bad value on stderr with the usage exit
+  // code. Throwing from the setter needs a picocli ParameterException; a plain exception there
+  // surfaces as a raw stack trace. An @Spec *field* would also NPE in the shipped binary, because
+  // the native-image reflect config registers methods only.
   private var parallelismValue: Int = ApplyParallelism.default.value
 
   @CliOption(
@@ -328,8 +369,9 @@ private[cli] final class VersionsCommand(
     root: BinstallerCommand,
     service: BinaryInstallerService,
     out: PrintWriter,
+    err: PrintWriter,
     outputStyle: CliOutputStyle
-) extends SelectableCommand(root, out):
+) extends SelectableCommand(root, out, err):
 
   override def call(): Integer = executeWithOptions(
     service.versions,
@@ -347,8 +389,9 @@ private[cli] final class VersionsCommand(
 private[cli] final class LockCommand(
     root: BinstallerCommand,
     service: BinaryInstallerService,
-    out: PrintWriter
-) extends SelectableCommand(root, out):
+    out: PrintWriter,
+    err: PrintWriter
+) extends SelectableCommand(root, out, err):
   private var outputPath: String = LockOptions.defaultOutputPath
 
   @CliOption(

@@ -30,6 +30,23 @@ object BinaryInstallerApiTest extends TestSuite:
         case Left(error) =>
           throw new java.lang.AssertionError(s"expected selected plan, got $error")
 
+    test("a plan request never resolves the version source of a deselected tool"):
+      val http         = ThrowingHttpTextClient()
+      val resolverYaml = profileYaml.replace(
+        "    beta: \"2.0.0\"\n",
+        "    beta:\n      resolver:\n        type: http-text\n" +
+          "        url: https://example.invalid/beta-version\n"
+      )
+      assert(resolverYaml != profileYaml)
+
+      val result = installer(http).plan(PlanRequest(
+        ProfileInput.Yaml(resolverYaml),
+        ToolSelection(Vector.empty, Vector("beta"))
+      ))
+
+      assert(http.calls == 0)
+      assert(result.map(_.tools.map(_.name.value)) == Right(Vector("alpha")))
+
     test("typed plan exposes the selection failure unchanged"):
       val result = installer(ThrowingHttpTextClient()).plan(PlanRequest(
         ProfileInput.Yaml(profileYaml),

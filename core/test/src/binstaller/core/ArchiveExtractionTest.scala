@@ -2,6 +2,7 @@ package binstaller.core
 
 import binstaller.config.ArchiveType
 import binstaller.config.ChecksumAlgorithm
+import binstaller.config.ValidationError
 import utest.*
 
 import java.nio.charset.StandardCharsets
@@ -87,6 +88,61 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
 
       assertInstallSuccess(result, installDir.toString)
       assert(Files.readString(installDir.resolve("bin/jj")) == "jujutsu")
+
+    test("a current-directory directory source maps the whole archive"):
+      val tempRoot   = tempDirectory("core-targz-dot-source")
+      val installDir = tempRoot.resolve("alpha")
+
+      val result = installArchive(
+        installDir,
+        tarGzArchive(Vector("bin/alpha" -> "alpha", "LICENSE" -> "mit")),
+        files = Vector.empty,
+        directories = Vector("." -> ".")
+      )
+
+      assertInstallSuccess(result, installDir.toString)
+      assert(Files.readString(installDir.resolve("bin/alpha")) == "alpha")
+      assert(Files.readString(installDir.resolve("LICENSE")) == "mit")
+
+    test("two directory mappings of the archive root are a named duplicate source"):
+      val tempRoot = tempDirectory("core-targz-dot-source-duplicate")
+
+      val result = installArchive(
+        tempRoot.resolve("alpha"),
+        tarGzArchive(Vector("bin/alpha" -> "alpha")),
+        files = Vector.empty,
+        directories = Vector("." -> ".", "./" -> "copy")
+      )
+
+      assertArchiveExtractionFailed(result, "duplicate archive source: .")
+
+    test("a directory mapping may name the current directory on both sides at plan time"):
+      val archive = onlyTool(resolve(archiveMappingYaml("directories", ".", "."))).download.archive
+
+      assert(archive.map(_.directories) == Some(Vector(ResolvedExtractMapping(".", "."))))
+
+    test("a file mapping that names the current directory is refused at plan time"):
+      // A file mapping names a file on both sides. The current directory can only fail later, at
+      // apply, after the artifact has been downloaded.
+      val mappingPath  = "spec.plan[0].spec.download.archive.extract.files[0]"
+      val sourceErrors = resolveErrors(archiveMappingYaml("files", ".", "bin/alpha"))
+      val targetErrors = resolveErrors(archiveMappingYaml("files", "alpha", "."))
+
+      assert(sourceErrors.contains(
+        ValidationError(s"$mappingPath.from", "archive source must not be current directory")
+      ))
+      assert(targetErrors.contains(
+        ValidationError(s"$mappingPath.to", "archive target must not be current directory")
+      ))
+
+    test("a longer spelling of the current directory is still the current directory"):
+      // "./." passes a comparison with "." and then normalizes to the root of the mapping.
+      val mappingPath  = "spec.plan[0].spec.download.archive.extract.files[0]"
+      val sourceErrors = resolveErrors(archiveMappingYaml("files", "./.", "bin/alpha"))
+
+      assert(sourceErrors.contains(
+        ValidationError(s"$mappingPath.from", "archive source must not be current directory")
+      ))
 
     test("archive entries that escape staging are rejected and preserve existing install"):
       val tempRoot     = tempDirectory("core-zip-slip")
@@ -283,7 +339,7 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
     test("tar.xz extraction uses the validated in-process archive path"):
       val tempRoot        = tempDirectory("core-tarxz")
       val installDir      = tempRoot.resolve("zig")
-      val commandExecutor = FakeArchiveCommandExecutor("zig-root/bin/zig", "zig")
+      val commandExecutor = RecordingCommandExecutor()
       val installer       = DirectBinaryInstaller(
         FakeBinaryDownloadClient.success(tarXzArchive(Vector("zig-root/bin/zig" -> "zig"))),
         InstallFileSystem.nio,
@@ -300,6 +356,21 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
       assertInstallSuccess(result, installDir.toString)
       assert(Files.readString(installDir.resolve("bin/zig")) == "zig")
       assert(commandExecutor.commands.isEmpty)
+
+    test("tar.xz declaring an oversized LZMA2 dictionary is refused by the decoder memory limit"):
+      val tempRoot   = tempDirectory("core-tarxz-dictionary")
+      val installDir = tempRoot.resolve("zig")
+
+      val result = installArchive(
+        installDir,
+        tarXzArchiveDeclaringGiBDictionary(Vector("zig-root/bin/zig" -> "zig")),
+        archiveType = ArchiveType.TarXz,
+        files = Vector.empty,
+        directories = Vector("zig-root" -> "."),
+        executable = "bin/zig"
+      )
+
+      assertArchiveExtractionFailed(result, "memory")
 
     test("tar.gz GNU long-name member is extracted under its full path"):
       // Regression guard for issue #2: GNU tar stores a path longer than the 100-byte header field
@@ -325,7 +396,7 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
       val tempRoot        = tempDirectory("core-tarxz-longname")
       val installDir      = tempRoot.resolve("zig")
       val longName        = s"zig-root/lib/libc/include/${"generic-freebsd/" * 6}header.h"
-      val commandExecutor = FakeArchiveCommandExecutor("zig-root/bin/zig", "zig")
+      val commandExecutor = RecordingCommandExecutor()
       assert(longName.length > 100)
 
       val result = installArchive(
@@ -461,10 +532,6 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
       val result = installArchive(installDir, archive)
 
       assertArchiveExtractionFailed(result, "malformed tar extended header record")
-
-    test("archive extraction enforces an aggregate expanded-byte budget"):
-      assert(ArchiveExtractor.validateExtractedSize(ArchiveExtractor.maxExtractedBytes).isRight)
-      assert(ArchiveExtractor.validateExtractedSize(ArchiveExtractor.maxExtractedBytes + 1).isLeft)
 
     test("file and directory fan-out charges both disk copies but inflates once"):
       val tempRoot = tempDirectory("core-archive-fanout-budget")
@@ -615,3 +682,35 @@ object ArchiveExtractionTest extends TestSuite with CoreTestSupport:
 
     assertArchiveExtractionFailed(result, fragment)
     assert(Files.readString(existingFile) == "existing")
+
+  /** A one-tool profile whose archive declares a single `files` or `directories` mapping. */
+  private def archiveMappingYaml(mappingKind: String, from: String, to: String): String =
+    s"""
+       |apiVersion: binstaller.io/v1alpha1
+       |kind: BinaryDistributionProfile
+       |metadata:
+       |  name: archive-mapping
+       |spec:
+       |  policy:
+       |    appsDir: "$${HOME}/.apps"
+       |  vars: {}
+       |  versions:
+       |    alpha: "1.0.0"
+       |  plan:
+       |    - name: alpha
+       |      kind: binary-tool
+       |      spec:
+       |        versionRef: alpha
+       |        installDir: "$${appsDir}/alpha"
+       |        download:
+       |          url: https://example.invalid/alpha.tar.gz
+       |          filename: alpha.tar.gz
+       |          archive:
+       |            type: tar.gz
+       |            extract:
+       |              $mappingKind:
+       |                - from: "$from"
+       |                  to: "$to"
+       |        executables:
+       |          - path: bin/alpha
+       |""".stripMargin

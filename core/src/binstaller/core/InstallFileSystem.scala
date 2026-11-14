@@ -7,7 +7,10 @@ import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.FileAttribute
+import java.nio.file.attribute.FileTime
 import java.nio.file.attribute.PosixFilePermission
+import java.nio.file.attribute.PosixFilePermissions
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
@@ -232,6 +235,12 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
     .toOption
     .exists(modified => modified.isBefore(Instant.now().minus(staleTempThreshold)))
 
+  // createTempDirectory makes an owner-only directory by default, and the rename into place keeps
+  // that mode: every install would be closed to other accounts, whatever the umask. Requesting all
+  // bits hands the decision to the umask, exactly as a plain mkdir does.
+  private val umaskDecidedMode: FileAttribute[java.util.Set[PosixFilePermission]] =
+    PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwxrwxrwx"))
+
   private def createStagingDirectory(
       installDir: Path
   ): Either[InstallFileSystemError.StagingFailed, StagedInstall] = Try:
@@ -242,7 +251,7 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
     sweepStaleSiblings(parent, name)
     // Staging lives next to the final install so the later move can be as atomic as the filesystem
     // allows and avoids cross-filesystem replacement surprises.
-    StagedInstall(Files.createTempDirectory(parent, s".$name.stage-"), installDir)
+    StagedInstall(Files.createTempDirectory(parent, s".$name.stage-", umaskDecidedMode), installDir)
   match
     case Success(stagedInstall) => Right(stagedInstall)
     case Failure(error) => Left(InstallFileSystemError.StagingFailed(Diagnostics.describe(error)))
@@ -358,10 +367,18 @@ private[core] object NioInstallFileSystem extends InstallFileSystem:
   ): Path =
     val candidate = parent.resolve(s"$prefix${UUID.randomUUID()}")
     Try(Files.move(source, candidate)) match
-      case Success(moved)                                             => moved
+      case Success(moved) =>
+        resetAge(moved)
+        moved
       case Failure(_: FileAlreadyExistsException) if attemptsLeft > 1 =>
         moveToFreshSibling(source, parent, prefix, attemptsLeft - 1)
       case Failure(error) => throw error
+
+  // A rename keeps the directory's modification time, so the backup of an install made last month
+  // would look a month stale to sweepStaleSiblings the moment it exists. Best effort on purpose:
+  // the directory is already moved, and a failure here must not turn into a rollback.
+  private def resetAge(moved: Path): Unit =
+    val _ = Try(Files.setLastModifiedTime(moved, FileTime.from(Instant.now())))
 
   private def restoreBackup(
       installDir: Path,

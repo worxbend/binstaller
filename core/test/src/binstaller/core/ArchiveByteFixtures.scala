@@ -89,6 +89,23 @@ private[core] trait ArchiveByteFixtures:
     xz.close()
     output.toByteArray
 
+  /**
+   * A tar.xz whose block header claims a 1 GiB LZMA2 dictionary. The payload is untouched: a
+   * decoder sizes its window from this one header byte before it reads any data.
+   */
+  protected def tarXzArchiveDeclaringGiBDictionary(entries: Vector[(String, String)]): Array[Byte] =
+    val archive           = tarXzArchive(entries)
+    val blockHeaderStart  = 12
+    val blockHeaderLength = ((archive(blockHeaderStart) & 0xff) + 1) * 4
+    val checksumStart     = blockHeaderStart + blockHeaderLength - 4
+    val gibDictionaryCode = 36
+    archive(blockHeaderStart + 4) = gibDictionaryCode.toByte
+    val checksum = CRC32()
+    checksum.update(archive, blockHeaderStart, blockHeaderLength - 4)
+    (0 until 4).foreach: index =>
+      archive(checksumStart + index) = (checksum.getValue >>> (8 * index)).toByte
+    archive
+
   protected def tarGzArchiveWithDirectories(
       directories: Vector[String],
       files: Vector[(String, String)]

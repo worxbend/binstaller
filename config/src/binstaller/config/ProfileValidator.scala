@@ -5,27 +5,34 @@ private[config] object ProfileValidator:
   def validate(
       profile: BinaryDistributionProfile,
       failedDecoderPaths: Set[String] = Set.empty
-  ): Vector[ValidationError] = metadataNameErrors(profile) ++
-    duplicateToolNameErrors(profile, failedDecoderPaths) ++
-    unknownVersionRefErrors(profile) ++
-    sudoSymlinkErrors(profile)
+  ): Vector[ValidationError] =
+    // A failed decode leaves a placeholder at its path and below it. A check that reads one, or
+    // an error that points at one, is about a value the user never wrote.
+    def isPlaceholder(path: String): Boolean =
+      failedDecoderPaths.exists(ManifestPath.isAtOrUnder(path, _))
+    val versionRefErrors =
+      if isPlaceholder("spec.versions") then Vector.empty else unknownVersionRefErrors(profile)
+    val sudoErrors =
+      if isPlaceholder("spec.policy.allowSudoSymlinks") then Vector.empty
+      else sudoSymlinkErrors(profile)
+    val errors = metadataNameErrors(profile) ++
+      duplicateToolNameErrors(profile, isPlaceholder) ++
+      versionRefErrors ++
+      sudoErrors ++
+      whenSelectorErrors(profile)
+    errors.filterNot(error => isPlaceholder(error.path))
 
   private def metadataNameErrors(profile: BinaryDistributionProfile): Vector[ValidationError] =
-    unsafeToolNameMessage(profile.metadata.name)
-      .map(message => ValidationError("metadata.name", message))
+    ToolName.unsafeNameReason(profile.metadata.name)
+      .map(reason => ValidationError("metadata.name", s"profile name $reason"))
       .toVector
-
-  // Tool names are validated by the decoder now. `metadata.name` is still a String and this is
-  // its only check, so the helper stays.
-  private def unsafeToolNameMessage(value: String): Option[String] =
-    ToolName.fromString(value).left.toOption
 
   private def duplicateToolNameErrors(
       profile: BinaryDistributionProfile,
-      failedDecoderPaths: Set[String]
+      isPlaceholder: String => Boolean
   ): Vector[ValidationError] = profile.spec.plan.zipWithIndex
     .collect:
-      case (entry, index) if !failedDecoderPaths.contains(ManifestPath.planEntryName(index)) =>
+      case (entry, index) if !isPlaceholder(ManifestPath.planEntryName(index)) =>
         entry.name -> index
     .groupBy((name, _) => name)
     .toVector
@@ -55,6 +62,23 @@ private[config] object ProfileValidator:
                   s"spec.plan[$entryIndex].spec.symlinks[$symlinkIndex].sudo",
                   sudoSymlinkPolicyMessage(profile, entry.name)
                 )
+
+  // A selector outside the vocabulary equals no host, so its entry would be left out of every
+  // plan without a message.
+  private def whenSelectorErrors(profile: BinaryDistributionProfile): Vector[ValidationError] =
+    profile.spec.plan.zipWithIndex.flatMap: (entry, index) =>
+      val path        = s"${ManifestPath.planEntry(index)}.when"
+      val familyError = entry.when.flatMap(_.os).flatMap(_.family)
+        .filter(HostVocabulary.osFamily(_).isEmpty)
+        .map(unsupportedSelector(s"$path.os.family", _, HostVocabulary.osFamilyExpectation))
+      val architectureError = entry.when.flatMap(_.architecture)
+        .filter(HostVocabulary.architecture(_).isEmpty)
+        .map(unsupportedSelector(s"$path.architecture", _, HostVocabulary.architectureExpectation))
+      familyError.toVector ++ architectureError.toVector
+
+  private def unsupportedSelector(path: String, value: String, expectation: String)
+      : ValidationError =
+    ValidationError(path, s"unsupported value '$value', expected $expectation")
 
   private def sudoSymlinkPolicyMessage(
       profile: BinaryDistributionProfile,

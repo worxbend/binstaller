@@ -14,44 +14,13 @@ import java.nio.charset.StandardCharsets
 private[core] object ManifestFingerprint:
 
   /**
-   * Every field of the fingerprint-relevant config schema types, keyed by type name.
+   * Hash of every manifest field. Lock and state files store it to detect an edited manifest.
    *
-   * This is the exhaustiveness contract for the 'edit manifest ⇒ lock invalid' guarantee: a test in
-   * `PlanResolutionTest` reflects over those case classes and fails when a field exists that no
-   * `append*` method below hashes. Adding a config field means updating this map and the matching
-   * `append*` method together; the config-side types carry a comment pointing back here.
+   * `ManifestFingerprintTest` edits each config field in turn and fails when the hash does not
+   * move, so a new config field needs an `append*` call below. The same test pins the hash of one
+   * known manifest: the encoding must never change for an existing manifest, or every stored lock
+   * and state file stops matching.
    */
-  val coveredFields: Map[String, Set[String]] = Map(
-    "BinaryDistributionProfile" -> Set("apiVersion", "kind", "metadata", "spec"),
-    "ManifestMetadata"          -> Set("name", "labels", "annotations"),
-    "ProfileSpec"               -> Set("policy", "vars", "versions", "plan"),
-    "InstallPolicy"             -> Set(
-      "mode",
-      "continueOnError",
-      "appsDir",
-      "allowSudoSymlinks",
-      "allowDynamicLatestUrls",
-      "allowMissingChecksums",
-      "stateFile"
-    ),
-    "PlanEntry"      -> Set("name", "kind", "description", "when", "spec"),
-    "WhenClause"     -> Set("os", "architecture"),
-    "OsClause"       -> Set("family"),
-    "BinaryToolSpec" ->
-      Set("versionRef", "installDir", "createDirectories", "download", "executables", "symlinks"),
-    "DownloadSpec"           -> Set("url", "filename", "checksum", "archive"),
-    "ChecksumSpec"           -> Set("algorithm", "source"),
-    "ChecksumDiscoverySpec"  -> Set("kind", "url", "file"),
-    "ArchiveSpec"            -> Set("archiveType", "extract"),
-    "ArchiveExtract"         -> Set("files", "directories"),
-    "ExtractMapping"         -> Set("from", "to"),
-    "ExecutableSpec"         -> Set("path", "mode"),
-    "SymlinkSpec"            -> Set("path", "target", "privilege"),
-    "VersionSource.Pinned"   -> Set("value"),
-    "VersionSource.Dynamic"  -> Set("kind", "note"),
-    "VersionSource.Resolver" -> Set("kind", "url")
-  )
-
   def profile(profile: BinaryDistributionProfile): String =
     Sha256.digest(canonicalProfile(profile).getBytes(StandardCharsets.UTF_8))
 

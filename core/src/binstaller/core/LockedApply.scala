@@ -190,7 +190,8 @@ private[core] object LockedApplyValidator:
       provenance: Option[UrlProvenance],
       lockedProvenance: Option[UrlProvenance]
   ): Option[String] = (provenance, lockedProvenance) match
-    case (Some(current), Some(locked)) if current != locked =>
+    case (Some(current), Some(locked))
+        if current.withoutRedirectQueries != locked.withoutRedirectQueries =>
       Some(s"tool '${tool.name}' version provenance changed")
     case (Some(_), None) => Some(s"tool '${tool.name}' is missing locked version provenance")
     case (None, Some(_)) => Some(s"tool '${tool.name}' lock has unexpected version provenance")
@@ -217,8 +218,6 @@ private[core] object LockedApplyValidator:
             s"tool '${tool.name}' checksum changed: lock has ${render(actual)}, " +
               s"manifest has ${render(expected)}"
           )
-        case (Some(expected), None) =>
-          Some(s"tool '${tool.name}' is missing locked checksum ${render(expected)}")
         case _ => None
 
   private def downloadUrlProblem(tool: ResolvedTool, lockedTool: LockFileTool): Option[String] =
@@ -244,11 +243,13 @@ private[core] object LockedApplyValidator:
       tool: ResolvedTool,
       lockedTool: LockFileTool,
       metadata: BinaryMetadata
-  ): Option[String] = Option.when(metadata.provenance != lockedTool.downloadProvenance)(
-    s"tool '${tool.name}' download provenance changed: lock final URL " +
-      s"'${lockedTool.downloadProvenance.finalUrl}', current final URL " +
-      s"'${metadata.provenance.finalUrl}'"
-  )
+  ): Option[String] =
+    val locked  = lockedTool.downloadProvenance.withoutRedirectQueries
+    val current = metadata.provenance.withoutRedirectQueries
+    Option.when(current != locked)(
+      s"tool '${tool.name}' download provenance changed: lock final URL " +
+        s"'${locked.finalUrl}', current final URL '${current.finalUrl}'"
+    )
 
   private def sizeDriftProblem(
       tool: ResolvedTool,

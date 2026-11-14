@@ -42,6 +42,7 @@ import java.nio.file.Path
 import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.regex.Pattern
 
 object CliModuleTest extends TestSuite:
 
@@ -118,6 +119,21 @@ object CliModuleTest extends TestSuite:
       assert(result.out.contains("plan"))
       assert(result.out.contains("apply"))
 
+    test("version prints the program name and build version"):
+      val result = runCli(Vector("--version"))
+
+      assert(result.exitCode == 0)
+      assert(result.out.trim.matches("binstaller \\S+"))
+
+    test("every subcommand reports the same version as the root command"):
+      val rootVersion = runCli(Vector("--version")).out
+
+      Vector("plan", "apply", "versions", "lock").foreach: command =>
+        val result = runCli(Vector(command, "--version"))
+        assert(result.exitCode == 0)
+        assert(result.out.nonEmpty)
+        assert(result.out == rootVersion)
+
     test("plan help describes non-mutating output"):
       val result = runCli(Vector("plan", "--help"))
 
@@ -130,6 +146,26 @@ object CliModuleTest extends TestSuite:
 
       assert(result.exitCode == 0)
       assert(result.out.contains("Apply the binary installer plan."))
+
+    test("help follows the CLI output style"):
+      val styled    = runCli(Vector("plan", "--help"), outputStyle = CliOutputStyle.Ansi)
+      val plain     = runCli(Vector("plan", "--help"), outputStyle = CliOutputStyle.Plain)
+      val plainRoot = runCli(Vector("--help"), outputStyle = CliOutputStyle.Plain)
+
+      assert(styled.out.contains("\u001b["))
+      assert(plain.out.contains("Usage:"))
+      assert(!plain.out.contains("\u001b["))
+      assert(!plainRoot.out.contains("\u001b["))
+
+    test("a usage error follows the CLI output style"):
+      val styled = runCli(Vector("plan", "--bogus"), outputStyle = CliOutputStyle.Ansi)
+      val plain  = runCli(Vector("plan", "--bogus"), outputStyle = CliOutputStyle.Plain)
+
+      assert(styled.exitCode == CommandLine.ExitCode.USAGE)
+      assert(styled.err.contains("\u001b["))
+      assert(plain.exitCode == CommandLine.ExitCode.USAGE)
+      assert(plain.err.contains("--bogus"))
+      assert(!plain.err.contains("\u001b["))
 
     test("plan uses config.yaml from cwd by default"):
       val service = RecordingInstallerService()
@@ -206,6 +242,44 @@ object CliModuleTest extends TestSuite:
 
         assert(result.exitCode == 0)
         assert(commandCase.recordedOptions(service).contains(commandCase.expectedOptions))
+
+    test("a selection flag holding only separators is a usage error, not an empty filter"):
+      Vector("--only", "--skip").foreach: flag =>
+        val service = RecordingInstallerService()
+
+        val result = runCli(Vector("apply", flag, ","), service)
+
+        assert(result.exitCode == CommandLine.ExitCode.USAGE)
+        assert(result.err.contains(s"$flag needs at least one tool name"))
+        assert(service.applyOptions.isEmpty)
+
+    test("an empty selection value is a usage error, not an empty tool name"):
+      val service = RecordingInstallerService()
+
+      val result = runCli(Vector("plan", "--only", ""), service)
+
+      assert(result.exitCode == CommandLine.ExitCode.USAGE)
+      assert(result.err.contains("--only needs at least one tool name"))
+      assert(service.planOptions.isEmpty)
+
+    test("a leading separator in a selection value does not become an empty tool name"):
+      Vector(" alpha", ",alpha").foreach: value =>
+        val service = RecordingInstallerService()
+
+        val result = runCli(Vector("plan", "--only", value, "--skip", value), service)
+
+        assert(result.exitCode == 0)
+        assert(service.planOptions.map(_.selection) ==
+          Some(ToolSelection(Vector("alpha"), Vector("alpha"))))
+
+    test("repeated selection flags forward each tool name once, in order"):
+      val service = RecordingInstallerService()
+
+      val result = runCli(Vector("plan", "--only", "a,b", "--only", "c", "--skip", "x"), service)
+
+      assert(result.exitCode == 0)
+      assert(service.planOptions.map(_.selection) ==
+        Some(ToolSelection(Vector("a", "b", "c"), Vector("x"))))
 
     test("apply forwards state override and reset-state"):
       val service = RecordingInstallerService()
@@ -435,7 +509,29 @@ object CliModuleTest extends TestSuite:
       )
 
       assert(unknown.exitCode == 1)
-      assert(unknown.out.contains("unknown tool 'nope'"))
+      assert(unknown.err.contains("unknown tool 'nope'"))
+
+    test("a failed plan, versions or lock run reports its reason on stderr, not stdout"):
+      // stdout carries the data a caller redirects: a reason printed there disappears with
+      // `>/dev/null` or ends up inside the data file.
+      val missing = tempDirectory("cli-missing-config").resolve("missing.yaml")
+
+      Vector("plan", "versions", "lock").foreach: command =>
+        val result = runCli(Vector(command, "--config", missing.toString), resolvingService)
+
+        assert(result.exitCode == 1)
+        assert(result.err.contains("config read failed"))
+        assert(result.out.isEmpty)
+
+    test("a failed apply keeps its report on stdout"):
+      // apply's report mixes per-tool results with the failure, so it stays in one stream.
+      val missing = tempDirectory("cli-missing-config").resolve("missing.yaml")
+
+      val result = runCli(Vector("apply", "--config", missing.toString), resolvingService)
+
+      assert(result.exitCode == 1)
+      assert(result.out.contains("config read failed"))
+      assert(result.err.isEmpty)
 
     test("plan renders local and sudo symlink actions without executing them"):
       val tempRoot = tempDirectory("cli-dry-symlinks")
@@ -521,6 +617,29 @@ object CliModuleTest extends TestSuite:
       assert(result.out.contains("installed alpha"))
       assert(result.out.contains("✨ Summary"))
 
+    test("apply writes an in-place progress row with terminal auto-wrap off"):
+      // A row wider than the terminal would otherwise wrap, and `\r` only returns to the start of
+      // the last physical line, so every update would leave a stale line behind.
+      val tempRoot = tempDirectory("cli-progress-no-wrap")
+      val appsDir  = tempRoot.resolve("apps")
+      val config   = writeConfig(tempRoot, progressYaml(appsDir))
+      val service  = BinaryInstallerService.resolving(
+        FakeHttpTextClient("v1.34.0"),
+        DirectBinaryInstaller(
+          ProgressBinaryDownloadClient("alpha-binary".getBytes),
+          InstallFileSystem.nio
+        )
+      )
+
+      val result = runCli(Vector("apply", "--config", config.toString), service)
+
+      val wrapping = outputWithAutoWrapOn(result.out)
+      assert(result.exitCode == 0)
+      assert(result.out.contains(s"$AutoWrapOff\r"))
+      assert(!wrapping.contains("downloading alpha"))
+      assert(!wrapping.contains("completed alpha"))
+      assert(!wrapping.contains(AutoWrapOff))
+
     test("apply clears an active progress row before Picocli reports an exception"):
       val sharedBuffer = StringWriter()
       val out          = PrintWriter(sharedBuffer, true)
@@ -535,6 +654,23 @@ object CliModuleTest extends TestSuite:
       assert(exitCode != 0)
       assert(cleanupIndex >= 0)
       assert(errorIndex > cleanupIndex)
+
+    test("apply switches terminal auto-wrap back on before a failed run reports its error"):
+      val sharedBuffer = StringWriter()
+      val out          = PrintWriter(sharedBuffer, true)
+      val err          = PrintWriter(sharedBuffer, true)
+      val exitCode     = CliModule
+        .commandLine(ExceptionalApplyInstallerService, out, err, CliOutputStyle.Ansi)
+        .execute("apply")
+      val output       = sharedBuffer.toString
+      val wrapOffIndex = output.lastIndexOf(AutoWrapOff)
+      val wrapOnIndex  = output.lastIndexOf(AutoWrapOn)
+      val errorIndex   = output.indexOf(ExceptionalApplyInstallerService.message)
+
+      assert(exitCode != 0)
+      assert(wrapOffIndex >= 0)
+      assert(wrapOnIndex > wrapOffIndex)
+      assert(errorIndex > wrapOnIndex)
 
     test("apply colours result lines by their status, not by their wording"):
       // The colour must come from the typed status core pairs with each rendered line. A prefix
@@ -591,6 +727,40 @@ object CliModuleTest extends TestSuite:
       assert(plainOutput.contains("installed beta"))
       assert(plainOutput.contains("✅ installed: 2"))
 
+    test("apply writes overlapping progress rows with terminal auto-wrap off"):
+      // The block redraw climbs one line per row, so a wrapped row would leave stale lines behind.
+      val tempRoot = tempDirectory("cli-parallel-progress-no-wrap")
+      val appsDir  = tempRoot.resolve("apps")
+      val config   = writeConfig(tempRoot, parallelProgressYaml(appsDir))
+      val service  = BinaryInstallerService.resolving(
+        FakeHttpTextClient("v1.34.0"),
+        DirectBinaryInstaller(
+          ConcurrentProgressBinaryDownloadClient(Map(
+            "https://example.invalid/alpha" -> "alpha-binary".getBytes,
+            "https://example.invalid/beta"  -> "beta-binary".getBytes
+          )),
+          InstallFileSystem.nio
+        )
+      )
+
+      val result = runCli(
+        Vector("apply", "--config", config.toString, "--parallelism", "2"),
+        service
+      )
+
+      val wrapping = outputWithAutoWrapOn(result.out)
+      assert(result.exitCode == 0)
+      assert(result.out.contains(s"$AutoWrapOff\r\u001b[2K"))
+      assert(!wrapping.contains("downloading"))
+      assert(!wrapping.contains("completed alpha"))
+      assert(!wrapping.contains("completed beta"))
+      assert(!wrapping.contains(AutoWrapOff))
+      // With auto-wrap off, the overflow of a clipped row piles up in the last column. Erasing to
+      // the end of the line before the newline removes that stray character.
+      val blockRows = result.out.split('\n').filter(_.contains("\u001b[2K"))
+      assert(blockRows.nonEmpty)
+      assert(blockRows.forall(_.endsWith("\u001b[K")))
+
   private def runCli(
       args: Vector[String],
       service: BinaryInstallerService = StubBinaryInstallerService,
@@ -608,6 +778,14 @@ object CliModuleTest extends TestSuite:
       case ToolHeading(name) => name
 
   private def stripAnsi(output: String): String = output.replaceAll("\u001b\\[[;\\d]*m", "")
+
+  // DECAWM: `ESC[?7l` switches terminal auto-wrap off and `ESC[?7h` switches it back on.
+  private val AutoWrapOff = "\u001b[?7l"
+  private val AutoWrapOn  = "\u001b[?7h"
+
+  /** What the terminal receives while auto-wrap is on: every closed wrap-off span is removed. */
+  private def outputWithAutoWrapOn(output: String): String =
+    output.replaceAll(s"(?s)${Pattern.quote(AutoWrapOff)}.*?${Pattern.quote(AutoWrapOn)}", "")
 
   private def defaultConfigPath: String = Path.of("config.yaml").toAbsolutePath.normalize().toString
 

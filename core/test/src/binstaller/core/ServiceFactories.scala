@@ -126,6 +126,15 @@ private[core] trait ServiceFactories extends CoreTestPrimitives:
     ))
   )
 
+  /** The beta download as a CDN would report it: same route, per-request signed query. */
+  protected def signedBetaDownloadProvenance(signature: String): UrlProvenance =
+    val signedTarget = s"${betaDownloadProvenance.finalUrl}?se=1&sig=$signature"
+    UrlProvenance(
+      betaDownloadProvenance.initialUrl,
+      signedTarget,
+      Vector(UrlRedirectHop(betaDownloadProvenance.initialUrl, signedTarget, 301))
+    )
+
   protected def writeConfig(tempRoot: Path, content: String): Path =
     val config = tempRoot.resolve("profile.yaml")
     Files.writeString(config, content)

@@ -1,6 +1,7 @@
 package binstaller.core
 
 import binstaller.config.Diagnostics
+import binstaller.config.SymlinkPrivilege
 import binstaller.config.ValidationError
 
 import java.nio.file.Path
@@ -22,30 +23,55 @@ private[core] object ResolvedPathValidator:
   def installRelativePath(value: String, path: String, label: String): Vector[ValidationError] =
     relativePath(value, path, label, allowCurrentDirectory = false)
 
-  def externalPath(value: String, path: String, label: String): Vector[ValidationError] =
-    pathSyntax(value, path, label)
+  // Checked at plan time with the rule apply uses, because apply reaches its own check only after
+  // it has replaced the install. A sudo link lands outside installDir by design, so the two
+  // privileges follow different rules.
+  def symlinkPath(
+      value: String,
+      path: String,
+      installDir: String,
+      privilege: SymlinkPrivilege
+  ): Vector[ValidationError] =
+    val label = privilege match
+      case SymlinkPrivilege.User => "local symlink path"
+      case SymlinkPrivilege.Sudo => "sudo symlink path"
+    symlinkEnd(value, path, label)(SymlinkPaths.linkPath(Path.of(installDir), value, privilege))
 
   def symlinkTarget(
       value: String,
       path: String,
       installDir: String
   ): Vector[ValidationError] =
-    val syntaxErrors = pathSyntax(value, path, "symlink target")
+    symlinkEnd(value, path, "symlink target")(SymlinkPaths.target(Path.of(installDir), value))
+
+  /** Call only for a link whose two ends each passed [[symlinkPath]] and [[symlinkTarget]]. */
+  def distinctSymlinkEnds(
+      symlink: ResolvedSymlink,
+      path: String,
+      installDir: String
+  ): Vector[ValidationError] =
+    val root = Path.of(installDir)
+    val ends =
+      for
+        link   <- SymlinkPaths.linkPath(root, symlink.path, symlink.privilege)
+        target <- SymlinkPaths.target(root, symlink.target)
+      yield SymlinkPaths.distinctEnds(link, target)
+    ends match
+      case Right(Left(message))       => Vector(ValidationError(path, s"symlink path $message"))
+      case Right(Right(())) | Left(_) => Vector.empty
+
+  // `resolved` is by-name so the `Try` also covers an installDir the platform cannot parse.
+  private def symlinkEnd(value: String, path: String, label: String)(
+      resolved: => Either[String, Path]
+  ): Vector[ValidationError] =
+    val syntaxErrors = pathSyntax(value, path, label)
     if syntaxErrors.nonEmpty then syntaxErrors
     else
-      Try:
-        val installRoot = Path.of(installDir).toAbsolutePath.normalize()
-        val rawTarget   = Path.of(value)
-        val target      =
-          if rawTarget.isAbsolute then rawTarget.toAbsolutePath.normalize()
-          else installRoot.resolve(rawTarget).normalize()
-        installRoot -> target
-      match
+      Try(resolved) match
         case Failure(error) =>
-          Vector(ValidationError(path, s"invalid symlink target: ${Diagnostics.describe(error)}"))
-        case Success((installRoot, target)) if !target.startsWith(installRoot) =>
-          Vector(ValidationError(path, "symlink target must resolve inside installDir"))
-        case Success(_) => Vector.empty
+          Vector(ValidationError(path, s"invalid $label: ${Diagnostics.describe(error)}"))
+        case Success(Left(message)) => Vector(ValidationError(path, s"$label $message"))
+        case Success(Right(_))      => Vector.empty
 
   def pathSyntax(value: String, path: String, label: String): Vector[ValidationError] =
     PathSyntaxRules.validate(value) match
