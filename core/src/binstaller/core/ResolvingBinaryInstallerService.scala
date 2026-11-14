@@ -1,5 +1,6 @@
 package binstaller.core
 
+import binstaller.config.ChecksumAlgorithm
 import binstaller.config.Sha256Digest
 
 import java.nio.file.Path
@@ -61,7 +62,7 @@ private[core] final class ResolvingBinaryInstallerService(
           .left.map(error => failed(renderLegacyLockValidationError(error), eventContext))
       yield
         val lockedPrepared = lockedProvenance.fold(prepared)(applyLockedChecksums(prepared, _))
-        val statePath      = configuredStatePath(options, lockedPrepared.plan)
+        val statePath      = StatePathResolver.selected(options, lockedPrepared.plan)
         eventContext.emit(InstallerEvent.PlanReady(
           lockedPrepared.plan.tools.map(_.name),
           statePath,
@@ -102,61 +103,58 @@ private[core] final class ResolvingBinaryInstallerService(
       for
         prepared <- resolveSelectedPreparedPlan(options)
           .left.map(error => failed(renderError(error), eventContext))
+        statePath <- validatedStatePath(options, prepared.plan)
+          .left.map(error => failed(renderStateError(error), eventContext))
         lockedProvenance <- validateLockIfRequested(options, prepared)
           .left.map(error => failed(renderLegacyLockValidationError(error), eventContext))
       yield
-        // A pure lookup over options and the resolved policy, so computing it after the lock check
-        // rather than before changes nothing observable.
-        val statePath = configuredStatePath(options, prepared.plan)
-        eventContext.emit(InstallerEvent.PlanReady(prepared.plan.tools.map(_.name), statePath, _))
-        val result = PlanRenderer.render(prepared.plan, lockedProvenance)
+        // The plan shows the checksums apply would verify, so it takes the same locked overlay.
+        val lockedPrepared = lockedProvenance.fold(prepared)(applyLockedChecksums(prepared, _))
+        eventContext.emit(InstallerEvent.PlanReady(
+          lockedPrepared.plan.tools.map(_.name),
+          statePath,
+          _
+        ))
+        val result = PlanRenderer.render(lockedPrepared.plan, statePath, lockedProvenance)
         emitSummary(result, statePath, eventContext)
         result
     outcome.merge
 
   private def resolveSelectedPreparedPlan(
       options: InstallerOptions
-  ): Either[ResolvePlanError, PreparedPlan] = resolveFromOptions(options).flatMap: prepared =>
-    ToolSelector.select(prepared.plan, options.selection).map: selected =>
-      prepared.copy(plan = selected)
+  ): Either[ResolvePlanError, PreparedPlan] =
+    prepare(profileSource.load(options.configPath), options.selection)
 
   private def resolveSelectedPreparedPlan(
       profileInput: ProfileInput,
       selection: ToolSelection
-  ): Either[ResolvePlanError, PreparedPlan] = resolveFromProfileInput(profileInput).flatMap:
-    prepared =>
-      ToolSelector.select(prepared.plan, selection).map: selected =>
-        prepared.copy(plan = selected)
-
-  private def resolveFromOptions(
-      options: InstallerOptions
-  ): Either[ResolvePlanError, PreparedPlan] = prepare(profileSource.load(options.configPath))
-
-  private def resolveFromProfileInput(
-      profileInput: ProfileInput
-  ): Either[ResolvePlanError, PreparedPlan] = prepare(profileSource.load(profileInput))
+  ): Either[ResolvePlanError, PreparedPlan] = prepare(profileSource.load(profileInput), selection)
 
   private def prepare(
       loadedProfile: Either[
         binstaller.config.ConfigLoadError,
         binstaller.config.BinaryDistributionProfile
-      ]
+      ],
+      selection: ToolSelection
   ): Either[ResolvePlanError, PreparedPlan] = loadedProfile match
     case Left(error)    => Left(ResolvePlanError.ConfigLoadFailed(error))
-    case Right(profile) => PlanResolver.resolve(profile, resolutionOptions, httpTextClient).map:
-        plan =>
-          PreparedPlan(
-            profile,
-            profile.metadata.name,
-            ManifestFingerprint.profile(profile),
-            plan
-          )
+    case Right(profile) =>
+      PlanResolver.resolve(profile, resolutionOptions, httpTextClient, selection).map: plan =>
+        PreparedPlan(
+          profile,
+          profile.metadata.name,
+          ManifestFingerprint.profile(profile),
+          plan
+        )
 
   private def writeLock(
       prepared: PreparedPlan,
       outputPath: Path
-  ): Either[LockCommandError, LockReport] =
-    buildLock(prepared).flatMap(lockFile => saveLock(outputPath, lockFile))
+  ): Either[LockCommandError, LockReport] = buildLock(prepared).flatMap: lockFile =>
+    val normalizedPath = outputPath.toAbsolutePath.normalize()
+    // Absent or unreadable, the old file has nothing to keep and is replaced, as it always was.
+    val existing = lockFileStore.load(normalizedPath).toOption
+    saveLock(normalizedPath, LockFileMerge.merge(lockFile, existing, prepared.profile.spec.plan))
 
   private def buildLock(prepared: PreparedPlan): Either[LockCommandError, LockFile] =
     LockFileBuilder
@@ -165,20 +163,27 @@ private[core] final class ResolvingBinaryInstallerService(
       .map(error => LockCommandError.InspectionFailed(error.toolName, error.message))
 
   private def saveLock(
-      outputPath: Path,
-      lockFile: LockFile
-  ): Either[LockCommandError, LockReport] =
-    val normalizedPath = outputPath.toAbsolutePath.normalize()
-    lockFileStore
-      .save(normalizedPath, lockFile)
-      .left
-      .map(LockCommandError.SaveFailed.apply)
-      .map(_ => LockReport(normalizedPath, lockFile))
+      normalizedPath: Path,
+      merged: MergedLockFile
+  ): Either[LockCommandError, LockReport] = lockFileStore
+    .save(normalizedPath, merged.lockFile)
+    .left
+    .map(LockCommandError.SaveFailed.apply)
+    .map(_ => LockReport(normalizedPath, merged.lockFile, merged.keptEntries))
 
-  private def configuredStatePath(
+  // Plan prints the state file apply would use, so it holds that name to apply's rule. Checked
+  // before the lock gate, which downloads every selected artifact.
+  private def validatedStatePath(
       options: InstallerOptions,
       plan: ResolvedPlan
-  ): Option[String] = options.statePath.orElse(plan.policy.stateFile)
+  ): Either[ApplyStateError.InvalidPath, Option[String]] =
+    StatePathResolver.selected(options, plan).fold(Right(None)): rawPath =>
+      StatePathResolver.resolve(rawPath, stateStore.cwd).map(_ => Some(rawPath))
+
+  private def renderStateError(error: ApplyStateError): InstallerResult = InstallerResult(
+    Vector(RenderSafety.display(ApplyStateError.render(error), resolutionOptions.redactions)),
+    InstallerRunStatus.Failed
+  )
 
   /** Emit the run summary for a failed run and return its rendered result unchanged. */
   private def failed(
@@ -264,6 +269,7 @@ private[core] final class ResolvingBinaryInstallerService(
       s"profile: ${report.lockFile.profileName}",
       s"manifest fingerprint: ${report.lockFile.manifestFingerprint}",
       s"tools: ${report.lockFile.tools.size}",
+      s"kept from existing lock file: ${report.keptEntries}",
       s"checksums: ${LockFileChecksum.summary(report.lockFile.tools)}"
     ),
     InstallerRunStatus.Succeeded
@@ -300,22 +306,30 @@ private[core] final class ResolvingBinaryInstallerService(
     InstallerRunStatus.Failed
   )
 
+  /**
+   * Pin each tool that the manifest leaves without a checksum to its locked digest.
+   *
+   * A tool with its own checksum keeps it. Lock validation already proved the locked digest equal,
+   * and the tool's own source says where the value came from.
+   */
   private def applyLockedChecksums(
       prepared: PreparedPlan,
       locked: LockedApplyProvenance
   ): PreparedPlan = prepared.copy(plan = prepared.plan.copy(tools = prepared.plan.tools.map: tool =>
-    locked.tools.get(tool.name).flatMap(_.checksum) match
-      // Locked-apply validation rejects any malformed locked digest before this runs, so the parse
-      // cannot fail here; leaving the tool untouched if it somehow did keeps this total without
-      // inventing a digest.
-      case Some(checksum) => Sha256Digest.fromString(checksum.value).toOption.fold(tool): digest =>
-          tool.copy(download =
-            tool.download.copy(checksum =
-              Some(ResolvedChecksum(
-                binstaller.config.ChecksumAlgorithm.Sha256,
-                digest,
-                ResolvedChecksumSource.Configured
-              ))
-            )
-          )
-      case None => tool))
+    lockedChecksum(tool, locked).fold(tool): checksum =>
+      tool.copy(download = tool.download.copy(checksum = Some(checksum)))))
+
+  private def lockedChecksum(
+      tool: ResolvedTool,
+      locked: LockedApplyProvenance
+  ): Option[ResolvedChecksum] =
+    if tool.download.checksum.nonEmpty then None
+    else
+      locked.tools.get(tool.name).flatMap(_.checksum).map: checksum =>
+        ResolvedChecksum(
+          ChecksumAlgorithm.Sha256,
+          // Lock validation already rejected a malformed locked digest, so no parse is repeated
+          // here. A value that still got through matches no artifact, and apply refuses the tool.
+          Sha256Digest.trusted(checksum.value),
+          ResolvedChecksumSource.Locked(locked.path)
+        )

@@ -4,6 +4,10 @@ import utest.*
 
 import java.nio.file.Files
 import java.nio.file.Path
+import scala.concurrent.Await
+import scala.concurrent.ExecutionContext
+import scala.concurrent.Future
+import scala.concurrent.duration.*
 
 object ConfigModuleTest extends TestSuite:
 
@@ -253,6 +257,19 @@ object ConfigModuleTest extends TestSuite:
       assert(errors.exists(_.message.contains("control")))
       assert(errors.exists(_.message.contains("path separators")))
 
+    test("tool names that --only and --skip cannot address are rejected"):
+      // A name starting with `-` reads as an option: `--only --only` and `--only=--only` both fail.
+      Vector("my tool", "a,b", "non\u00a0breaking", "--only", "--skip", "-V").foreach: name =>
+        val errors = validationErrors(
+          policyModeYaml("").replace("    - name: alpha", s"    - name: \"$name\"")
+        )
+
+        assert(errors == Vector(ValidationError(
+          "spec.plan[0].name",
+          "tool name must not start with '-' or contain whitespace or commas, " +
+            "so that --only and --skip can select it"
+        )))
+
     test("a blank tool name produces only its prerequisite string error"):
       val errors = validationErrors(
         policyModeYaml("").replace("    - name: alpha", "    - name: \"\"")
@@ -303,6 +320,87 @@ object ConfigModuleTest extends TestSuite:
           error.message.contains("suggestion[allow-sudo-symlinks]")
       ))
 
+    test("a when selector no host can match is rejected"):
+      val architecture = validationErrors(whenYaml("architecture: x86-64"))
+      val family       = validationErrors(whenYaml("os:\n          family: linx"))
+
+      assert(architecture == Vector(ValidationError(
+        "spec.plan[0].when.architecture",
+        "unsupported value 'x86-64', expected one of " +
+          "amd64, x86_64, x64, arm64, aarch64, 386, x86, i386, i486, i586, i686"
+      )))
+      assert(family == Vector(ValidationError(
+        "spec.plan[0].when.os.family",
+        s"unsupported value 'linx', expected $osFamilySpellings"
+      )))
+
+    test("a when family naming more than one family, or a fragment of one, is rejected"):
+      // Fragment matching resolved each of these to the first family in its table, so on any
+      // other host the entry left every plan without a message.
+      val values = Vector(
+        "linux, darwin",
+        "darwin or linux",
+        "linux|darwin",
+        "not-linux",
+        "!windows",
+        "Mac OS X"
+      )
+      values.foreach: value =>
+        val errors = validationErrors(whenYaml(s"os:\n          family: \"$value\""))
+
+        assert(errors == Vector(ValidationError(
+          "spec.plan[0].when.os.family",
+          s"unsupported value '$value', expected $osFamilySpellings"
+        )))
+
+    test("every when selector spelling the plan resolver understands still loads"):
+      val families = Vector(
+        "linux",
+        "Linux",
+        "\" linux \"",
+        "darwin",
+        "macos",
+        "MacOS",
+        "mac",
+        "osx",
+        "windows"
+      )
+      val architectures = Vector("amd64", "x86_64", "X64", "arm64", "aarch64", "\"386\"", "i686")
+      val selectors     = families.map(family => s"os:\n          family: $family") ++
+        architectures.map(architecture => s"architecture: $architecture")
+
+      selectors.foreach: selector =>
+        ConfigModule.loadString(whenYaml(selector)) match
+          case Right(_)    => ()
+          case Left(error) => abort(s"expected '$selector' to load, got $error")
+
+    test("host vocabulary maps a spelling to its canonical name and knows no other"):
+      assert(HostVocabulary.osFamily(" LINUX ").contains("linux"))
+      assert(HostVocabulary.osFamily("osx").contains("darwin"))
+      assert(HostVocabulary.osFamily("Mac OS X").isEmpty)
+      assert(HostVocabulary.osFamily("FreeBSD").isEmpty)
+      assert(HostVocabulary.hostOsFamily("Mac OS X").contains("darwin"))
+      assert(HostVocabulary.hostOsFamily("Windows 11").contains("windows"))
+      assert(HostVocabulary.hostOsFamily("FreeBSD").isEmpty)
+      // The plan resolver normalizes a manifest family with the host rule, so each manifest
+      // spelling must mean the same family under both.
+      Vector("linux", "darwin", "macos", "mac", "osx", "windows").foreach: spelling =>
+        assert(HostVocabulary.hostOsFamily(spelling) == HostVocabulary.osFamily(spelling))
+      assert(HostVocabulary.architecture("x86_64").contains("amd64"))
+      assert(HostVocabulary.architecture("AArch64").contains("arm64"))
+      assert(HostVocabulary.architecture("i686").contains("386"))
+      assert(HostVocabulary.architecture("riscv64").isEmpty)
+
+    test("validated profile construction rejects a when selector no host can match"):
+      val profile  = exampleProfile
+      val first    = profile.spec.plan.head
+      val typoSpec = profile.spec.copy(
+        plan = first.copy(when = Some(WhenClause(None, Some("amd46")))) +: profile.spec.plan.tail
+      )
+      val errors = profileValidationErrors(profile, typoSpec)
+
+      assert(errors.exists(errorAt("spec.plan[0].when.architecture")))
+
     test("installer blocks are rejected"):
       val errors = validationErrors(unsupportedInstallerYaml)
 
@@ -345,6 +443,93 @@ object ConfigModuleTest extends TestSuite:
         "checksum must declare either value or discover, not both"
       )))
 
+    test("a non-string checksum value reports only the type error"):
+      val errors = validationErrors(invalidChecksumYaml.replace("value: not-a-sha", "value: 123"))
+
+      assert(errors == Vector(ValidationError(
+        "spec.plan[0].spec.download.checksum.value",
+        "value must be a string"
+      )))
+
+    test("a non-string checksum value beside discover is still an ambiguous declaration"):
+      val errors = validationErrors(ambiguousChecksumYaml.replace("a" * 64, "123"))
+
+      assert(errors == Vector(
+        ValidationError("spec.plan[0].spec.download.checksum.value", "value must be a string"),
+        ValidationError(
+          "spec.plan[0].spec.download.checksum",
+          "checksum must declare either value or discover, not both"
+        )
+      ))
+
+    test("an empty document reports one error, not one per field it lacks"):
+      assert(validationErrors("") == Vector(ValidationError("$", "value must be a map")))
+
+    test("a missing block reports one error, not one per field under it"):
+      val errors =
+        validationErrors(policyModeYaml("").replace("metadata:\n  name: policy-mode\n", ""))
+
+      assert(errors == Vector(ValidationError("metadata", "required map is missing")))
+
+    test("plan entries that are not maps report one error each"):
+      val yaml   = policyModeYaml("")
+      val errors = validationErrors(
+        yaml.substring(0, yaml.indexOf("  plan:")) + "  plan:\n    - first\n    - second\n"
+      )
+
+      assert(errors == Vector(
+        ValidationError("spec.plan[0]", "value must be a map"),
+        ValidationError("spec.plan[1]", "value must be a map")
+      ))
+
+    test("a list item that is not a map reports one error"):
+      val errors = validationErrors(
+        policyModeYaml("").replace("          - path: bin/alpha", "          - bin/alpha")
+      )
+
+      assert(errors == Vector(ValidationError(
+        "spec.plan[0].spec.executables[0]",
+        "value must be a map"
+      )))
+
+    test("a wrong-typed discover block reports one error"):
+      val errors = validationErrors(
+        invalidChecksumYaml.replace("value: not-a-sha", "discover: sha256sum")
+      )
+
+      assert(errors == Vector(ValidationError(
+        "spec.plan[0].spec.download.checksum.discover",
+        "value must be a map"
+      )))
+
+    test("a wrong-typed versions block does not also report unknown version refs"):
+      val errors = validationErrors(
+        policyModeYaml("").replace("  versions:\n    alpha: \"1.0.0\"", "  versions: []")
+      )
+
+      assert(errors == Vector(ValidationError("spec.versions", "value must be a map")))
+
+    test("a wrong-typed allowSudoSymlinks does not also forbid the sudo symlinks"):
+      val errors = validationErrors(
+        sudoSymlinkYaml(allowSudoSymlinks = true)
+          .replace("allowSudoSymlinks: true", "allowSudoSymlinks: \"true\"")
+      )
+
+      assert(errors == Vector(ValidationError(
+        "spec.policy.allowSudoSymlinks",
+        "value must be a boolean"
+      )))
+
+    test("a wrong-typed policy block does not also forbid the sudo symlinks"):
+      val errors = validationErrors(
+        sudoSymlinkYaml(allowSudoSymlinks = true).replace(
+          "  policy:\n    appsDir: \"${HOME}/.apps\"\n    allowSudoSymlinks: true",
+          "  policy: []"
+        )
+      )
+
+      assert(errors == Vector(ValidationError("spec.policy", "value must be a map")))
+
     test("unknown fields are rejected at every manifest level"):
       val yaml = policyModeYaml("")
         .replace("metadata:\n", "metadata:\n  unexpectedMetadata: value\n")
@@ -368,6 +553,21 @@ object ConfigModuleTest extends TestSuite:
         "unknown field 'unexpectedDownload'"
       )))
 
+    test("an unknown key spelled like a manifest path does not hide the validator's errors"):
+      val broken = whenYaml("architecture: sparc")
+        .replace("  name: policy-mode", "  name: a/b")
+        .replace("versionRef: alpha", "versionRef: missing")
+      val rootKey = validationErrors("\"$\": typo\n" + broken)
+      val specKey =
+        validationErrors(broken.replace("  vars: {}", "  vars: {}\n  \"plan[0]\": typo"))
+
+      assert(rootKey.contains(ValidationError("$", "unknown field '$'")))
+      assert(specKey.contains(ValidationError("spec.plan[0]", "unknown field 'plan[0]'")))
+      Vector(rootKey, specKey).foreach: errors =>
+        assert(errors.exists(errorAt("metadata.name")))
+        assert(errors.exists(errorAt("spec.plan[0].when.architecture")))
+        assert(errors.exists(errorAt("spec.plan[0].spec.versionRef")))
+
     test("YAML mappings reject non-string keys instead of silently dropping them"):
       ConfigModule.loadString("1: value") match
         case Left(ConfigLoadError.ParseFailed(message)) =>
@@ -377,8 +577,28 @@ object ConfigModuleTest extends TestSuite:
     test("YAML input is bounded before constructing an unbounded object graph"):
       val oversized = "x" * (2 * 1024 * 1024 + 1)
       ConfigModule.loadString(oversized) match
-        case Left(ConfigLoadError.ParseFailed(message)) => assert(message.nonEmpty)
+        case Left(ConfigLoadError.ParseFailed(message)) =>
+          assert(message.contains("exceeds the limit"))
         case result => abort(s"expected a parse failure, got $result")
+
+    test("text past the code-point limit is rejected before the YAML parser scans it"):
+      // snakeyaml checks its own limit only when it fetches a token, so it scanned this one
+      // comment in full, which is quadratic, and then accepted it.
+      val comment = "#" * (8 * 1024 * 1024)
+
+      assert(parseFailure(comment) == "YAML document exceeds the limit of 2097152 code points")
+
+    test("a line past the line limit is rejected with its line number"):
+      // One long number scalar took the parser tens of seconds while inside every other limit.
+      val hexDigits     = "a: 0x" + ("f" * 2000000)
+      val decimalDigits = "a: " + ("1" * 2000000)
+
+      Vector(hexDigits, decimalDigits).foreach: yaml =>
+        assert(parseFailure(yaml) == "YAML line 1 exceeds the limit of 65536 characters")
+      assert(
+        parseFailure("a: 1\nb: " + ("x" * 65536)) ==
+          "YAML line 2 exceeds the limit of 65536 characters"
+      )
 
     test("invalid filesystem path strings return a parse failure"):
       ConfigModule.load("config\u0000.yaml") match
@@ -386,12 +606,177 @@ object ConfigModuleTest extends TestSuite:
           assert(message.startsWith("invalid config path:"))
         case result => abort(s"expected an invalid-path parse failure, got $result")
 
+    test("a missing config file is reported with a reason, not with its path repeated"):
+      val missing = java.nio.file.Path.of("no-such-directory", "config.yaml").toAbsolutePath
+
+      ConfigLoader.load(missing) match
+        case Left(ConfigLoadError.ReadFailed(path, message)) =>
+          assert(path == missing)
+          assert(message == "no such file")
+        case result => abort(s"expected a read failure, got $result")
+
+    test("an oversized config file is a read failure, not an OutOfMemoryError"):
+      // One byte over the limit takes the same branch as a disk image: past 2 GiB the JDK cannot
+      // read a file into one array at any heap size, and the loader reads at most limit + 1 bytes.
+      val directory = Files.createTempDirectory("binstaller-oversized")
+      val oversized = directory.resolve("oversized.yaml")
+      try
+        val _ = Files.write(oversized, Array.fill(8 * 1024 * 1024 + 1)('#'.toByte))
+
+        ConfigModule.load(oversized) match
+          case Left(ConfigLoadError.ReadFailed(path, message)) =>
+            assert(path == oversized)
+            assert(message == "config file is larger than 8388608 bytes")
+          case result => abort(s"expected a read failure, got $result")
+      finally
+        val _ = Files.deleteIfExists(oversized)
+        Files.delete(directory)
+
+    test("a config file that is not UTF-8 text is a read failure"):
+      val binary = Files.createTempFile("binstaller-binary", ".yaml")
+      try
+        Files.write(binary, Array(0xff.toByte, 0xfe.toByte, 0x00.toByte))
+
+        ConfigModule.load(binary) match
+          case Left(ConfigLoadError.ReadFailed(_, message)) =>
+            assert(message == "file is not valid UTF-8 text")
+          case result => abort(s"expected a read failure, got $result")
+      finally Files.delete(binary)
+
     test("deeply nested YAML fails as a parse error instead of overflowing the stack"):
+      // One bracket per line keeps every line inside the line limit, so the parser sees it.
       val depth  = 50000
-      val nested = ("[" * depth) + ("]" * depth)
+      val nested = ("[\n" * depth) + ("]\n" * depth)
       ConfigModule.loadString(nested) match
-        case Left(ConfigLoadError.ParseFailed(message)) => assert(message.nonEmpty)
+        case Left(ConfigLoadError.ParseFailed(message)) =>
+          assert(message.contains("too deeply nested"))
         case result => abort(s"expected a parse failure, got $result")
+
+    test("nesting past the supported depth fails at the depth guard"):
+      val depth = 150
+      ConfigModule.loadString(("[" * depth) + ("]" * depth)) match
+        case Left(ConfigLoadError.ParseFailed(message)) =>
+          assert(message.contains("maximum supported depth"))
+        case result => abort(s"expected a parse failure, got $result")
+
+    test("a recursive alias fails at the depth guard instead of looping"):
+      ConfigModule.loadString("a: &a [*a]") match
+        case Left(ConfigLoadError.ParseFailed(message)) =>
+          assert(message.contains("maximum supported depth"))
+        case result => abort(s"expected a parse failure, got $result")
+
+    test("a duplicate key is a parse failure, not a silent last-one-wins"):
+      ConfigModule.loadString("a: 1\na: 2") match
+        case Left(ConfigLoadError.ParseFailed(message)) => assert(message.contains("duplicate key"))
+        case result => abort(s"expected a parse failure, got $result")
+
+    test("a multi-document stream is a parse failure, not a silently ignored tail"):
+      ConfigModule.loadString("a: 1\n---\nb: 2") match
+        case Left(ConfigLoadError.ParseFailed(message)) =>
+          assert(message.contains("single document"))
+        case result => abort(s"expected a parse failure, got $result")
+
+    test("a block shared through an anchor and an alias loads as both fields"):
+      val yaml = policyModeYaml("").replace(
+        "  name: policy-mode",
+        "  name: policy-mode\n  labels: &shared\n    role: development\n  annotations: *shared"
+      )
+      val metadata = ConfigModule.loadString(yaml) match
+        case Right(profile) => profile.metadata
+        case Left(error)    => abort(s"expected a valid profile, got $error")
+
+      assert(metadata.labels == Map("role" -> "development"))
+      assert(metadata.annotations == metadata.labels)
+
+    test("a self-merging document fails at the depth guard instead of looping"):
+      // With merge keys on, snakeyaml looped forever inside its own merge before any guard here.
+      Vector("a: &a {<<: *a}", "a: &a {k: 1, <<: *a}", "a: &a\n  <<: *a").foreach: yaml =>
+        withinSeconds(30, () => ConfigModule.loadString(yaml)) match
+          case Left(ConfigLoadError.ParseFailed(message)) =>
+            assert(message.contains("maximum supported depth"))
+          case result => abort(s"expected a parse failure for '$yaml', got $result")
+
+    test("an explicit merge tag is rejected before the YAML parser merges anything"):
+      // The composer merges on the tag itself, whatever the scalar resolver says about `<<`.
+      val tagged = Vector(
+        "a: &a {!!merge <<: *a}",
+        "a: &a {!<tag:yaml.org,2002:merge> x: *a}",
+        "%TAG !t! tag:yaml.org,2002:\n---\na: &a {!t!merge x: *a}"
+      )
+      tagged.foreach: yaml =>
+        withinSeconds(30, () => ConfigModule.loadString(yaml)) match
+          case Left(ConfigLoadError.ParseFailed(message)) =>
+            assert(message == "YAML merge keys are not supported")
+          case result => abort(s"expected a parse failure for '$yaml', got $result")
+
+    test("a wide map merged many times is not expanded by the YAML parser"):
+      // A merge copies its source inside snakeyaml, before the node budget counts anything: 49
+      // merges of one wide map, inside the alias cap, cost gigabytes of heap.
+      val wide    = (0 until 2000).map(index => s"k$index: v").mkString("{", ", ", "}")
+      val sources = Vector.fill(49)("*wide").mkString("[", ", ", "]")
+      val yaml    = policyModeYaml("").replace(
+        "  name: policy-mode",
+        s"  name: policy-mode\n  annotations: &wide $wide\n  labels: {<<: $sources}"
+      )
+
+      assert(validationErrors(yaml) == Vector(ValidationError(
+        "metadata.labels.<<",
+        "value must be a string"
+      )))
+
+    test("a merge-key spelling in spec.vars is an ordinary variable name"):
+      val yaml = policyModeYaml("").replace("  vars: {}", "  vars:\n    <<: value")
+      val vars = ConfigModule.loadString(yaml) match
+        case Right(profile) => profile.spec.vars
+        case Left(error)    => abort(s"expected a valid profile, got $error")
+
+      assert(vars == Map("<<" -> "value"))
+
+    test("alias fan-out that expands past the node budget fails as a parse error"):
+      // 33 alias references, inside snakeyaml's cap of 50, expand to several million nodes.
+      val base   = "l0: &l0 [x, x, x, x, x, x, x, x, x, x]"
+      val levels = (1 to 11).map: level =>
+        val previous = s"*l${level - 1}"
+        s"l$level: &l$level [$previous, $previous, $previous]"
+      ConfigModule.loadString((base +: levels).mkString("\n")) match
+        case Left(ConfigLoadError.ParseFailed(message)) => assert(message.contains("aliases"))
+        case Left(other) => abort(s"expected a parse failure, got ${other.getClass.getSimpleName}")
+        case Right(_)    => abort("expected a parse failure, got a profile")
+
+    test("every YAML 1.2 Core spelling of null is null, not a literal string"):
+      Vector("~", "null", "Null", "NULL", "").foreach: spelling =>
+        val errors = validationErrors(policyModeYaml(s"stateFile: $spelling"))
+
+        assert(errors == Vector(ValidationError(
+          "spec.policy.stateFile",
+          "value must be a string"
+        )))
+
+    test("capitalized booleans are booleans"):
+      val policy = ConfigModule.loadString(policyModeYaml("continueOnError: True")) match
+        case Right(profile) => profile.spec.policy
+        case Left(error)    => abort(s"expected a valid profile, got $error")
+
+      assert(policy.continueOnError == PolicyOverride.Enabled)
+
+    test("YAML 1.1 booleans such as yes stay strings"):
+      val errors = validationErrors(policyModeYaml("continueOnError: yes"))
+
+      assert(errors == Vector(ValidationError(
+        "spec.policy.continueOnError",
+        "value must be a boolean"
+      )))
+
+    test("an unquoted executable mode is a number and must be quoted"):
+      val errors = validationErrors(policyModeYaml("").replace(
+        "          - path: bin/alpha",
+        "          - path: bin/alpha\n            mode: 0755"
+      ))
+
+      assert(errors == Vector(ValidationError(
+        "spec.plan[0].spec.executables[0].mode",
+        "mode must be a quoted string, e.g. \"0755\""
+      )))
 
     test("required strings reject empty values"):
       val errors = validationErrors(emptyUrlYaml)
@@ -410,6 +795,19 @@ object ConfigModuleTest extends TestSuite:
 
       assert(errors.exists(errorAt("metadata.name")))
       assert(errors.exists(_.message.contains("path separators")))
+
+    test("an unsafe metadata name is reported as a profile name, not a tool name"):
+      val errors = validationErrors(unsafeMetadataNameYaml)
+
+      assert(errors == Vector(ValidationError(
+        "metadata.name",
+        "profile name must not contain path separators"
+      )))
+
+    test("a profile name may contain the spaces and commas a tool name may not"):
+      val yaml = policyModeYaml("").replace("  name: policy-mode", "  name: \"dev tools, laptop\"")
+
+      assert(ConfigModule.loadString(yaml).map(_.metadata.name) == Right("dev tools, laptop"))
 
     test("error accumulation surfaces every failing sibling field, not just the first"):
       val errors = validationErrors(twoEmptySiblingFieldsYaml)
@@ -472,6 +870,17 @@ object ConfigModuleTest extends TestSuite:
     ))
 
   private def errorAt(path: String)(error: ValidationError): Boolean = error.path == path
+
+  private def parseFailure(yaml: String): String = ConfigModule.loadString(yaml) match
+    case Left(ConfigLoadError.ParseFailed(message)) => message
+    case result => abort(s"expected a parse failure, got $result")
+
+  // A hang must fail its test instead of stalling the suite. The global pool's threads are
+  // daemons, so a thread stuck in a loop does not keep the test JVM alive.
+  private def withinSeconds[A](seconds: Int, body: () => A): A =
+    Await.result(Future(body())(using ExecutionContext.global), seconds.seconds)
+
+  private val osFamilySpellings = "one of linux, darwin, macos, mac, osx, windows"
 
   private def abort(message: String): Nothing = throw java.lang.AssertionError(message)
 
@@ -937,6 +1346,11 @@ object ConfigModuleTest extends TestSuite:
        |        executables:
        |          - path: bin/alpha
        |""".stripMargin
+
+  private def whenYaml(selector: String): String = policyModeYaml("").replace(
+    "      kind: binary-tool",
+    s"      kind: binary-tool\n      when:\n        $selector"
+  )
 
   private def sudoSymlinkYaml(allowSudoSymlinks: Boolean): String =
     s"""

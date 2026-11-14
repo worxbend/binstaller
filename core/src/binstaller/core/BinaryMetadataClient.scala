@@ -17,16 +17,21 @@ final case class BinaryMetadataError(
     provenance: Option[UrlProvenance] = None
 )
 
-/** Metadata observed for a downloadable artifact without materializing the body. */
+/** What one inspection of a download URL observed. The body is read to hash it, then dropped. */
 final case class BinaryMetadata(
     sizeBytes: Option[Long],
     provenance: UrlProvenance,
     sha256: Option[Sha256Digest] = None
 )
 
-/** Boundary for resolving download URL provenance and content length for lock files. */
+/**
+ * Boundary for inspecting a download URL for lock files: redirect provenance, size, and SHA-256.
+ *
+ * The name undersells the cost. A digest needs the bytes, so the production client downloads the
+ * whole artifact on every call. `metadata` stays because implementations outside core rely on it.
+ */
 trait BinaryMetadataClient:
-  /** Fetch metadata for a download URL. */
+  /** Inspect a download URL. The production client streams the full artifact to hash it. */
   def metadata(url: String): Either[BinaryMetadataError, BinaryMetadata]
 
 /** Binary metadata client constructors. */

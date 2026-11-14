@@ -11,7 +11,7 @@ import binstaller.config.DownloadSpec
 import binstaller.config.DynamicVersionKind
 import binstaller.config.ExtractMapping
 import binstaller.config.PlanEntry
-import binstaller.config.SymlinkPrivilege
+import binstaller.config.ToolName
 import binstaller.config.ValidationError
 import binstaller.config.VersionResolverKind
 import binstaller.config.VersionSource
@@ -29,8 +29,33 @@ object PlanResolver:
       profile: BinaryDistributionProfile,
       options: ResolutionOptions,
       httpTextClient: HttpTextClient
+  ): Either[ResolvePlanError.ValidationFailed, ResolvedPlan] = validated(
+    ResolutionBuilder(profile, options, httpTextClient)
+      .resolve(ToolSelector.hostEntries(profile.spec.plan, options.hostPlatform), Vector.empty)
+  )
+
+  /**
+   * Resolve only the tools `selection` keeps.
+   *
+   * Selection runs first, on the manifest, so a deselected tool is never resolved: no request is
+   * made for it, and its resolution errors cannot fail the run. Its installDir is still placed from
+   * the manifest alone, because a selected tool installed over it would replace it.
+   */
+  private[core] def resolve(
+      profile: BinaryDistributionProfile,
+      options: ResolutionOptions,
+      httpTextClient: HttpTextClient,
+      selection: ToolSelection
+  ): Either[ResolvePlanError, ResolvedPlan] =
+    ToolSelector.select(profile.spec.plan, options.hostPlatform, selection).flatMap: selected =>
+      val selectedIndexes = selected.map(_._2).toSet
+      val bystanders      = ToolSelector.hostEntries(profile.spec.plan, options.hostPlatform)
+        .filterNot((_, index) => selectedIndexes(index))
+      validated(ResolutionBuilder(profile, options, httpTextClient).resolve(selected, bystanders))
+
+  private def validated(
+      resolved: ResolvedValue[ResolvedPlan]
   ): Either[ResolvePlanError.ValidationFailed, ResolvedPlan] =
-    val resolved = ResolutionBuilder(profile, options, httpTextClient).resolve()
     if resolved.errors.isEmpty then Right(resolved.value)
     else Left(ResolvePlanError.ValidationFailed(resolved.errors))
 
@@ -66,20 +91,34 @@ private[core] final class ResolutionBuilder(
     httpTextClient: HttpTextClient
 ):
 
-  def resolve(): ResolvedValue[ResolvedPlan] =
+  /**
+   * Resolve `activeEntries`: the plan entries taking part in this run, with manifest indexes.
+   *
+   * `bystanders` are the host entries left out by `--only`/`--skip`. They are never resolved; only
+   * their install directories are compared against the active ones.
+   */
+  def resolve(
+      activeEntries: Vector[(PlanEntry, Int)],
+      bystanders: Vector[(PlanEntry, Int)]
+  ): ResolvedValue[ResolvedPlan] =
     val manifestVars = resolveManifestVars()
     val policy       = resolvePolicy(options.runtimeVariables ++ manifestVars.value)
     val baseVars     = options.runtimeVariables ++ manifestVars.value +
       ("appsDir" -> policy.value.appsDir)
-    val activeEntries     = profile.spec.plan.zipWithIndex.filter((entry, _) => matchesHost(entry))
     val activeVersionRefs = activeEntries.map(_._1.spec.versionRef).toSet
-    val versions          = resolveVersions(baseVars, activeVersionRefs)
-    val tools             = resolveTools(activeEntries, baseVars, versions.value)
-    val installDirectoryErrors = validateInstallDirectories(policy.value, tools.value)
-    val strictPolicyErrors     = StrictPolicyValidator.validate(
+    val versionResults    = resolveVersions(baseVars, activeVersionRefs)
+    val versions          = ResolvedValue.sequenceMap(versionResults)
+    val tools             =
+      resolveTools(activeEntries, baseVars, versions.value ++ standInVersions(versionResults))
+    // Errors must name the manifest position, and a host-excluded or deselected entry shifts the
+    // position in `tools`. `sequence` keeps one tool per entry, so the zip stays aligned.
+    val indexedTools           = tools.value.zip(activeEntries.map(_._2))
+    val installDirectoryErrors = validateInstallDirectories(policy.value, indexedTools) ++
+      bystanderOverlapErrors(indexedTools, bystanderInstallDirs(bystanders, baseVars))
+    val strictPolicyErrors = StrictPolicyValidator.validate(
       profile,
       policy.value,
-      tools.value,
+      indexedTools,
       activeVersionRefs
     )
 
@@ -88,6 +127,19 @@ private[core] final class ResolutionBuilder(
       manifestVars.errors ++ policy.errors ++ versions.errors ++ tools.errors
         ++ installDirectoryErrors ++ strictPolicyErrors
     )
+
+  // A version source that failed is reported once, at the source. The tools built on it are still
+  // checked for their own mistakes, against a stand-in, so that no field repeats the failure as an
+  // unresolved ${version}. The stand-in cannot reach an install: the source's error fails the run
+  // and the plan value is discarded.
+  private def standInVersions(
+      versionResults: Vector[(String, ResolvedValue[ResolvedVersion])]
+  ): Map[String, ResolvedVersion] = versionResults.collect:
+    case (name, version) if version.errors.nonEmpty =>
+      name -> ResolvedVersion.Concrete(unresolvedVersionStandIn, None)
+  .toMap
+
+  private val unresolvedVersionStandIn: String = "unresolved"
 
   private def resolveManifestVars(): ResolvedValue[Map[String, String]] =
     val rawVars  = profile.spec.vars
@@ -113,10 +165,9 @@ private[core] final class ResolutionBuilder(
   private def resolveVersions(
       vars: Map[String, String],
       activeVersionRefs: Set[String]
-  ): ResolvedValue[Map[String, ResolvedVersion]] =
-    val resolved = profile.spec.versions.toVector.filter((name, _) => activeVersionRefs(name)).map:
+  ): Vector[(String, ResolvedValue[ResolvedVersion])] =
+    profile.spec.versions.toVector.filter((name, _) => activeVersionRefs(name)).map:
       case (name, source) => name -> resolveVersionSource(name, source, vars)
-    ResolvedValue.sequenceMap(resolved)
 
   private def resolveVersionSource(
       name: String,
@@ -126,7 +177,7 @@ private[core] final class ResolutionBuilder(
     case VersionSource.Pinned(value) =>
       val path     = s"spec.versions.$name"
       val resolved = interpolate(value, path, vars)
-      val errors   = resolved.errors ++ missingConcreteVersionErrors(resolved.value, path, name)
+      val errors   = resolved.errors ++ concreteVersionErrors(resolved.value, path, name)
       ResolvedValue(ResolvedVersion.Concrete(resolved.value, None), errors)
     case VersionSource.Dynamic(DynamicVersionKind.LatestUrl, note) =>
       ResolvedValue.valid(ResolvedVersion.DynamicLatestUrl(note))
@@ -160,19 +211,30 @@ private[core] final class ResolutionBuilder(
               s"http-text resolver failed: ${error.message}"
             )
 
+    val requestErrors = resolvedUrl.errors ++ urlErrors ++ fetched.errors
+    // An empty answer is its own error only when the request worked; after a failed request it
+    // would restate that failure.
+    val valueErrors =
+      if requestErrors.nonEmpty then Vector.empty
+      else concreteVersionErrors(fetched.value.text, path, name)
+
     ResolvedValue(
       ResolvedVersion.Concrete(fetched.value.text, Some(fetched.value.provenance)),
-      resolvedUrl.errors ++ urlErrors ++ fetched.errors ++
-        missingConcreteVersionErrors(fetched.value.text, path, name)
+      requestErrors ++ valueErrors
     )
 
-  private def missingConcreteVersionErrors(
+  private def concreteVersionErrors(
       value: String,
       path: String,
       name: String
   ): Vector[ValidationError] =
-    if value.nonEmpty then Vector.empty
-    else Vector(ValidationError(path, s"version '$name' did not resolve to a concrete value"))
+    if value.isEmpty then
+      Vector(ValidationError(path, s"version '$name' did not resolve to a concrete value"))
+    // A version is printed in the plan and spliced into paths and URLs. One that carries a line
+    // break or an escape sequence, as a hostile version endpoint can return, forges plan lines.
+    else if value.exists(Character.isISOControl) then
+      Vector(ValidationError(path, s"version '$name' resolved to a value with control characters"))
+    else Vector.empty
 
   private def resolveTools(
       entries: Vector[(PlanEntry, Int)],
@@ -182,13 +244,6 @@ private[core] final class ResolutionBuilder(
     val resolved = entries.map:
       case (entry, index) => resolveTool(entry, index, baseVars, versions)
     ResolvedValue.sequence(resolved)
-
-  private def matchesHost(entry: PlanEntry): Boolean = entry.when.forall: clause =>
-    val osMatches = clause.os.flatMap(_.family).forall: expected =>
-      HostPlatform.normalizeOs(expected) == options.hostPlatform.osFamily
-    val architectureMatches = clause.architecture.forall: expected =>
-      HostPlatform.normalizeArchitecture(expected) == options.hostPlatform.architecture
-    osMatches && architectureMatches
 
   private def resolveTool(
       entry: PlanEntry,
@@ -245,7 +300,7 @@ private[core] final class ResolutionBuilder(
 
   private def concreteVersionVars(version: ResolvedVersion): Map[String, String] = version match
     case ResolvedVersion.Concrete(value, _) if value.nonEmpty => Map("version" -> value)
-    case _                                                    => Map.empty
+    case ResolvedVersion.Concrete(_, _) | ResolvedVersion.DynamicLatestUrl(_) => Map.empty
 
   private def resolveDownload(
       download: DownloadSpec,
@@ -377,24 +432,29 @@ private[core] final class ResolutionBuilder(
         value.extract.files,
         s"$downloadPath.archive.extract.files",
         vars,
-        version
+        version,
+        ResolvedPathValidator.installRelativePath
       )
       val directories = resolveExtractMappings(
         value.extract.directories,
         s"$downloadPath.archive.extract.directories",
         vars,
-        version
+        version,
+        ResolvedPathValidator.archivePath
       )
       ResolvedValue(
         Some(ResolvedArchive(value, files.value, directories.value)),
         files.errors ++ directories.errors
       )
 
+  // A file mapping names a file on both sides. Only a directory mapping may name the current
+  // directory: the archive root as its source, the install directory as its target.
   private def resolveExtractMappings(
       mappings: Vector[ExtractMapping],
       path: String,
       vars: Map[String, String],
-      version: ResolvedVersion
+      version: ResolvedVersion,
+      validatePath: (String, String, String) => Vector[ValidationError]
   ): ResolvedValue[Vector[ResolvedExtractMapping]] =
     val resolved = mappings.zipWithIndex.map:
       case (mapping, index) =>
@@ -405,14 +465,14 @@ private[core] final class ResolutionBuilder(
           fromPath,
           vars,
           version,
-          ResolvedPathValidator.archivePath(_, _, "archive source")
+          validatePath(_, _, "archive source")
         )
         val to = resolveTemplate(
           mapping.to,
           toPath,
           vars,
           version,
-          ResolvedPathValidator.archivePath(_, _, "archive target")
+          validatePath(_, _, "archive target")
         )
         ResolvedValue(
           ResolvedExtractMapping(from.value, to.value),
@@ -450,19 +510,12 @@ private[core] final class ResolutionBuilder(
       case (symlink, index) =>
         val pathPath   = s"$specPath.symlinks[$index].path"
         val targetPath = s"$specPath.symlinks[$index].target"
-        // A sudo symlink lands outside installDir by design, so the two privileges validate the
-        // link path against different rules.
-        val path = resolveTemplate(
+        val path       = resolveTemplate(
           symlink.path,
           pathPath,
           vars,
           version,
-          (resolved, at) =>
-            symlink.privilege match
-              case SymlinkPrivilege.User =>
-                ResolvedPathValidator.installRelativePath(resolved, at, "local symlink path")
-              case SymlinkPrivilege.Sudo =>
-                ResolvedPathValidator.externalPath(resolved, at, "sudo symlink path")
+          ResolvedPathValidator.symlinkPath(_, _, installDir, symlink.privilege)
         )
         val target = resolveTemplate(
           symlink.target,
@@ -471,10 +524,12 @@ private[core] final class ResolutionBuilder(
           version,
           ResolvedPathValidator.symlinkTarget(_, _, installDir)
         )
-        ResolvedValue(
-          ResolvedSymlink(path.value, target.value, symlink.privilege),
-          path.errors ++ target.errors
-        )
+        val resolved = ResolvedSymlink(path.value, target.value, symlink.privilege)
+        // Comparing the ends means anything only once each end resolved on its own.
+        val endErrors =
+          if path.errors.nonEmpty || target.errors.nonEmpty then Vector.empty
+          else ResolvedPathValidator.distinctSymlinkEnds(resolved, pathPath, installDir)
+        ResolvedValue(resolved, path.errors ++ target.errors ++ endErrors)
     ResolvedValue.sequence(resolved)
 
   private def resolveStringVector(
@@ -496,12 +551,13 @@ private[core] final class ResolutionBuilder(
     ResolvedValue.sequence(resolved)
 
   private def versionTemplateErrors(
-      value: String,
+      rawTemplate: String,
       path: String,
       version: ResolvedVersion
   ): Vector[ValidationError] = version match
-    case ResolvedVersion.Concrete(value, _) if value.nonEmpty => Vector.empty
-    case _ => TemplateInterpolator.variableNames(value).collect:
+    case ResolvedVersion.Concrete(resolved, _) if resolved.nonEmpty           => Vector.empty
+    case ResolvedVersion.Concrete(_, _) | ResolvedVersion.DynamicLatestUrl(_) =>
+      TemplateInterpolator.variableNames(rawTemplate).collect:
         case "version" => ValidationError(
             path,
             "template references ${version}, but no concrete version is available"
@@ -561,6 +617,9 @@ private[core] final class ResolutionBuilder(
   ): Either[Vector[ValidationError], Path] =
     val syntaxErrors = ResolvedPathValidator.pathSyntax(value, path, label)
     if syntaxErrors.nonEmpty then Left(syntaxErrors)
+    // No shell expands `~` here: it would become a directory literally named `~` under the cwd.
+    else if value == "~" || value.startsWith("~/") then
+      Left(Vector(ValidationError(path, s"$label must not start with '~'; use $${HOME}")))
     else
       Try(Path.of(value).toAbsolutePath.normalize()) match
         case Failure(error) =>
@@ -589,16 +648,18 @@ private[core] final class ResolutionBuilder(
 
   private def validateInstallDirectories(
       policy: ResolvedPolicy,
-      tools: Vector[ResolvedTool]
+      indexedTools: Vector[(ResolvedTool, Int)]
   ): Vector[ValidationError] =
     normalizedPath(policy.appsDir, "spec.policy.appsDir", "appsDir") match
       case Left(errors)   => errors
       case Right(appsDir) =>
-        tools.zipWithIndex.flatMap((tool, index) => containmentErrors(tool, index, appsDir)) ++
-          nestedInstallDirectoryErrors(tools)
+        indexedTools.flatMap((tool, index) => containmentErrors(tool, index, appsDir)) ++
+          nestedInstallDirectoryErrors(indexedTools)
 
-  private def nestedInstallDirectoryErrors(tools: Vector[ResolvedTool]): Vector[ValidationError] =
-    val indexed = tools.zipWithIndex.flatMap:
+  private def nestedInstallDirectoryErrors(
+      indexedTools: Vector[(ResolvedTool, Int)]
+  ): Vector[ValidationError] =
+    val indexed = indexedTools.flatMap:
       // Syntax failures are already reported by containmentErrors; only comparable paths matter.
       case (tool, index) => normalizedBarePath(tool.installDir).map: path =>
           (tool, index, path)
@@ -611,6 +672,53 @@ private[core] final class ResolutionBuilder(
               s"spec.plan[$index].spec.installDir",
               s"installDir must not be nested inside tool '${otherTool.name}' installDir"
             )
+
+  // Placed from the manifest alone, without a request: a pinned version stands as written, any
+  // other source takes the stand-in. A bystander whose installDir does not come out as a clean path
+  // is left out, because it is not part of this run and must not fail it.
+  private def bystanderInstallDirs(
+      bystanders: Vector[(PlanEntry, Int)],
+      baseVars: Map[String, String]
+  ): Vector[(ToolName, Path)] = bystanders.flatMap: (entry, index) =>
+    val path = s"spec.plan[$index].spec.installDir"
+    val vars = baseVars + ("version" -> offlineVersion(entry.spec.versionRef, baseVars)) +
+      ("tool" -> entry.name.value)
+    val installDir = interpolate(entry.spec.installDir, path, vars)
+    if installDir.errors.nonEmpty then None
+    else normalizedPath(installDir.value, path, "installDir").toOption.map(entry.name -> _)
+
+  private def offlineVersion(versionRef: String, vars: Map[String, String]): String =
+    profile.spec.versions.get(versionRef)
+      .collect:
+        case source @ VersionSource.Pinned(_) => resolveVersionSource(versionRef, source, vars)
+      .collect:
+        case ResolvedValue(ResolvedVersion.Concrete(value, _), errors) if errors.isEmpty => value
+      .getOrElse(unresolvedVersionStandIn)
+
+  // Only a selected tool can be installed by this run, so only a pair with one in it is reported,
+  // and at the selected tool's own path. Both directions destroy an install: the selected tool's
+  // replace step swaps out the whole directory it names, whatever lives inside it.
+  private def bystanderOverlapErrors(
+      indexedTools: Vector[(ResolvedTool, Int)],
+      bystanders: Vector[(ToolName, Path)]
+  ): Vector[ValidationError] =
+    for
+      (tool, index)           <- indexedTools
+      installDir              <- normalizedBarePath(tool.installDir).toVector
+      (name, otherInstallDir) <- bystanders
+      message                 <- overlapMessage(installDir, name, otherInstallDir)
+    yield ValidationError(s"spec.plan[$index].spec.installDir", message)
+
+  private def overlapMessage(
+      installDir: Path,
+      bystander: ToolName,
+      bystanderInstallDir: Path
+  ): Option[String] =
+    if installDir.startsWith(bystanderInstallDir) then
+      Some(s"installDir must not be nested inside tool '${bystander.value}' installDir")
+    else if bystanderInstallDir.startsWith(installDir) then
+      Some(s"installDir must not contain the installDir of tool '${bystander.value}'")
+    else None
 
   private def httpsUrlErrors(value: String, path: String): Vector[ValidationError] =
     RuntimeUrl.httpsUri(value) match

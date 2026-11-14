@@ -222,6 +222,46 @@ object VersionsAndLockTest extends TestSuite with CoreTestSupport:
       assert(!Files.exists(tempRoot.resolve("lock.state.json")))
       assert(!Files.exists(tempRoot.resolve("apps")))
 
+    test("lock --only replaces its tools' entries and keeps the rest of a compatible lock"):
+      val tempRoot = tempDirectory("core-lock-merge")
+      val config   = writeConfig(tempRoot, lockYaml(tempRoot))
+      val lockPath = tempRoot.resolve("binstaller.lock.json")
+      val existing = currentLockFile(config, Some(33L))
+      writeLock(
+        lockPath,
+        existing.copy(tools = existing.tools.map: tool =>
+          if tool.name.value == "alpha" then tool.copy(sizeBytes = Some(999L)) else tool)
+      )
+
+      val result = lockedApplyService(tempRoot, None).lock(
+        applyOptions(config).copy(selection = ToolSelection(Vector("alpha"), Vector.empty)),
+        LockOptions(lockPath.toString)
+      )
+      val lock  = read[LockFile](Files.readString(lockPath))
+      val sizes = lock.tools.map(tool => tool.name.value -> tool.sizeBytes)
+
+      assert(result.status == InstallerRunStatus.Succeeded)
+      assert(result.lines.contains("tools: 3"))
+      assert(result.lines.contains("kept from existing lock file: 2"))
+      assert(sizes == Vector("alpha" -> Some(11L), "beta" -> Some(22L), "gamma" -> Some(33L)))
+      assert(lock.manifestFingerprint == existing.manifestFingerprint)
+
+    test("lock --only over a lock for another manifest writes only this run's tools"):
+      val tempRoot = tempDirectory("core-lock-no-merge")
+      val config   = writeConfig(tempRoot, lockYaml(tempRoot))
+      val lockPath = tempRoot.resolve("binstaller.lock.json")
+      writeLock(lockPath, currentLockFile(config, Some(33L)).copy(manifestFingerprint = "other"))
+
+      val result = lockedApplyService(tempRoot, None).lock(
+        applyOptions(config).copy(selection = ToolSelection(Vector("alpha"), Vector.empty)),
+        LockOptions(lockPath.toString)
+      )
+      val lock = read[LockFile](Files.readString(lockPath))
+
+      assert(result.status == InstallerRunStatus.Succeeded)
+      assert(result.lines.contains("kept from existing lock file: 0"))
+      assert(lock.tools.map(_.name.value) == Vector("alpha"))
+
     test("lock building stops metadata requests after the first failure"):
       val tempRoot = tempDirectory("core-lock-short-circuit")
       val config   = writeConfig(tempRoot, lockYaml(tempRoot))
@@ -562,6 +602,41 @@ object VersionsAndLockTest extends TestSuite with CoreTestSupport:
       assert(result.lines.exists(_.contains("download provenance changed")))
       assert(!Files.exists(tempRoot.resolve("apps/beta")))
       assert(!Files.exists(tempRoot.resolve("lock.state.json")))
+
+    test("locked plan accepts a redirect target whose signed query changed"):
+      val tempRoot   = tempDirectory("core-locked-signed-url")
+      val config     = writeConfig(tempRoot, lockYaml(tempRoot))
+      val lockPath   = tempRoot.resolve("binstaller.lock.json")
+      val lockedBeta = currentLockFile(config, dynamicSize = Some(33L)).tools.map:
+        case tool if tool.name.value == "beta" =>
+          tool.copy(downloadProvenance = signedBetaDownloadProvenance("old"))
+        case tool => tool
+      writeLock(lockPath, currentLockFile(config, dynamicSize = Some(33L)).copy(tools = lockedBeta))
+      val delegate = lockMetadataClient(Some(33L))
+      val resigned = RecordingBinaryMetadataClient: url =>
+        delegate.metadata(url).map: metadata =>
+          if url == betaDownloadProvenance.initialUrl then
+            metadata.copy(provenance = signedBetaDownloadProvenance("new"))
+          else metadata
+      val service = BinaryInstallerService.resolving(
+        LockHttpTextClient("2.0.0", betaVersionProvenance),
+        DirectBinaryInstaller(
+          FakeBinaryDownloadClient.failure("locked plan must not download"),
+          InstallFileSystem.nio
+        ),
+        ApplyStateStore.nio(tempRoot),
+        resigned,
+        LockFileStore.nio
+      )
+
+      val result = service.plan(
+        applyOptions(config).copy(
+          lockPath = lockPath.toString,
+          lockedApply = LockedApplyMode.Enabled
+        )
+      )
+
+      assert(result.status == InstallerRunStatus.Succeeded)
 
     test("locked apply rejects missing dynamic lock data"):
       val tempRoot = tempDirectory("core-locked-dynamic-missing")

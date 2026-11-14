@@ -7,24 +7,32 @@ import mill.javalib.NativeImageModule
 import mill.scalalib.*
 
 object Versions:
-  val scala: String = "3.10.0"
+  val scala: String = "3.10.1"
 
 object Deps:
   val picocli: mill.javalib.Dep = mvn"info.picocli:picocli:4.7.7"
   val snakeYamlEngine: mill.javalib.Dep = mvn"org.snakeyaml:snakeyaml-engine:3.2"
-  val oxCore: mill.javalib.Dep = mvn"com.softwaremill.ox::core:1.0.9"
+  val oxCore: mill.javalib.Dep = mvn"com.softwaremill.ox::core:1.1.0"
   val upickle: mill.javalib.Dep = mvn"com.lihaoyi::upickle:4.4.3"
-  val osLib: mill.javalib.Dep = mvn"com.lihaoyi::os-lib:0.11.8"
+  val osLib: mill.javalib.Dep = mvn"com.lihaoyi::os-lib:0.11.10"
   val fansi: mill.javalib.Dep = mvn"com.lihaoyi::fansi:0.5.1"
   val xz: mill.javalib.Dep = mvn"org.tukaani:xz:1.12"
   val utest: mill.javalib.Dep = mvn"com.lihaoyi::utest:0.9.5"
   val sourcecode: mill.javalib.Dep = mvn"com.lihaoyi::sourcecode:0.4.4"
   val collectionCompat: mill.javalib.Dep = mvn"org.scala-lang.modules::scala-collection-compat:2.14.0"
+  val scala3Library: mill.javalib.Dep = mvn"org.scala-lang::scala3-library:${Versions.scala}"
 
 trait BinstallerModule extends ScalaModule:
   def depManagement: T[Seq[mill.javalib.Dep]] = Task {
-    // Align the transitive dependencies of os-lib, fansi, and utest with stable releases.
-    Seq(Deps.sourcecode, Deps.collectionCompat)
+    Seq(
+      // Align the transitive dependencies of os-lib, fansi, and utest with stable releases.
+      Deps.sourcecode,
+      Deps.collectionCompat,
+      // Since Scala 3.8 the runtime lives in scala-library and scala3-library_3 is an empty stub.
+      // Dependencies built with Scala 3.3 still ask for scala3-library_3:3.3.x; unmanaged, that
+      // puts a second, stale copy of scala.runtime on the classpath.
+      Deps.scala3Library
+    )
   }
 
   def scalaVersion: T[String] = Task {
@@ -73,6 +81,29 @@ object cli extends BinstallerModule:
     Seq(Deps.picocli, Deps.fansi)
   }
 
+  /** Version printed by `--version`. The release workflow sets BINSTALLER_VERSION. */
+  def buildVersion: T[String] = Task.Input {
+    Task.env.getOrElse("BINSTALLER_VERSION", "dev")
+  }
+
+  // Generated source, not a resource: a native image carries no resource or manifest unless it is
+  // registered, while a compiled constant needs no native-image configuration.
+  def generatedSources: T[Seq[PathRef]] = Task {
+    val version = buildVersion()
+    // The value is spliced into a Scala string literal, so reject anything that could end it.
+    if !version.matches("[0-9A-Za-z.+-]+") then Task.fail(s"Invalid BINSTALLER_VERSION: '$version'")
+    os.write(
+      Task.dest / "binstaller" / "cli" / "BuildInfo.scala",
+      s"""package binstaller.cli
+         |
+         |private[cli] object BuildInfo:
+         |  val version: String = "$version"
+         |""".stripMargin,
+      createFolders = true
+    )
+    super.generatedSources() ++ Seq(PathRef(Task.dest))
+  }
+
 object app extends BinstallerModule, NativeImageModule:
   def moduleDeps: Seq[JavaModule] = Seq(cli)
   def mainClass: T[Option[String]] = Task {
@@ -80,6 +111,19 @@ object app extends BinstallerModule, NativeImageModule:
   }
 
   def nativeImageOptions: T[Seq[String]] = Task {
-    // Keep --no-fallback for the older GraalVM release used on Intel macOS.
-    Seq("--no-fallback", "-O2", "--initialize-at-build-time=scala")
+    Seq(
+      // Keep --no-fallback for the older GraalVM release used on Intel macOS.
+      "--no-fallback",
+      "-O2",
+      "--initialize-at-build-time=scala",
+      // Oracle GraalVM otherwise targets x86-64-v3 / armv8.1-a, and the binary then refuses to start
+      // on older CPUs and on VMs that expose a baseline CPU model.
+      "-march=compatibility",
+      // Dependencies compiled with Scala 3.3-3.7 (fansi, upickle, ox, os-lib, geny) keep the old
+      // lazy val encoding, which reaches sun.misc.Unsafe through scala.runtime.LazyVals. JDK 24+
+      // warns on stderr at the first such call (JEP 498). sun.misc.Unsafe is initialized while the
+      // image is built, so this build-time property is the only place the setting can be chosen.
+      // Drop it once those dependencies ship builds compiled with Scala 3.8+.
+      "-Dsun.misc.unsafe.memory.access=allow"
+    )
   }

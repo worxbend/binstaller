@@ -156,7 +156,14 @@ tools continue.
 
 CLI selection uses `--only` and `--skip`. The selected names are converted to
 core `ToolSelection` before plan rendering, lock generation, or apply. Plan
-must not download, replace installs, create symlinks, or write state.
+must not replace installs, create symlinks, or write state. A plain `plan`
+downloads no artifact.
+
+`lock` and the `--locked` gate inspect every selected artifact: they download
+it once, hash it, and keep nothing on disk. The gate runs before any install
+and covers every selected tool, including one the state file would skip.
+`apply --locked` then downloads each artifact again for the install and
+verifies those bytes against the locked digest.
 
 CLI apply is confirmed by default. Running `apply` performs downloads, install
 replacement, symlinks, and state writes subject to manifest policy and selected

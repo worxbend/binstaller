@@ -42,6 +42,26 @@ spec:
 `metadata.name` participates in state compatibility. The ordered `plan` order is
 the default render and apply order.
 
+## YAML Dialect
+
+The loader reads one YAML 1.2 document with the Core schema:
+
+- `null`, `Null`, `NULL`, `~` and an empty value are null. A null value is not
+  the same as a missing key: `stateFile: ~` is rejected with
+  `value must be a string`.
+- `true` and `false`, also as `True`/`TRUE` and `False`/`FALSE`, are booleans.
+  `yes`, `no`, `on` and `off` are plain text.
+- An unquoted number is a number, and a number is rejected where text is
+  expected. Quote versions and modes: `"1.20"`, `"0755"`. Unquoted `0755` is
+  the number 755.
+
+Anchors and aliases are supported. Merge keys are not: `<<` is an ordinary
+key, so `<<: *defaults` merges nothing and fails validation as an unknown or
+wrong-typed field, and an explicit `!!merge` tag is a parse error. Duplicate keys and a second document in the
+same file are parse errors. A file larger than 8 MiB is rejected before it is
+parsed, and so is a document longer than 2,097,152 characters (code points) or
+a line longer than 65,536 characters.
+
 ## Policy
 
 - `mode`: optional policy profile. Defaults to `developer`. Supported values
@@ -53,9 +73,11 @@ the default render and apply order.
   `sudo: true` symlinks.
 - `allowDynamicLatestUrls`: in `strict` mode, set to `true` to permit
   `dynamic.latest-url` version sources and download URLs containing `/latest`.
-  Ignored in `developer` mode, where they are allowed already.
+  `developer` mode allows them by default; an explicit `false` rejects them in
+  either mode.
 - `allowMissingChecksums`: in `strict` mode, set to `true` to permit plan
-  entries with no `download.checksum`. Ignored in `developer` mode.
+  entries with no `download.checksum`. `developer` mode allows them by default;
+  an explicit `false` rejects them in either mode.
 - `stateFile`: optional current-directory filename used by apply resume.
 
 `spec.policy` accepts only these keys: `mode`, `continueOnError`, `appsDir`,
@@ -95,9 +117,19 @@ Interpolation supports literal `${name}` references. Shell forms such as
 Available variables include a fixed allowlist of non-secret runtime environment
 variables (`HOME`, `USER`, `LOGNAME`, `SHELL`, and the `XDG_*` base directories),
 manifest `spec.vars`, policy-derived `appsDir`, tool-local `version`,
-`installDir`, and `downloadPath`. Arbitrary process environment values are not
+`installDir`, and `tool`. Arbitrary process environment values are not
 exposed to interpolation, so a manifest cannot read secrets out of the
 environment into a resolved URL.
+
+Variable names use letters, digits, and `_`. A `${...}` that is still present
+after interpolation is an error, never literal text: that covers a name with
+other characters, such as `${linux-arch}`, and a `spec.vars` entry that
+references another entry whose own value is a template. A `spec.vars` entry may
+reference a runtime variable (`root: "${HOME}/opt"`), but a second entry cannot
+build on it (`apps: "${root}/apps"`).
+
+`appsDir` and `installDir` must not start with `~`; nothing expands it. Use
+`${HOME}`. A `sudo: true` symlink `path` must be absolute.
 
 Version sources:
 
@@ -126,6 +158,58 @@ versions:
   repository's latest release tag, and prints the newer version in the package
   summary table when an update is available.
 
+## Plan Entries
+
+Each `spec.plan` item accepts these keys:
+
+- `name` (required): the tool's identity. It is what `--only` and `--skip`
+  select, and it keys the rows of the state file and the lock file. It must not
+  be empty, `.` or `..`, must not start with `-`, and must not contain path
+  separators, control characters, whitespace or commas. `--only` and `--skip`
+  split their values on whitespace and commas and read a value that starts
+  with `-` as an option, so such a name could never be selected.
+- `kind` (required): `binary-tool`.
+- `description`: optional text.
+- `when`: optional host selector.
+- `spec` (required): `versionRef`, `installDir`, `download` and `executables`
+  are required. `createDirectories` and `symlinks` are optional.
+
+State and lock files are read with the same name rule. A file written while a
+tool had a space or a comma in its name, or a name starting with `-`, no
+longer loads: rename the tool, run `apply --reset-state`, and write the lock
+file again with `binstaller lock`.
+
+`when` limits an entry to matching hosts. An entry that does not match the host
+is left out of the plan. `--skip` accepts its name; `--only` reports it as
+excluded for this host.
+
+```yaml
+when:
+  os:
+    family: linux
+  architecture: amd64
+```
+
+- `os.family`: exactly one of `linux`, `darwin` (also `macos`, `mac`, `osx`)
+  or `windows`. Case and surrounding spaces are ignored. A value naming two
+  families, such as `linux, darwin`, or a longer name such as `Mac OS X`, is
+  rejected.
+- `architecture`: `amd64` (also `x86_64`, `x64`), `arm64` (also `aarch64`) or
+  `"386"` (also `x86`, `i386`, `i486`, `i586`, `i686`). Case is ignored. Quote
+  `"386"`; unquoted it is a number.
+
+Any other value is a validation error: it could match no host, and the tool
+would be missing from every plan.
+
+`createDirectories` lists directories, relative to `installDir`, that are
+created in the install before the downloaded files are placed:
+
+```yaml
+spec:
+  createDirectories:
+    - share/completions
+```
+
 ## Direct Binary
 
 A direct binary has no `archive` block. The downloaded bytes are written to the
@@ -148,12 +232,16 @@ plan:
           mode: "0755"
 ```
 
+`mode` applies to declared executables only. The install directory and the
+directories inside it get the mode a plain `mkdir` would give them, so the umask
+of the account running `apply` decides who else can use the tool.
+
 ## Archives
 
 Supported archive types are `zip`, `tar.gz`, and `tar.xz`.
 
 All three types use native, in-process extraction. Each archive member name is
-normalized and confined to private staging before any bytes are written, and
+normalized and confined to a staging directory before any bytes are written, and
 only declared mapped members are copied into the install directory. Extraction
 also enforces an aggregate expanded-byte budget to bound decompression bombs.
 
@@ -195,6 +283,11 @@ executables:
 Archive `from` paths identify archive members. `to` paths are relative install
 targets. Absolute paths, traversal, backslashes, control characters, duplicate
 sources, and duplicate targets are rejected.
+
+A directory mapping may use `.` on either side. `from: "."` is the archive root:
+it maps every member, which is how an archive with no top-level directory is
+installed whole. `to: "."` is the install directory. A file mapping names a file
+on both sides, so `.` as its `from` or `to` is a validation error.
 
 ## Checksums
 
@@ -266,6 +359,28 @@ binstaller apply --only yazi lazygit --skip lazygit
 names, and either flag may also be repeated; all values from every occurrence
 are combined. `--only` is applied first, `--skip` is applied second, and
 manifest order is preserved. Unknown names are selection errors.
+
+The whole manifest is still loaded and validated when it is read, so an
+error found at load time, such as an unknown `versionRef`, fails the run even
+for a deselected entry.
+
+Selection runs before resolution. A deselected entry is not resolved: its
+version source and checksum discovery are not fetched, and its resolution
+errors cannot fail the run. The strict-policy checks cover only the selected
+entries. Run `plan` without `--only` or `--skip` to resolve the whole manifest.
+
+Install directories are still compared. A deselected entry's `installDir` is
+worked out without a network request: `${version}` takes the pinned value
+when the version source is pinned, and a stand-in otherwise. A selected tool
+whose `installDir` equals, sits inside, or contains the `installDir` of a
+deselected tool fails the run, because installing it would replace the other
+tool. A deselected `installDir` that cannot be worked out is left out of the
+comparison, and an overlap between two deselected tools is not reported.
+
+Names are matched against every `spec.plan` entry, including entries that a
+`when` selector excludes on this host. `--skip` accepts such a name, so one
+command works on every platform. `--only` rejects it with
+`tool '<name>' is excluded for this host (<os>/<architecture>) by its when selector`.
 
 ## Unsupported Fields
 

@@ -19,9 +19,9 @@ private[core] object Sha256:
     while count != -1 do
       total += count
       if total > maxBytes then
-        return Left(s"download size $total exceeds max allowed $maxBytes bytes")
+        return Left(BinaryDownloadLimits.maxSizeMessage(total, maxBytes))
       messageDigest.update(buffer, 0, count)
       count = input.read(buffer)
     Right(Sha256Digest.trusted(hex(messageDigest.digest())) -> total)
 
-  private def hex(bytes: Array[Byte]): String = bytes.map(byte => f"${byte & 0xff}%02x").mkString
+  def hex(bytes: Array[Byte]): String = bytes.map(byte => f"${byte & 0xff}%02x").mkString

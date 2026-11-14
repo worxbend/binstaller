@@ -12,7 +12,7 @@ private[core] object StatefulApplyRunner:
       installer: DirectBinaryInstaller,
       stateStore: ApplyStateStore,
       eventContext: InstallerEventContext
-  ): InstallerResult = statePath(options, prepared.plan) match
+  ): InstallerResult = StatePathResolver.selected(options, prepared.plan) match
     case None => installer.installPlanWithObserver(
         prepared.plan,
         options.verboseOutput,
@@ -44,9 +44,6 @@ private[core] object StatefulApplyRunner:
             stateStore,
             eventContext
           )
-
-  private def statePath(options: InstallerOptions, plan: ResolvedPlan): Option[String] =
-    options.statePath.orElse(plan.policy.stateFile)
 
   private def loadInitialState(
       rawPath: String,
@@ -153,6 +150,9 @@ private[core] object StatefulApplyRunner:
     .exists: saved =>
       saved.status == ApplyStateToolStatus.Completed &&
         saved.installDir.contains(tool.installDir) &&
+        // The manifest fingerprint does not move when a version resolver starts returning a new
+        // release, but the resolved URL does. A row without a recorded download keeps skipping.
+        saved.download.forall(_.initialUrl == tool.download.url) &&
         tool.executables.forall(executable =>
           installedFileExists(tool, executable.path, fileSystem)
         ) &&
@@ -163,9 +163,7 @@ private[core] object StatefulApplyRunner:
       relative: String,
       fileSystem: InstallFileSystem
   ): Boolean =
-    val root     = Path.of(tool.installDir).toAbsolutePath.normalize()
-    val resolved = root.resolve(relative).normalize()
-    resolved.startsWith(root) && fileSystem.isRegularFile(resolved)
+    SafePaths.resolveInside(Path.of(tool.installDir), relative).exists(fileSystem.isRegularFile)
 
   private def installedSymlinkMatches(
       tool: ResolvedTool,
@@ -173,20 +171,20 @@ private[core] object StatefulApplyRunner:
       fileSystem: InstallFileSystem
   ): Boolean =
     val installRoot = Path.of(tool.installDir).toAbsolutePath.normalize()
-    val rawPath     = Path.of(symlink.path)
-    val path        =
-      if rawPath.isAbsolute then rawPath.normalize() else installRoot.resolve(rawPath).normalize()
-    val rawTarget = Path.of(symlink.target)
-    val expected  =
-      if rawTarget.isAbsolute then rawTarget.normalize()
-      else installRoot.resolve(rawTarget).normalize()
-    // A path that is not a symlink and one whose target cannot be read both yield None, which is
-    // the same "does not match" answer the explicit guard plus Try(...).getOrElse(false) gave.
-    fileSystem.symlinkTarget(path).exists: actualRaw =>
-      val actual =
-        if actualRaw.isAbsolute then actualRaw.normalize()
-        else Option(path.getParent).getOrElse(installRoot).resolve(actualRaw).normalize()
-      actual == expected
+    // A link that apply would refuse to create cannot be in place, so a `Left` never matches.
+    val expectedEnds =
+      for
+        path   <- SymlinkPaths.linkPath(installRoot, symlink.path, symlink.privilege)
+        target <- SymlinkPaths.target(installRoot, symlink.target)
+      yield path -> target
+    expectedEnds.exists: (path, expected) =>
+      // A path that is not a symlink and one whose target cannot be read both yield None, which is
+      // the same "does not match" answer the explicit guard plus Try(...).getOrElse(false) gave.
+      fileSystem.symlinkTarget(path).exists: actualRaw =>
+        val actual =
+          if actualRaw.isAbsolute then actualRaw.normalize()
+          else Option(path.getParent).getOrElse(installRoot).resolve(actualRaw).normalize()
+        actual == expected
 
   private def updateState(state: ApplyState, result: TerminalToolResult): ApplyState =
     val updatedTool = result match

@@ -10,7 +10,7 @@ launcher for everything.
 | Need | Version |
 |---|---|
 | JDK | 21+ |
-| GraalVM | 25.4; 25.0.1 on Intel macOS, **only** for building native images locally |
+| GraalVM | 25.5; 25.0.1 on Intel macOS, **only** for building native images locally |
 | Mill | Pinned by `.mill-version`; the `./mill` launcher fetches it |
 
 ---
@@ -85,9 +85,22 @@ Repair formatting:
 GRAALVM_HOME=/path/to/graalvm ./mill app.nativeImage
 ```
 
+Mill reads `GRAALVM_HOME` from the environment of its background daemon. If a daemon is already
+running without it, the build fails with `GRAALVM_HOME not defined`: run `./mill shutdown` first,
+or pass `--no-daemon`.
+
 Native options live in `build.mill`: `--no-fallback`, `-O2`,
-`--initialize-at-build-time=scala`. Picocli reflection configuration is generated as part of the
-build.
+`--initialize-at-build-time=scala`, `-march=compatibility` (the binary also starts on older CPUs
+and on VMs that expose a baseline CPU model), and `-Dsun.misc.unsafe.memory.access=allow`. The
+last one
+silences the JDK 24+ `sun.misc.Unsafe` warning that dependencies compiled with Scala 3.3-3.7
+trigger through `scala.runtime.LazyVals`; remove it once those dependencies are built with
+Scala 3.8+. Picocli reflection configuration is checked in at
+`app/resources/META-INF/native-image/binstaller/binstaller/reflect-config.json`, and `MainTest`
+fails when a command class is missing from it.
+
+`binstaller --version` prints the `BINSTALLER_VERSION` environment variable as it was when the
+`cli` module was compiled, or `dev` when it is unset. The release workflow sets it from the tag.
 
 ---
 
@@ -98,9 +111,9 @@ and text fetches are injected:
 
 - A fake `HttpTextClient` returns pinned resolver values for `http-text` versions, and routes
   GitHub latest-release metadata used by `versions`.
-- A fake `BinaryDownloadClient` returns bytes or a typed `BinaryDownloadError`.
-- Progress tests override `download(url, observer)` and emit started / advanced / finished events
-  before returning bytes.
+- A fake `BinaryDownloadClient` returns a temporary-file artifact or a typed `BinaryDownloadError`.
+- Progress tests implement `downloadArtifactWithProvenance(url, observer)` and emit started /
+  advanced / finished events before returning the artifact.
 
 Tests receive the repository root through `-Dbinstaller.repoRoot`, set by the build, so fixtures
 can locate checked-in files such as `config.example.yaml`.
@@ -115,8 +128,8 @@ When adding behaviour, prefer a test at the lowest module that owns the rule —
 `core` emits renderer-agnostic events; the CLI is one consumer among possible others.
 
 ```text
-ResolvingStarted · PlanReady · ToolStarted · ToolPhaseChanged · DownloadProgress
-LogLine · ToolResult · ToolSkipped · Summary
+ResolvingStarted · PlanReady · StateLoading · ToolStarted · ToolPhaseChanged
+DownloadProgress · LogLine · ToolResult · ToolSkipped · Summary
 ```
 
 Phases: `Resolving`, `Planning`, `LoadingState`, `Downloading`, `VerifyingChecksum`, `Staging`,
@@ -131,15 +144,18 @@ in the same change.
 ## 🚢 Releasing
 
 Releases are GraalVM native binaries built by `.github/workflows/release.yml`, triggered by a
-`v*` tag or a manual `workflow_dispatch` with a tag input.
+`v*` tag or a manual `workflow_dispatch` with a tag input. Prerelease versions such as
+`v1.0.0-rc.1` are rejected, and a manual run for an existing tag fails unless the tag points at the
+dispatched commit.
 
 Per target (`linux-amd64`, `linux-arm64`, `macos-amd64`, `macos-arm64`) the workflow:
 
-1. Checks out and sets up GraalVM 25.4 with `native-image` (25.0.1 for Intel macOS)
+1. Checks out and sets up GraalVM 25.5 with `native-image` (25.0.1 for Intel macOS)
 2. Runs `./mill __.test`
-3. Builds `./mill app.nativeImage`
+3. Builds `./mill app.nativeImage` with `BINSTALLER_VERSION` set to the release version
 4. Packages `binstaller-<version>-<target>.tar.gz`
-5. Smokes native `--help`, `plan` and `versions`
+5. Smokes native `--help`, `--version`, `plan`, `versions`, `apply` and `lock`, and fails if help
+   writes to stderr. `apply` and `lock` use a temporary manifest and need no network
 6. Writes a per-file `.sha256`
 
 The publish job then re-verifies checksums, signs every artifact with keyless Sigstore

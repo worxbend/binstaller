@@ -75,13 +75,17 @@ private[core] object NetworkTargetGuard:
     host.nonEmpty && host.forall(character => character.isDigit || character == '.')
 
   /** Shared by the static literal path, the pre-request check, and the JVM-wide resolver guard. */
-  private[core] def isBlockedAddress(address: InetAddress): Boolean = address.isAnyLocalAddress ||
+  private[core] def isBlockedAddress(resolved: InetAddress): Boolean =
+    // A resolver can hand back an AAAA answer as an Inet6Address that embeds an IPv4 target
+    // (::ffff:a.b.c.d). Rebuilding from the raw bytes yields the Inet4Address the kernel will
+    // actually connect to, so the IPv4 predicates below see it.
+    val address = InetAddress.getByAddress(resolved.getAddress)
+    address.isAnyLocalAddress ||
     address.isLoopbackAddress || address.isLinkLocalAddress ||
     address.isSiteLocalAddress || address.isMulticastAddress ||
     isUniqueLocalIpv6(address) || isCarrierGradeNat(address) || isUnspecifiedIpv4Block(address)
 
-  // IPv6 unique-local fc00::/7 (first byte 1111 110x). InetAddress unmaps ::ffff:v4 to Inet4Address,
-  // so IPv4-mapped forms fall through to the IPv4 predicates above.
+  // IPv6 unique-local fc00::/7 (first byte 1111 110x).
   private def isUniqueLocalIpv6(address: InetAddress): Boolean = address match
     case v6: Inet6Address => (v6.getAddress()(0) & 0xfe) == 0xfc
     case _                => false
@@ -110,8 +114,10 @@ object RelativeInstallPath:
     case Left(violation) => Left(violation.message)
     case Right(())       => Try(Path.of(value)).toEither
         .left.map(error => s"is invalid: ${Diagnostics.describe(error)}")
-        .flatMap:
-          case path if path.isAbsolute                                => Left("must be relative")
-          case path if path.toString == "." && !allowCurrentDirectory =>
+        .flatMap: path =>
+          val normalized = path.normalize()
+          if path.isAbsolute then Left("must be relative")
+          // "." and every longer spelling of it, such as "./.", normalize to the empty path.
+          else if normalized.toString.isEmpty && !allowCurrentDirectory then
             Left("must not be current directory")
-          case path => Right(RelativeInstallPath(value, path.normalize()))
+          else Right(RelativeInstallPath(value, normalized))

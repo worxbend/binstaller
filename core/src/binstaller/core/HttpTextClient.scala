@@ -31,7 +31,10 @@ trait HttpTextClient:
 
 /** HTTP text client constructors. */
 object HttpTextClient:
-  /** JDK HTTP implementation with HTTPS, timeout, and normal redirect handling. */
+  /**
+   * JDK HTTP implementation with HTTPS and a timeout. The JDK client never follows a redirect on
+   * its own: every hop goes through the guarded loop in `RuntimeHttpClient`.
+   */
   def jdk: HttpTextClient = JdkHttpTextClient(RuntimeHttpClient.create())
 
 private[core] final class JdkHttpTextClient(

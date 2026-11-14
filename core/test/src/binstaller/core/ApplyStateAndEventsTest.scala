@@ -12,6 +12,14 @@ import upickle.default.write
 /** Apply-state persistence and resume, and the renderer-agnostic event contract. */
 object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
 
+  /** The two-tool profile with a local symlink on alpha, for resume checks on symlinks. */
+  private def symlinkedToolYaml(tempRoot: Path, stateFile: String): String =
+    twoToolYaml(tempRoot, stateFile).replace(
+      "          - path: bin/alpha\n",
+      "          - path: bin/alpha\n        symlinks:\n          - path: bin/a\n" +
+        "            target: bin/alpha\n"
+    )
+
   val tests: Tests = Tests:
     test("installer event context measures elapsed time from injected monotonic clock"):
       var now     = 1_000L
@@ -96,6 +104,23 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
       assert(resetResult.status == InstallerRunStatus.Succeeded)
       assert(loadState(tempRoot, "mismatch.state.json").profileName == "resume-profile")
 
+    test("plan refuses a --state path that apply refuses, with the same message"):
+      val tempRoot = tempDirectory("core-state-plan-path")
+      val config   = writeConfig(tempRoot, twoToolYaml(tempRoot, "plan.state.json"))
+      val service  = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
+      val options  = applyOptions(config).copy(statePath = Some("/tmp/elsewhere/x.state.json"))
+
+      val planResult  = service.plan(options)
+      val applyResult = service.apply(options)
+
+      assert(planResult.status == InstallerRunStatus.Failed)
+      assert(planResult.lines == Vector(
+        "state path '/tmp/elsewhere/x.state.json' is invalid: absolute state paths are not allowed"
+      ))
+      assert(applyResult.status == InstallerRunStatus.Failed)
+      assert(applyResult.lines == planResult.lines)
+      assert(!Files.exists(tempRoot.resolve("apps")))
+
     test("state schema version is validated before resume"):
       val tempRoot  = tempDirectory("core-state-schema")
       val stateFile = "schema.state.json"
@@ -130,6 +155,62 @@ object ApplyStateAndEventsTest extends TestSuite with CoreTestSupport:
       assert(result.status == InstallerRunStatus.Succeeded)
       assert(result.lines.exists(_.contains("installed alpha")))
       assert(Files.isRegularFile(alpha))
+
+    test("a completed tool is skipped while its symlink still points at the installed target"):
+      val tempRoot = tempDirectory("core-state-symlink-kept")
+      val config   = writeConfig(tempRoot, symlinkedToolYaml(tempRoot, "symlink.state.json"))
+      val service  = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
+      assert(service.apply(applyOptions(config)).status == InstallerRunStatus.Succeeded)
+
+      val result = service.apply(applyOptions(config))
+
+      assert(result.lines.contains("skipped alpha: already completed in state"))
+
+    test("completed state is retried when an installed symlink points elsewhere"):
+      val tempRoot = tempDirectory("core-state-symlink-drift")
+      val config   = writeConfig(tempRoot, symlinkedToolYaml(tempRoot, "symlink.state.json"))
+      val service  = statefulService(tempRoot, RoutingBinaryDownloadClient.success)
+      assert(service.apply(applyOptions(config)).status == InstallerRunStatus.Succeeded)
+      val link = tempRoot.resolve("apps/alpha/bin/a")
+      Files.delete(link)
+      Files.createSymbolicLink(link, tempRoot.resolve("apps/beta/bin/beta"))
+
+      val result = service.apply(applyOptions(config))
+
+      assert(result.lines.exists(_.contains("installed alpha")))
+      assert(Files.readSymbolicLink(link) == tempRoot.resolve("apps/alpha/bin/alpha"))
+
+    test("a completed tool is reinstalled when its resolved download URL changes"):
+      val tempRoot = tempDirectory("core-state-resolver-drift")
+      val appsDir  = tempRoot.resolve("apps")
+      val config   = writeConfig(
+        tempRoot,
+        kubectlResolverYaml.replace(
+          "appsDir: \"${HOME}/.apps\"",
+          s"appsDir: \"$appsDir\"\n    stateFile: drift.state.json"
+        )
+      )
+      val downloads = RoutingBinaryDownloadClient(Map(
+        "https://dl.k8s.io/release/v1.33.0/bin/linux/amd64/kubectl" ->
+          Right("old".getBytes(StandardCharsets.UTF_8)),
+        "https://dl.k8s.io/release/v1.34.0/bin/linux/amd64/kubectl" ->
+          Right("new".getBytes(StandardCharsets.UTF_8))
+      ))
+      def serviceResolving(version: String): BinaryInstallerService =
+        BinaryInstallerService.resolving(
+          FakeHttpTextClient(version),
+          DirectBinaryInstaller(downloads, InstallFileSystem.nio),
+          ApplyStateStore.nio(tempRoot)
+        )
+      assert(
+        serviceResolving("v1.33.0").apply(applyOptions(config)).status ==
+          InstallerRunStatus.Succeeded
+      )
+
+      val result = serviceResolving("v1.34.0").apply(applyOptions(config))
+
+      assert(result.lines.exists(_.contains("installed kubectl")))
+      assert(Files.readString(appsDir.resolve("kubectl/bin/kubectl")) == "new")
 
     test("state paths must be cwd-local filenames"):
       val tempRoot = tempDirectory("core-state-path")

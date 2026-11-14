@@ -16,7 +16,7 @@ private[cli] object CliVersionsOutput:
 
   def colorLines(
       result: InstallerResult,
-      outputStyle: CliOutputStyle = CliOutputStyle.Ansi
+      outputStyle: CliOutputStyle
   ): Vector[String] =
     if !outputStyle.supportsAnsi then result.lines
     else

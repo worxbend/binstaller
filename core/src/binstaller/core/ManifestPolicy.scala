@@ -21,14 +21,15 @@ private[core] object ManifestPolicy:
 
 private[core] object StrictPolicyValidator:
 
+  /** `indexedTools` pairs each tool with its `spec.plan` index, which the error paths name. */
   def validate(
       profile: BinaryDistributionProfile,
       policy: ResolvedPolicy,
-      tools: Vector[ResolvedTool],
+      indexedTools: Vector[(ResolvedTool, Int)],
       activeVersionRefs: Set[String]
   ): Vector[ValidationError] = dynamicLatestUrlErrors(profile, policy, activeVersionRefs) ++
-    latestDownloadUrlErrors(policy, tools) ++
-    missingChecksumErrors(policy, tools)
+    latestDownloadUrlErrors(policy, indexedTools) ++
+    missingChecksumErrors(policy, indexedTools)
 
   private def dynamicLatestUrlErrors(
       profile: BinaryDistributionProfile,
@@ -36,23 +37,30 @@ private[core] object StrictPolicyValidator:
       activeVersionRefs: Set[String]
   ): Vector[ValidationError] = policy.allowDynamicLatestUrls match
     case PolicyAllowance.Allowed  => Vector.empty
-    case PolicyAllowance.Rejected => profile.spec.versions.toVector.collect:
+    case PolicyAllowance.Rejected =>
+      // A rejection has two causes: the strict default, or an explicit `false`, which also
+      // applies in developer mode. Naming the wrong one sends the user to the wrong setting.
+      val rejectedBy =
+        if profile.spec.policy.allowDynamicLatestUrls.isDefined then
+          "spec.policy.allowDynamicLatestUrls: false"
+        else s"policy.mode=${policy.mode.value}"
+      profile.spec.versions.toVector.collect:
         case (name, VersionSource.Dynamic(DynamicVersionKind.LatestUrl, _))
             if activeVersionRefs(name) =>
           strictError(
             s"spec.versions.$name.dynamic.type",
             "dynamic-latest-url",
-            "dynamic latest-url version sources are rejected by policy.mode=strict",
+            s"dynamic latest-url version sources are rejected by $rejectedBy",
             s"pin spec.versions.$name, use a resolver with locked provenance, or set " +
               "spec.policy.allowDynamicLatestUrls: true"
           )
 
   private def latestDownloadUrlErrors(
       policy: ResolvedPolicy,
-      tools: Vector[ResolvedTool]
+      indexedTools: Vector[(ResolvedTool, Int)]
   ): Vector[ValidationError] = policy.allowDynamicLatestUrls match
     case PolicyAllowance.Allowed  => Vector.empty
-    case PolicyAllowance.Rejected => tools.zipWithIndex.collect:
+    case PolicyAllowance.Rejected => indexedTools.collect:
         case (tool, index) if usesLatestEndpoint(tool.download.url) =>
           strictError(
             s"spec.plan[$index].spec.download.url",
@@ -64,10 +72,10 @@ private[core] object StrictPolicyValidator:
 
   private def missingChecksumErrors(
       policy: ResolvedPolicy,
-      tools: Vector[ResolvedTool]
+      indexedTools: Vector[(ResolvedTool, Int)]
   ): Vector[ValidationError] = policy.allowMissingChecksums match
     case PolicyAllowance.Allowed  => Vector.empty
-    case PolicyAllowance.Rejected => tools.zipWithIndex.collect:
+    case PolicyAllowance.Rejected => indexedTools.collect:
         case (tool, index) if tool.download.checksum.isEmpty =>
           strictError(
             s"spec.plan[$index].spec.download.checksum",

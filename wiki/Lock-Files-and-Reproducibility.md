@@ -20,10 +20,20 @@ wrote lock file: /path/to/binstaller.lock.json
 profile: demo
 manifest fingerprint: 93554ed0c1409e233aeeb2bc3ea68cbd0310469c92d32cbdd780aa7271e55452
 tools: 2
+kept from existing lock file: 0
 checksums: configured 2, discovered 0, inspected 0, missing 0
 ```
 
-That last line is the one to read in CI. `missing 0` is the goal.
+When the output file already holds a lock for the same profile and the same manifest fingerprint,
+`lock` merges into it. Entries for the tools this run locked are replaced; entries for every other
+tool are kept as they were. `lock --only helm` then refreshes helm's pins without dropping the
+rest, and `lock` on a second host keeps the tools that host's `when` selectors leave out. Entries
+are written in manifest order. `kept from existing lock file` says how many entries came from the
+old file. A lock file for another profile or manifest, or one that does not load, is replaced.
+
+The `checksums` line is the one to read in CI. `inspected 0` is the goal. An inspected digest is one
+`lock` observed by itself, because the manifest pins none and no discovery source published one.
+`missing` is always 0 in a file that `lock` wrote, so it is not a signal.
 
 ---
 
@@ -62,12 +72,14 @@ That last line is the one to read in CI. `missing 0` is the goal.
 |---|---|
 | `manifestFingerprint` | Ties the lock to the exact manifest content it was generated from. |
 | `downloadProvenance.redirects` | Records every hop, so a changed CDN path is visible in review. |
-| `sizeBytes` | Cross-checked against upstream metadata at locked-apply time. |
-| `checksum.source` | Provenance of the digest itself: `"configured"` (pinned in the manifest), `"inspected"` (observed while writing the lock), or a `discovered` object carrying the discovery `url`, `file` and its own `provenance`. Absent when no checksum is known. |
+| `sizeBytes` | Cross-checked against the size of the artifact the gate downloads at locked-apply time. |
+| `checksum.source` | Provenance of the digest itself: `"configured"` (pinned in the manifest), `"inspected"` (observed while writing the lock), or a `discovered` object carrying the discovery `url`, `file` and its own `provenance`. |
 | `dynamicSource` | Marks tools whose version is intentionally resolved by a latest-URL. |
 
 > ⚠️ `finalUrl` values for GitHub release assets contain **signed, expiring** query parameters.
-> They are recorded as provenance, not as a fetch target you should reuse by hand.
+> They are recorded as provenance, not as a fetch target you should reuse by hand. The lock gate
+> ignores the query string and fragment of every redirect target when it compares provenance, so a
+> fresh signature is not drift; the host, the path and the SHA-256 digest still have to match.
 
 ---
 
@@ -78,7 +90,9 @@ binstaller apply --locked --lock-file binstaller.lock.json
 binstaller plan  --locked          # same gate, without installing
 ```
 
-The gate refuses the run — **before anything downloads** — when any of these is true:
+The gate refuses the run — **before anything is installed** — when any of these is true. To compare
+digests it downloads each selected artifact once and hashes it; `apply` then fetches the artifact
+again for the install. The gate covers every selected tool, including one a state file would skip.
 
 | Check | Refusal message |
 |---|---|
@@ -91,6 +105,12 @@ The gate refuses the run — **before anything downloads** — when any of these
 | Digest absent from lock | `tool 'X' has no locked sha256 digest; regenerate the lock file` |
 | Version drifted | `tool 'X' version changed: lock has 'A', resolved 'B'` |
 | Provenance incomplete | `tool 'X' has incomplete download provenance` |
+| Manifest checksum differs from lock | `tool 'X' checksum changed: lock has sha256 A, manifest has sha256 B` |
+| Download URL drifted | `tool 'X' download URL changed: lock has 'A', resolved 'B'` |
+| Artifact unreachable | `tool 'X' download metadata could not be verified for <url>: <reason>` |
+| Redirect chain drifted | `tool 'X' download provenance changed: lock final URL 'A', current final URL 'B'` |
+| Size drifted | `tool 'X' size changed: lock has N bytes, current is M bytes` |
+| Content drifted | `tool 'X' sha256 changed: lock has A, current GET has B` |
 
 All refusals are rendered as `locked apply refused by <lock path>: <reason>`.
 
@@ -121,8 +141,8 @@ same commit, visible in the same diff.
   run: binstaller plan --locked --lock-file binstaller.lock.json
 ```
 
-`plan --locked` runs the entire gate without installing anything — a cheap drift alarm on a
-schedule.
+`plan --locked` runs the entire gate without installing anything — a drift alarm on a schedule.
+It downloads every selected artifact to hash it, so budget the bandwidth for that.
 
 ---
 
@@ -131,7 +151,7 @@ schedule.
 - 🧱 Pair lock files with `policy.mode: strict` so unpinned versions can't get in to begin with.
 - 📌 Prefer pinned `versions:` entries over `dynamic.latest-url` — a dynamic source can only ever
   be locked as "this was dynamic", not as a specific artifact.
-- 🔐 Give every tool a checksum (configured or discovered). A tool with no digest is refused under
-  `--locked` anyway.
+- 🔐 Give every tool a checksum (configured or discovered). Without one, `lock` records the digest
+  it observed (`inspected`): that pins the bytes it saw, but nobody vouched for them.
 - 🆙 Run `binstaller versions` on a schedule to see upstream drift, then bump and re-lock
   deliberately.

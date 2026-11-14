@@ -111,7 +111,7 @@ binstaller plan
 
 - the resolved destination directory
 - the resolved version, and whether it is concrete or dynamic
-- the exact download URL and the file it lands in
+- the exact download URL
 - the checksum status — configured, discovered, or **missing**
 - the archive type and every extract mapping
 - every executable that will be verified
@@ -132,7 +132,7 @@ binstaller apply
 ```
 
 Per tool, apply resolves, downloads (with a live progress bar per concurrent download), verifies
-the checksum, stages into a private directory, applies modes, replaces the previous install,
+the checksum, stages into a temporary directory, applies modes, replaces the previous install,
 verifies executables, creates symlinks, and saves state.
 
 The run finishes with a summary:

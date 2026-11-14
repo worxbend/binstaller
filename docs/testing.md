@@ -78,9 +78,15 @@ Core and CLI tests avoid live downloads by injecting `BinaryDownloadClient` and
   emit started, advanced, and finished events before returning the artifact.
 - Routing clients map URLs to bytes so multi-tool apply tests can prove
   continue-on-error and state behavior.
+- Redirect tests hand `RoutingHttpClient` one canned response per URL. Like the
+  production transport it never follows a redirect itself, so the real follow
+  loop runs: per-hop host guard, hop recording, and hop body close.
+- Stale-artifact tests build `DownloadArtifactFiles` over a temp directory with
+  a fixed clock and a recording exit registration. No test waits for a process
+  exit.
 
-Prefer these injected boundaries over local HTTP servers unless redirect or
-timeout behavior is the behavior under test.
+Prefer these injected boundaries over local HTTP servers. Redirect and timeout
+behavior are tested through them too.
 
 ## Fake Archive Patterns
 
@@ -135,5 +141,5 @@ GRAALVM_HOME=/path/to/graalvm ./mill app.nativeImage
 ```
 
 If `native-image` is missing, record the blocker and the `java -version`
-details. The release workflow uses GraalVM 25.4 (25.0.1 for Intel macOS) and
+details. The release workflow uses GraalVM 25.5 (25.0.1 for Intel macOS) and
 runs `./mill app.nativeImage` on Ubuntu 24.04 and macOS 15.

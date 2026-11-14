@@ -4,35 +4,34 @@ import binstaller.config.YamlDecode.*
 
 private[config] object ManifestDecoder:
 
-  def decode(value: Any): DecodeResult[BinaryDistributionProfile] = DecodeResult.accumulate: acc =>
-    val root = acc(asMap(value, "$"))
-    acc.report(unknownKeyErrors(root, "$", Set("apiVersion", "kind", "metadata", "spec")))
-    val apiVersion = acc(enumValue(
-      requiredString(root, "apiVersion", "apiVersion"),
-      "apiVersion",
-      ApiVersion.values.toVector,
-      ApiVersion.V1Alpha1,
-      _.value
-    ))
-    val kind = acc(enumValue(
-      requiredString(root, "kind", "kind"),
-      "kind",
-      ManifestKind.values.toVector,
-      ManifestKind.BinaryDistributionProfile,
-      _.value
-    ))
-    val metadata = acc(decodeMetadata(requiredMap(root, "metadata", "metadata")))
-    val spec     = acc(decodeSpec(requiredMap(root, "spec", "spec")))
-    BinaryDistributionProfile(
-      apiVersion = apiVersion,
-      kind = kind,
-      metadata = metadata,
-      spec = spec
-    )
+  def decode(value: Any): DecodeResult[BinaryDistributionProfile] =
+    DecodeResult.accumulateFrom(asMap(value, "$")): (root, acc) =>
+      acc.report(unknownKeyErrors(root, "$", Set("apiVersion", "kind", "metadata", "spec")))
+      val apiVersion = acc(enumValue(
+        requiredString(root, "apiVersion", "apiVersion"),
+        "apiVersion",
+        ApiVersion.values.toVector,
+        ApiVersion.V1Alpha1,
+        _.value
+      ))
+      val kind = acc(enumValue(
+        requiredString(root, "kind", "kind"),
+        "kind",
+        ManifestKind.values.toVector,
+        ManifestKind.BinaryDistributionProfile,
+        _.value
+      ))
+      val metadata = acc(decodeMetadata(requiredMap(root, "metadata", "metadata")))
+      val spec     = acc(decodeSpec(requiredMap(root, "spec", "spec")))
+      BinaryDistributionProfile(
+        apiVersion = apiVersion,
+        kind = kind,
+        metadata = metadata,
+        spec = spec
+      )
 
   private def decodeMetadata(input: DecodeResult[YamlMap]): DecodeResult[ManifestMetadata] =
-    DecodeResult.accumulate: acc =>
-      val map = acc(input)
+    DecodeResult.accumulateFrom(input): (map, acc) =>
       acc.report(unknownKeyErrors(map, "metadata", Set("name", "labels", "annotations")))
       val name        = acc(requiredString(map, "name", "metadata.name"))
       val labels      = acc(optionalStringMap(map, "labels", "metadata.labels"))
@@ -40,8 +39,7 @@ private[config] object ManifestDecoder:
       ManifestMetadata(name, labels, annotations)
 
   private def decodeSpec(input: DecodeResult[YamlMap]): DecodeResult[ProfileSpec] =
-    DecodeResult.accumulate: acc =>
-      val map = acc(input)
+    DecodeResult.accumulateFrom(input): (map, acc) =>
       acc.report(unknownKeyErrors(map, "spec", Set("policy", "vars", "versions", "plan")))
       val policy   = acc(decodePolicy(requiredMap(map, "policy", "spec.policy")))
       val vars     = acc(optionalStringMap(map, "vars", "spec.vars"))
@@ -50,8 +48,7 @@ private[config] object ManifestDecoder:
       ProfileSpec(policy, vars, versions, plan)
 
   private def decodePolicy(input: DecodeResult[YamlMap]): DecodeResult[InstallPolicy] =
-    DecodeResult.accumulate: acc =>
-      val map = acc(input)
+    DecodeResult.accumulateFrom(input): (map, acc) =>
       acc.report(unknownKeyErrors(
         map,
         "spec.policy",
@@ -105,8 +102,7 @@ private[config] object ManifestDecoder:
       )
 
   private def decodeVersions(input: DecodeResult[YamlMap])
-      : DecodeResult[Map[String, VersionSource]] = DecodeResult.accumulate: acc =>
-    val map     = acc(input)
+      : DecodeResult[Map[String, VersionSource]] = DecodeResult.accumulateFrom(input): (map, acc) =>
     val entries = map.toVector.map:
       case (name, source) => name -> acc(decodeVersionSource(source, s"spec.versions.$name"))
     entries.toMap
@@ -143,8 +139,7 @@ private[config] object ManifestDecoder:
   private def decodeDynamicVersion(
       input: DecodeResult[YamlMap],
       path: String
-  ): DecodeResult[VersionSource] = DecodeResult.accumulate: acc =>
-    val map = acc(input)
+  ): DecodeResult[VersionSource] = DecodeResult.accumulateFrom(input): (map, acc) =>
     acc.report(unknownKeyErrors(map, path, Set("type", "note")))
     val kind = acc(enumValue(
       requiredString(map, "type", s"$path.type"),
@@ -159,8 +154,7 @@ private[config] object ManifestDecoder:
   private def decodeVersionResolver(
       input: DecodeResult[YamlMap],
       path: String
-  ): DecodeResult[VersionSource] = DecodeResult.accumulate: acc =>
-    val map = acc(input)
+  ): DecodeResult[VersionSource] = DecodeResult.accumulateFrom(input): (map, acc) =>
     acc.report(unknownKeyErrors(map, path, Set("type", "url")))
     val kind = acc(enumValue(
       requiredString(map, "type", s"$path.type"),
@@ -173,16 +167,14 @@ private[config] object ManifestDecoder:
     VersionSource.Resolver(kind, url)
 
   private def decodePlan(input: DecodeResult[Vector[Any]]): DecodeResult[Vector[PlanEntry]] =
-    DecodeResult.accumulate: acc =>
-      val list = acc(input)
+    DecodeResult.accumulateFrom(input): (list, acc) =>
       list.zipWithIndex.map:
         case (value, index) =>
           acc(decodePlanEntry(asMap(value, ManifestPath.planEntry(index)), index))
 
   private def decodePlanEntry(input: DecodeResult[YamlMap], index: Int): DecodeResult[PlanEntry] =
     val path = ManifestPath.planEntry(index)
-    DecodeResult.accumulate: acc =>
-      val map = acc(input)
+    DecodeResult.accumulateFrom(input): (map, acc) =>
       acc.report(unknownKeyErrors(map, path, Set("name", "kind", "description", "when", "spec")))
       val name = acc(requiredToolName(map, "name", ManifestPath.planEntryName(index)))
       val kind = acc(enumValue(
@@ -218,8 +210,7 @@ private[config] object ManifestDecoder:
       entryPath: String
   ): DecodeResult[BinaryToolSpec] =
     val path = s"$entryPath.spec"
-    DecodeResult.accumulate: acc =>
-      val map = acc(input)
+    DecodeResult.accumulateFrom(input): (map, acc) =>
       acc.report(unknownKeyErrors(
         map,
         path,
@@ -256,8 +247,7 @@ private[config] object ManifestDecoder:
       specPath: String
   ): DecodeResult[DownloadSpec] =
     val path = s"$specPath.download"
-    DecodeResult.accumulate: acc =>
-      val map = acc(input)
+    DecodeResult.accumulateFrom(input): (map, acc) =>
       acc.report(unknownKeyErrors(map, path, Set("url", "filename", "checksum", "archive")))
       val url      = acc(requiredString(map, "url", s"$path.url"))
       val filename = acc(requiredString(map, "filename", s"$path.filename"))
@@ -268,8 +258,7 @@ private[config] object ManifestDecoder:
   private def optionalChecksum(map: YamlMap, path: String): DecodeResult[Option[ChecksumSpec]] =
     map.get("checksum") match
       case None        => DecodeResult.valid(None)
-      case Some(value) => DecodeResult.accumulate: acc =>
-          val checksumMap = acc(asMap(value, path))
+      case Some(value) => DecodeResult.accumulateFrom(asMap(value, path)): (checksumMap, acc) =>
           acc.report(unknownKeyErrors(checksumMap, path, Set("algorithm", "value", "discover")))
           val algorithm = acc(enumValue(
             requiredString(checksumMap, "algorithm", s"$path.algorithm"),
@@ -280,9 +269,10 @@ private[config] object ManifestDecoder:
           ))
           val rawChecksum = acc(optionalString(checksumMap, "value", s"$path.value"))
           val discover    = acc(optionalChecksumDiscovery(checksumMap, s"$path.discover"))
-          // The raw Option decides the "value or discover" shape rules; parsing happens after, so a
-          // malformed digest is reported as a bad digest rather than as a missing one.
-          acc.report(checksumShapeErrors(path, rawChecksum, discover))
+          // Which keys the user wrote decides the "value or discover" shape rules, not what they
+          // decoded to: a value of the wrong type or a malformed digest is a bad value, never a
+          // missing one.
+          acc.report(checksumShapeErrors(path, checksumMap))
           parseLiteralChecksum(path, rawChecksum, acc) match
             case Some(digest) => Some(ChecksumSpec(algorithm, digest))
             case None         => discover.map(ChecksumSpec.discovery(algorithm, _))
@@ -317,15 +307,13 @@ private[config] object ManifestDecoder:
       val file = acc(optionalString(sourceMap, "file", s"$path.file"))
       ChecksumDiscoverySpec(kind, url, file)
 
-  private def checksumShapeErrors(
-      path: String,
-      value: Option[String],
-      discover: Option[ChecksumDiscoverySpec]
-  ): Vector[ValidationError] = (value, discover) match
-    case (Some(_), Some(_)) =>
-      Vector(ValidationError(path, "checksum must declare either value or discover, not both"))
-    case (None, None) => Vector(ValidationError(path, "checksum must declare value or discover"))
-    case _            => Vector.empty
+  private def checksumShapeErrors(path: String, checksumMap: YamlMap): Vector[ValidationError] =
+    (checksumMap.contains("value"), checksumMap.contains("discover")) match
+      case (true, true) =>
+        Vector(ValidationError(path, "checksum must declare either value or discover, not both"))
+      case (false, false) =>
+        Vector(ValidationError(path, "checksum must declare value or discover"))
+      case _ => Vector.empty
 
   private def optionalArchive(map: YamlMap, path: String): DecodeResult[Option[ArchiveSpec]] =
     optionalBlock(map, "archive", path, Set("type", "extract")): (archiveMap, acc) =>
@@ -343,8 +331,7 @@ private[config] object ManifestDecoder:
   private def decodeArchiveExtract(
       input: DecodeResult[YamlMap],
       archivePath: String
-  ): DecodeResult[ArchiveExtract] = DecodeResult.accumulate: acc =>
-    val map = acc(input)
+  ): DecodeResult[ArchiveExtract] = DecodeResult.accumulateFrom(input): (map, acc) =>
     acc.report(unknownKeyErrors(map, s"$archivePath.extract", Set("files", "directories")))
     val files = acc(decodeExtractMappings(
       optionalList(map, "files", s"$archivePath.extract.files"),
@@ -403,7 +390,9 @@ private[config] object ManifestDecoder:
       case Some(value: String) => ExecutableMode.fromString(value) match
           case Right(mode)   => DecodeResult.valid(Some(mode))
           case Left(message) => DecodeResult.invalid(None, path, message)
-      case Some(_) => DecodeResult.invalid(None, path, "mode must be a string")
+      // Unquoted `0755` is the number 755 in YAML, so the leading zero is already gone here.
+      case Some(_) =>
+        DecodeResult.invalid(None, path, "mode must be a quoted string, e.g. \"0755\"")
 
   private def optionalPolicyOverride(
       map: YamlMap,
@@ -430,8 +419,7 @@ private[config] object ManifestDecoder:
       allowed: Set[String]
   )(decode: (YamlMap, DecodeResult.Accumulator) => A): DecodeResult[Option[A]] = map.get(key) match
     case None        => DecodeResult.valid(None)
-    case Some(value) => DecodeResult.accumulate: acc =>
-        val blockMap = acc(asMap(value, path))
+    case Some(value) => DecodeResult.accumulateFrom(asMap(value, path)): (blockMap, acc) =>
         acc.report(unknownKeyErrors(blockMap, path, allowed))
         Some(decode(blockMap, acc))
 
@@ -448,14 +436,14 @@ private[config] object ManifestDecoder:
       path: String,
       allowed: Set[String]
   )(decodeItem: (YamlMap, String, DecodeResult.Accumulator) => A): DecodeResult[Vector[A]] =
-    DecodeResult.accumulate: acc =>
-      val list = acc(input)
+    DecodeResult.accumulateFrom(input): (list, acc) =>
       list.zipWithIndex.map:
         case (value, index) =>
           val itemPath = s"$path[$index]"
-          val item     = acc(asMap(value, itemPath))
-          acc.report(unknownKeyErrors(item, itemPath, allowed))
-          decodeItem(item, itemPath, acc)
+          val decoded  = DecodeResult.accumulateFrom(asMap(value, itemPath)): (item, itemAcc) =>
+            itemAcc.report(unknownKeyErrors(item, itemPath, allowed))
+            decodeItem(item, itemPath, itemAcc)
+          acc(decoded)
 
   /**
    * Decode a tool name, rejecting an unsafe one here rather than downstream.
@@ -472,10 +460,15 @@ private[config] object ManifestDecoder:
         case Right(name)   => DecodeResult.valid(name)
         case Left(message) => DecodeResult.invalid(ToolName.invalidSentinel, path, message)
 
+  private val unknownFieldPrefix = "unknown field "
+
+  /** Whether `error` reports a key the schema does not have, rather than a failed value. */
+  def isUnknownField(error: ValidationError): Boolean = error.message.startsWith(unknownFieldPrefix)
+
   private def unknownKeyErrors(
       map: YamlMap,
       path: String,
       allowed: Set[String]
   ): Vector[ValidationError] = map.keySet.diff(allowed).toVector.sorted.map: key =>
     val fieldPath = if path == "$" then key else s"$path.$key"
-    ValidationError(fieldPath, s"unknown field '$key'")
+    ValidationError(fieldPath, s"$unknownFieldPrefix'$key'")

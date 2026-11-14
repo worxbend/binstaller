@@ -614,7 +614,7 @@ binstaller versions</pre>
           <li><span class="m">🚫</span><span><b>Installer scripts are rejected</b> — no shell syntax, no inherited environment, no surprise sudo.</span></li>
           <li><span class="m">🔤</span><span><b>Only safe variables interpolate</b> — <code>HOME</code>, <code>USER</code>, <code>SHELL</code>, <code>XDG_*</code>. A manifest can't smuggle a secret into a URL.</span></li>
           <li><span class="m">🧭</span><span><b>Selection is explicit</b> — <code>--only</code> is applied first, then <code>--skip</code>, always in manifest order. Both take comma- or space-separated lists and can be repeated.</span></li>
-          <li><span class="m">🧱</span><span><b>Strict mode</b> rejects dynamic latest URLs, missing checksums, sudo symlinks and tar.xz fallback extraction.</span></li>
+          <li><span class="m">🧱</span><span><b>Strict mode</b> rejects dynamic latest URLs, missing checksums and sudo symlinks.</span></li>
           <li><span class="m">🧾</span><span><b>Duplicates and dangling refs</b> fail at load time, not halfway through an install.</span></li>
         </ul>
         <div class="btn-row">

@@ -37,3 +37,14 @@ private[config] object DecodeResult:
     val accumulator = new Accumulator()
     val value       = build(accumulator)
     DecodeResult(value, accumulator.collectedErrorsInOrder)
+
+  /**
+   * Build a value from a decoded parent block, reporting only the parent's errors when it failed.
+   *
+   * A failed parent hands over an empty placeholder so that decoding stays total. The builder still
+   * runs on it to produce a value, but every error it finds there is about a field the user never
+   * wrote, and a list of those buries the one error that is real.
+   */
+  def accumulateFrom[A, B](parent: DecodeResult[A])(build: (A, Accumulator) => B): DecodeResult[B] =
+    val built = accumulate(accumulator => build(parent.value, accumulator))
+    if parent.errors.isEmpty then built else DecodeResult(built.value, parent.errors)

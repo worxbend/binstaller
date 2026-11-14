@@ -91,12 +91,15 @@ object BinaryDownloadLimits:
     bodyTimeout = Duration.ofMinutes(30)
   )
 
+  // One wording for an oversized body, so lock inspection and the installer cannot drift apart.
+  private[core] def maxSizeMessage(actualBytes: Long, maxBytes: Long): String =
+    s"download size $actualBytes exceeds max allowed $maxBytes bytes"
+
 private[core] final class JdkBinaryDownloadClient(
     client: HttpClient,
     limits: BinaryDownloadLimits = BinaryDownloadLimits.default,
     hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved(_),
-    createTemporaryFile: () => Path = () =>
-      Files.createTempFile("binstaller-download-", ".artifact")
+    val artifactFiles: DownloadArtifactFiles = DownloadArtifactFiles.systemTemp
 ) extends BinaryDownloadClient:
 
   /** Read a downloaded artifact fully into memory. Test-facing: the install pipeline streams. */
@@ -116,22 +119,12 @@ private[core] final class JdkBinaryDownloadClient(
   override def downloadArtifactWithProvenance(
       url: String,
       progressObserver: BinaryDownloadProgressObserver
-  ): Either[BinaryDownloadError, BinaryDownloadArtifact] = RuntimeUrl.httpsUri(url) match
-    case Left(message) => Left(BinaryDownloadError(url, message))
-    case Right(_)      => Try(RuntimeHttpClient.getInputStream(client, url, hostGuard)) match
-        case Success(Right(result))
-            if result.response.statusCode() >= 200 &&
-              result.response.statusCode() < 300 =>
-          readBodyToFile(result.provenance, result.response, progressObserver)
-        case Success(Right(result)) =>
-          RuntimeHttpBody.closeAfterFailure(result.response.body())
-          Left(BinaryDownloadError(
-            url,
-            s"HTTP ${result.response.statusCode()}",
-            Some(result.provenance)
-          ))
-        case Success(Left(message)) => Left(BinaryDownloadError(url, message))
-        case Failure(error)         => Left(BinaryDownloadError(url, Diagnostics.describe(error)))
+  ): Either[BinaryDownloadError, BinaryDownloadArtifact] = RuntimeHttpClient.withSuccessfulStream(
+    client,
+    url,
+    hostGuard,
+    (message, provenance) => BinaryDownloadError(url, message, provenance)
+  )(result => readBodyToFile(result.provenance, result.response, progressObserver))
 
   private def readBodyToFile(
       provenance: UrlProvenance,
@@ -153,7 +146,7 @@ private[core] final class JdkBinaryDownloadClient(
       val result = Try:
         RuntimeHttpBody.readWithDeadline(response.body(), limits.bodyTimeout, timeoutError):
           input =>
-            val tempPath = createTemporaryFile()
+            val tempPath = artifactFiles.create()
             temporaryPath = Some(tempPath)
             writeBodyToTemporaryFile(tempPath, provenance, input, totalBytes, progressObserver)
       match
@@ -207,7 +200,7 @@ private[core] object BoundedBinaryBodyReader:
       nowNanos: () => Long = () => System.nanoTime()
   ): Either[BinaryDownloadError, (Sha256Digest, Long)] = totalBytes match
     case Some(length) if length > limits.maxBytes =>
-      Left(BinaryDownloadError(url, maxSizeMessage(length, limits.maxBytes)))
+      Left(BinaryDownloadError(url, BinaryDownloadLimits.maxSizeMessage(length, limits.maxBytes)))
     case _ => (Try:
         val deadline = nowNanos() + limits.bodyTimeout.toNanos
         val digest   = MessageDigest.getInstance("SHA-256")
@@ -219,14 +212,16 @@ private[core] object BoundedBinaryBodyReader:
           rejectAfterDeadline(nowNanos(), deadline, limits.bodyTimeout)
           total += count
           if total > limits.maxBytes then
-            throw IllegalArgumentException(maxSizeMessage(total, limits.maxBytes))
+            throw IllegalArgumentException(
+              BinaryDownloadLimits.maxSizeMessage(total, limits.maxBytes)
+            )
           output.write(buffer, 0, count)
           digest.update(buffer, 0, count)
           progressObserver.onProgress(BinaryDownloadProgress.Advanced(url, total, totalBytes))
           count = input.read(buffer)
         rejectAfterDeadline(nowNanos(), deadline, limits.bodyTimeout)
         progressObserver.onProgress(BinaryDownloadProgress.Finished(url, total, totalBytes))
-        Sha256Digest.trusted(digest.digest().map(byte => f"${byte & 0xff}%02x").mkString) -> total
+        Sha256Digest.trusted(Sha256.hex(digest.digest())) -> total
       ) match
         case Success(result) => Right(result)
         case Failure(error)  => Left(BinaryDownloadError(url, Diagnostics.describe(error)))
@@ -234,6 +229,3 @@ private[core] object BoundedBinaryBodyReader:
   private def rejectAfterDeadline(now: Long, deadline: Long, timeout: Duration): Unit =
     if now > deadline then
       throw IllegalArgumentException(s"download body timed out after ${timeout.toSeconds}s")
-
-  private def maxSizeMessage(actual: Long, maxBytes: Long): String =
-    s"download size $actual exceeds max allowed $maxBytes bytes"

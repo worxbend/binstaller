@@ -11,6 +11,17 @@ import java.nio.file.Path
 /** Symlink creation, sudo credential handling, and redaction of sensitive values. */
 object SudoAndRedactionTest extends TestSuite with CoreTestSupport:
 
+  /** Run only the symlink step, under a policy that allows sudo symlinks. */
+  private def createSymlinks(
+      tool: ResolvedTool,
+      commandExecutor: CommandExecutor
+  ): Either[ToolInstallError, Unit] = SymlinkInstaller.create(
+    ResolvedPolicy.restricted(tool.installDir).copy(allowSudoSymlinks = PolicyOverride.Enabled),
+    tool,
+    commandExecutor,
+    SudoCredentialProvider.unavailable
+  )
+
   val tests: Tests = Tests:
     test("sudo password requests stay serialized after parallel downloads"):
       val tempRoot = tempDirectory("core-parallel-sudo")
@@ -132,6 +143,50 @@ object SudoAndRedactionTest extends TestSuite with CoreTestSupport:
       assert(Files.isSymbolicLink(installDir.resolve("bin/a")))
       assert(Files.readSymbolicLink(installDir.resolve("bin/a")) ==
         installDir.toAbsolutePath.normalize().resolve("bin/alpha"))
+
+    test("apply refuses a local symlink path that is not relative to installDir"):
+      val installDir = Path.of("/nonexistent/apps/alpha")
+      val tool       = directTool(
+        installDir,
+        symlinks = Vector(ResolvedSymlink("/nonexistent/bin/a", "bin/alpha", SymlinkPrivilege.User))
+      )
+
+      val result = createSymlinks(tool, RecordingCommandExecutor())
+
+      assert(result == Left(ToolInstallError.StagingFailed(toolName("alpha"), "must be relative")))
+
+    test("apply refuses a symlink target outside installDir"):
+      val installDir = Path.of("/nonexistent/apps/alpha")
+      val tool       = directTool(
+        installDir,
+        symlinks = Vector(ResolvedSymlink("bin/a", "/nonexistent/other", SymlinkPrivilege.User))
+      )
+
+      val result = createSymlinks(tool, RecordingCommandExecutor())
+
+      assert(result == Left(ToolInstallError.SymlinkFailed(
+        toolName("alpha"),
+        "bin/a",
+        "/nonexistent/other",
+        "symlink target must resolve inside installDir"
+      )))
+
+    test("apply refuses a relative sudo symlink path before running sudo"):
+      val commandExecutor = RecordingCommandExecutor()
+      val tool            = directTool(
+        Path.of("/nonexistent/apps/alpha"),
+        symlinks = Vector(ResolvedSymlink("bin/alpha-link", "bin/alpha", SymlinkPrivilege.Sudo))
+      )
+
+      val result = createSymlinks(tool, commandExecutor)
+
+      assert(result == Left(ToolInstallError.SymlinkFailed(
+        toolName("alpha"),
+        "bin/alpha-link",
+        "bin/alpha",
+        "sudo symlink path must be absolute"
+      )))
+      assert(commandExecutor.commands.isEmpty)
 
     test("sudo symlink apply requires policy before writes"):
       val tempRoot        = tempDirectory("core-sudo-gate")

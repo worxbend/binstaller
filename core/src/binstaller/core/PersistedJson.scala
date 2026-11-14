@@ -30,7 +30,8 @@ private[core] object PersistedJson:
         // The file can be deleted between the existence check and the read; that is still "absent".
         case Failure(_: NoSuchFileException) => Right(None)
         case Failure(DecodeFailure(message)) => Left(PersistedJsonReadError.DecodeFailed(message))
-        case Failure(error) => Left(PersistedJsonReadError.ReadFailed(Diagnostics.describe(error)))
+        case Failure(error)                  =>
+          Left(PersistedJsonReadError.ReadFailed(Diagnostics.describeReadFailure(error)))
 
   def writeAtomically(
       path: Path,

@@ -31,13 +31,13 @@ private[core] final case class ArchiveExtractionLimits(
 
 private[core] object ArchiveExtractor:
   // Bytes actually written to disk (the extracted output).
-  private[core] val maxExtractedBytes: Long = 1024L * 1024L * 1024L
+  private val maxExtractedBytes: Long = 1024L * 1024L * 1024L
 
   // Bytes inflated from the compressed stream, whether written or merely skipped over to reach the
   // next entry. This is the decompression-bomb guard and is deliberately larger than the extracted
   // limit so a legitimate archive whose *written* output is small but whose unused members total
   // more than 1 GiB still extracts — while a bomb (which inflates at >100x) is still rejected.
-  private[core] val maxInflatedBytes: Long = 4L * 1024L * 1024L * 1024L
+  private val maxInflatedBytes: Long = 4L * 1024L * 1024L * 1024L
 
   // Backstops that bound work independently of the byte budgets so a pathological archive cannot
   // stall extraction with millions of tiny members or an unbounded inflation loop. The time budget
@@ -45,6 +45,10 @@ private[core] object ArchiveExtractor:
   // stalls and must not trip on a large legitimate archive extracted on a slow machine.
   private[core] val maxEntries: Int            = 65536
   private val extractionTimeBudgetMillis: Long = 300_000L
+
+  // The decoder allocates the dictionary size the block header declares before it reads any data,
+  // so a tiny archive can ask for gigabytes. `xz -9` needs about 65 MiB to decode.
+  private val xzDecoderMemoryLimitKiB: Int = 256 * 1024
 
   private val defaultLimits = ArchiveExtractionLimits(
     maxExtractedBytes,
@@ -59,14 +63,6 @@ private[core] object ArchiveExtractor:
   // The time budget is sampled inside the streaming loops too, so one pathological member cannot
   // blow the budget between entry boundaries. 1024 chunks of copyBufferBytes is 8 MiB.
   private val deadlineCheckIntervalChunks: Int = 1024
-
-  private[core] def validateExtractedSize(bytes: Long): Either[String, Unit] =
-    if bytes >= 0 && bytes <= maxExtractedBytes then Right(())
-    else Left(s"archive exceeds extracted byte limit of $maxExtractedBytes bytes")
-
-  private[core] def validateInflatedSize(bytes: Long): Either[String, Unit] =
-    if bytes >= 0 && bytes <= maxInflatedBytes then Right(())
-    else Left(s"archive exceeds inflated byte limit of $maxInflatedBytes bytes")
 
   private enum ArchiveKind:
     case Zip, Tar
@@ -101,7 +97,7 @@ private[core] object ArchiveExtractor:
         archive,
         stagingDir,
         ArchiveKind.Tar,
-        () => XZInputStream(Files.newInputStream(artifact)),
+        () => XZInputStream(Files.newInputStream(artifact), xzDecoderMemoryLimitKiB),
         limits
       )
 
@@ -162,7 +158,10 @@ private[core] object ArchiveExtractor:
             copyBounded(content, targets.head, entry.size, run)
             duplicateTo(targets.head, targets.tail, run.budget)
 
-  private final case class DirPrefix(prefix: String, toRoot: String, origin: String)
+  private final case class DirPrefix(source: String, toRoot: String, origin: String):
+    // Member names are normalized without "." segments, so none starts with "./". The archive root
+    // therefore covers every member through the empty prefix.
+    val prefix: String = if source == "." then "" else s"$source/"
 
   private final case class CopyPlan(
       fileTargets: Map[String, Path],
@@ -182,10 +181,8 @@ private[core] object ArchiveExtractor:
         yield (source, mapping.from, target))
       directories <- collectEither(archive.directories.map: mapping =>
         normalizedArchivePath(mapping.from).map: source =>
-          DirPrefix(s"$source/", mapping.to, mapping.from))
-      _ <- rejectDuplicateSources(
-        files.map((source, _, _) => source) ++ directories.map(_.prefix.stripSuffix("/"))
-      )
+          DirPrefix(source, mapping.to, mapping.from))
+      _ <- rejectDuplicateSources(files.map((source, _, _) => source) ++ directories.map(_.source))
     yield
       val fileTargets = files.map((source, _, target) => source -> target).toMap
       val fileOrigins = files.map((source, origin, _) => source -> origin).toMap
@@ -376,7 +373,7 @@ private[core] object ArchiveExtractor:
       try java.lang.Long.parseLong(value.trim)
       catch case _: NumberFormatException => throw malformedPaxRecord
     if size < 0 then throw IllegalArgumentException("tar entry declares a negative size")
-    validateInflatedSize(size).left.foreach: message =>
+    validateInflatedSize(size, maxInflatedBytes).left.foreach: message =>
       throw IllegalArgumentException(message)
     size
 
@@ -438,7 +435,7 @@ private[core] object ArchiveExtractor:
     // A declared size bounds how many bytes must be inflated to advance past this member (whether
     // or not it is extracted), so it is checked against the inflated ceiling; the tighter extracted
     // ceiling is enforced at copy time for members actually written.
-    validateInflatedSize(size).left.foreach: message =>
+    validateInflatedSize(size, maxInflatedBytes).left.foreach: message =>
       throw IllegalArgumentException(message)
     size
 

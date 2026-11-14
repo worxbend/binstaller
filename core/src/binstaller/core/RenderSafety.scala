@@ -83,7 +83,8 @@ object RenderSafety:
     else "<redacted>"
 
   private def scrubControls(value: String): String = value.map:
-    case '\n'                                => '\n'
-    case '\t'                                => ' '
-    case ch if ch < ' ' || ch == 0x7f.toChar => '?'
-    case ch                                  => ch
+    case '\n' => '\n'
+    case '\t' => ' '
+    // C0, DEL and C1: a terminal reads U+009B as a control sequence introducer, same as ESC [.
+    case ch if Character.isISOControl(ch) => '?'
+    case ch                               => ch

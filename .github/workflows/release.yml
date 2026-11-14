@@ -33,17 +33,17 @@ jobs:
         include:
           - target: linux-amd64
             runner: ubuntu-24.04
-            graalvm-version: "25.4"
+            graalvm-version: "25.5"
           - target: linux-arm64
             runner: ubuntu-24.04-arm
-            graalvm-version: "25.4"
+            graalvm-version: "25.5"
           - target: macos-amd64
             runner: macos-15-intel
             # GraalVM 25.0.1 is the last available macOS amd64 release.
             graalvm-java-version: "25.0.1"
           - target: macos-arm64
             runner: macos-15
-            graalvm-version: "25.4"
+            graalvm-version: "25.5"
 
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -71,19 +71,42 @@ jobs:
           version: ${{ inputs.version }}
           label: "🏷️ Building release {version} for ${{ matrix.target }}"
 
+      - name: 🔎 Verify existing tag points at this commit
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          # A release for an existing tag stays at the tag's commit whatever target is passed when
+          # publishing, so binaries built from another commit would ship under a tag they do not match.
+          tag_sha="$(bash .github/scripts/tag-commit.sh "${RELEASE_VERSION}")"
+          if [[ -z "${tag_sha}" ]]; then
+            echo "✅ Tag ${RELEASE_VERSION} does not exist yet"
+            exit 0
+          fi
+          if [[ "${tag_sha}" != "${GITHUB_SHA}" ]]; then
+            echo "❌ Tag ${RELEASE_VERSION} points at ${tag_sha}, but this run builds ${GITHUB_SHA}" >&2
+            echo "Re-run the release run of the tag push to build the tagged commit, or publish a new patch tag." >&2
+            exit 1
+          fi
+          echo "✅ Tag ${RELEASE_VERSION} points at ${GITHUB_SHA}"
+
       - name: ⚡ Cache Mill and dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/coursier
+            ~/Library/Caches/Coursier
             ~/.cache/mill
             ~/.ivy2/cache
-          key: ${{ runner.os }}-${{ runner.arch }}-mill-${{ hashFiles('build.mill', 'mill', '.mill-version') }}
+          # Separate from the Checks workflow cache on purpose: a build that is signed and published
+          # must not restore dependencies saved by a Checks run.
+          key: release-${{ runner.os }}-${{ runner.arch }}-mill-${{ hashFiles('build.mill', 'mill', '.mill-version') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-mill-
+            release-${{ runner.os }}-${{ runner.arch }}-mill-
 
       - name: ☕ Set up GraalVM
-        uses: graalvm/setup-graalvm@27b360dbb857524eaf0b4c4cef364d38e5b4f173 # v1.6.7
+        uses: graalvm/setup-graalvm@f70bc8032f90a104502824a54bcb94b6f01715bc # v1.6.8
         with:
           distribution: graalvm
           version: ${{ matrix.graalvm-version }}
@@ -109,6 +132,9 @@ jobs:
       - name: 🔥 Build GraalVM native CLI image
         id: native-image
         shell: bash
+        env:
+          # Baked into the binary as the `--version` output.
+          BINSTALLER_VERSION: ${{ steps.version.outputs.number }}
         run: |
           echo "::group::🔥 GraalVM native CLI image"
           echo "🔥 Building CLI app with Mill target app.nativeImage"
@@ -143,10 +169,73 @@ jobs:
           echo "::group::🧪 Native CLI smoke test"
           "${package_root}/binstaller" --help >/tmp/binstaller-help.txt
           echo "✅ Native CLI starts and renders help"
+          reported_version="$("${package_root}/binstaller" --version)"
+          if [[ "${reported_version}" != "binstaller ${version#v}" ]]; then
+            echo "❌ Native CLI reports '${reported_version}', expected 'binstaller ${version#v}'" >&2
+            exit 1
+          fi
+          echo "✅ Native CLI reports ${reported_version}"
+          # Forced color initializes the dependency lazy vals that reach sun.misc.Unsafe. TERM is set
+          # because TERM=dumb or NO_COLOR would win over FORCE_COLOR and skip that code path.
+          env -u NO_COLOR TERM=xterm FORCE_COLOR=1 "${package_root}/binstaller" --help \
+            >/dev/null 2>/tmp/binstaller-help-stderr.txt
+          if [[ -s /tmp/binstaller-help-stderr.txt ]]; then
+            echo "❌ Native CLI help writes to stderr:" >&2
+            cat /tmp/binstaller-help-stderr.txt >&2
+            exit 1
+          fi
+          echo "✅ Native CLI help prints no JDK warnings"
           "${package_root}/binstaller" plan --config config.example.yaml >/tmp/binstaller-plan.txt
           echo "✅ Native CLI runs plan"
           "${package_root}/binstaller" versions --config config.example.yaml >/tmp/binstaller-versions.txt
           echo "✅ Native CLI runs versions"
+          # apply and lock run without the network: the only tool of a temporary manifest is skipped,
+          # so nothing is downloaded, and every file stays under the runner temp directory.
+          native_cli="${PWD}/${package_root}/binstaller"
+          smoke_dir="${RUNNER_TEMP}/binstaller-smoke"
+          mkdir -p "${smoke_dir}"
+          cat > "${smoke_dir}/smoke.yaml" <<MANIFEST
+          apiVersion: binstaller.io/v1alpha1
+          kind: BinaryDistributionProfile
+          metadata:
+            name: release-smoke
+          spec:
+            policy:
+              appsDir: "${smoke_dir}/apps"
+            versions:
+              smoke: "1.0.0"
+            plan:
+              - name: smoke
+                kind: binary-tool
+                spec:
+                  versionRef: smoke
+                  installDir: "${smoke_dir}/apps/smoke"
+                  download:
+                    url: https://example.invalid/smoke
+                    filename: smoke
+                  executables:
+                    - path: bin/smoke
+          MANIFEST
+          (
+            cd "${smoke_dir}" || exit 1
+            "${native_cli}" apply --config smoke.yaml --skip smoke --parallelism 1 >apply.txt
+            echo "✅ Native CLI runs apply"
+            # The same command with a bad value must fail as a usage error, which shows the option
+            # value reaches its validation.
+            usage_status=0
+            "${native_cli}" apply --config smoke.yaml --skip smoke --parallelism 0 || usage_status=$?
+            if [[ "${usage_status}" != 2 ]]; then
+              echo "❌ Native CLI apply --parallelism 0 exits with ${usage_status}, expected usage error 2" >&2
+              exit 1
+            fi
+            echo "✅ Native CLI apply rejects --parallelism 0"
+            "${native_cli}" lock --config smoke.yaml --skip smoke --lock-file binstaller.lock.json >lock.txt
+            if [[ ! -s binstaller.lock.json ]]; then
+              echo "❌ Native CLI lock wrote no lock file" >&2
+              exit 1
+            fi
+            echo "✅ Native CLI runs lock"
+          )
           echo "::endgroup::"
 
           tar -C dist -czf "${archive}" "binstaller-${version}-${target}"
@@ -259,9 +348,9 @@ jobs:
           echo "::endgroup::"
 
       - name: 🔏 Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with:
-          cosign-release: "v3.1.3"
+          cosign-release: "v3.1.4"
 
       - name: 🔏 Sign release artifacts with GitHub OIDC
         shell: bash
@@ -291,6 +380,13 @@ jobs:
               exit 1
             fi
           else
+            # The tag can appear after the build job looked for it. gh leaves an existing tag where
+            # it is, so creating the release now would publish these binaries under another commit.
+            tag_sha="$(bash .github/scripts/tag-commit.sh "${version}")"
+            if [[ -n "${tag_sha}" && "${tag_sha}" != "${GITHUB_SHA}" ]]; then
+              echo "❌ Tag ${version} points at ${tag_sha}, but these artifacts were built from ${GITHUB_SHA}" >&2
+              exit 1
+            fi
             echo "🚀 Creating release ${version}"
             gh release create "${version}" release-artifacts/* \
               --target "${GITHUB_SHA}" \
@@ -306,6 +402,7 @@ jobs:
       contents: read
       actions: read
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     environment: release
     needs:
       - release

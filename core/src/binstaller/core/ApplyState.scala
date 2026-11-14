@@ -127,6 +127,10 @@ object ApplyStateStore:
 
 private[core] object StatePathResolver:
 
+  /** The state file a run uses: `--state` when given, else the profile's `stateFile`. */
+  def selected(options: InstallerOptions, plan: ResolvedPlan): Option[String] =
+    options.statePath.orElse(plan.policy.stateFile)
+
   def resolve(rawPath: String, cwd: Path): Either[ApplyStateError.InvalidPath, Path] =
     if rawPath.trim.isEmpty then invalid(rawPath, "state filename must not be empty")
     else

@@ -37,20 +37,15 @@ private[core] object RuntimeHttpClient:
     RuntimeHttpBody.closeAfterFailure(response.body())
     Left(message)
 
-  def getInputStream(
-      client: HttpClient,
-      initialUrl: String,
-      // Injectable so tests can drive the redirect/status logic against a stubbed transport without
-      // live DNS. Production uses the fail-closed resolved check as defense-in-depth.
-      hostGuard: String => Either[String, Unit] = NetworkTargetGuard.validateResolved(_)
-  ): Either[String, RuntimeHttpResponse] = RuntimeUrl.httpsUri(initialUrl).flatMap: initialUri =>
-    follow(client, initialUrl, hostGuard, initialUri, Vector.empty, maxRedirects)
-
   /**
-   * The shared GET pipeline for small-response clients: https check, redirects, 2xx guard, then
-   * hand the still-open response to `read`, which owns reading and closing the body and reporting
-   * its own failures. Non-2xx bodies are closed here; `error` builds the caller's domain error from
-   * a message and the provenance observed so far, if any.
+   * The one GET pipeline every client shares: https check, redirects, 2xx guard, then hand the
+   * still-open response to `read`, which owns reading and closing the body and reporting its own
+   * failures. Non-2xx bodies are closed here; `error` builds the caller's domain error from a
+   * message and the provenance observed so far, if any.
+   *
+   * `hostGuard` is injectable so tests can drive the redirect and status logic against a stubbed
+   * transport without live DNS. Production passes the fail-closed resolved check as
+   * defense-in-depth.
    */
   def withSuccessfulStream[E, A](
       client: HttpClient,
@@ -58,8 +53,9 @@ private[core] object RuntimeHttpClient:
       hostGuard: String => Either[String, Unit],
       error: (String, Option[UrlProvenance]) => E
   )(read: RuntimeHttpResponse => Either[E, A]): Either[E, A] = RuntimeUrl.httpsUri(url) match
-    case Left(message) => Left(error(message, None))
-    case Right(_)      => Try(getInputStream(client, url, hostGuard)) match
+    case Left(message)     => Left(error(message, None))
+    case Right(initialUri) =>
+      Try(follow(client, url, hostGuard, initialUri, Vector.empty, maxRedirects)) match
         case Success(Right(result))
             if result.response.statusCode() >= 200 && result.response.statusCode() < 300 =>
           read(result)
@@ -69,9 +65,9 @@ private[core] object RuntimeHttpClient:
         case Success(Left(message)) => Left(error(message, None))
         case Failure(cause)         => Left(error(Diagnostics.describe(cause), None))
 
-  // Lives beside `getInputStream` rather than nested inside it: as a local `def` its own branching
-  // aggregated into the enclosing method on top of a nesting surcharge, which read as one method
-  // doing far more than it does.
+  // Lives beside `withSuccessfulStream` rather than nested inside it: as a local `def` its own
+  // branching aggregated into the enclosing method on top of a nesting surcharge, which read as
+  // one method doing far more than it does.
   @tailrec
   private def follow(
       client: HttpClient,
@@ -86,11 +82,10 @@ private[core] object RuntimeHttpClient:
       val request  = HttpRequest.newBuilder(current).timeout(requestTimeout).GET().build()
       val response = client.send(request, HttpResponse.BodyHandlers.ofInputStream())
       if !redirectStatuses(response.statusCode()) then
-        // The caller streams this body, so it must stay open.
-        Right(RuntimeHttpResponse(
-          response,
-          provenanceFor(initialUrl, current, redirects, response)
-        ))
+        // The caller streams this body, so it must stay open. Provenance lists only hops this loop
+        // followed: a redirect the transport followed itself would skip the per-hop https and host
+        // checks, so the client is built with Redirect.NEVER and no such history is read.
+        Right(RuntimeHttpResponse(response, UrlProvenance(initialUrl, current.toString, redirects)))
       else if remaining == 0 then
         failClosing(response, s"HTTP redirect limit exceeded ($maxRedirects)")
       else
@@ -118,18 +113,6 @@ private[core] object RuntimeHttpClient:
       Try(current.resolve(location.get()).toString).toEither
         .left.map(error => s"invalid redirect Location: ${Diagnostics.describe(error)}")
         .flatMap(RuntimeUrl.httpsUri(_).left.map(message => s"unsafe redirect target: $message"))
-
-  // The two arms draw on different sources on purpose. A chain this loop followed itself is only
-  // recorded in `redirects`; a response that never redirected here may still have been redirected
-  // by the transport, and only the response carries that history.
-  private def provenanceFor(
-      initialUrl: String,
-      current: URI,
-      redirects: Vector[UrlRedirectHop],
-      response: HttpResponse[InputStream]
-  ): UrlProvenance =
-    if redirects.nonEmpty then UrlProvenance(initialUrl, current.toString, redirects)
-    else UrlProvenance.fromResponse(initialUrl, response)
 
 private[core] final case class RuntimeHttpResponse(
     response: HttpResponse[InputStream],

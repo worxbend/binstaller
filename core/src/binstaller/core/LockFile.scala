@@ -92,6 +92,9 @@ object LockFileChecksum:
       case ResolvedChecksumSource.Configured => LockedChecksumSource.Configured
       case ResolvedChecksumSource.Discovered(url, file, provenance) =>
         LockedChecksumSource.Discovered(url, file, provenance)
+      // A lock-pinned digest stands in for a manifest that declares none, which is the case
+      // `lock` records as inspected.
+      case ResolvedChecksumSource.Locked(_) => LockedChecksumSource.Inspected
   )
 
   /** Summarize checksum states across lock-file tools. */
@@ -102,7 +105,10 @@ object LockFileChecksum:
       case _: LockedChecksumSource.Discovered => true
       case _                                  => false
     val inspected = sources.count(_ == LockedChecksumSource.Inspected)
-    val missing   = tools.count(_.checksum.isEmpty)
+    // Always 0 for a lock `binstaller lock` wrote, which records an inspected digest when the
+    // manifest pins none. Still counted because the persisted field is optional, so a lock file
+    // that was edited by hand can lack it.
+    val missing = tools.count(_.checksum.isEmpty)
     s"configured $configured, discovered $discovered, inspected $inspected, missing $missing"
 
 /** Lock-file JSON codecs and constructors. */

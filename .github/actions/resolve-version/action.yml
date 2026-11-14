@@ -40,7 +40,14 @@ runs:
           exit 1
         fi
 
-        if [[ ! "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+        # Every release becomes the latest GitHub release and goes to the stable snap channel, so a
+        # prerelease would reach users who asked for a stable build.
+        if [[ "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
+          echo "❌ Prerelease version ${version} is not supported: every release is published as latest and to the stable snap channel" >&2
+          exit 1
+        fi
+
+        if [[ ! "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\+[0-9A-Za-z.-]+)?$ ]]; then
           echo "❌ Invalid release version: ${version}" >&2
           exit 1
         fi

@@ -37,8 +37,9 @@ private[core] object SymlinkInstaller:
       symlink: ResolvedSymlink
   ): Either[ToolInstallError, Unit] =
     for
-      path   <- resolveInsideInstall(tool, symlink.path)
+      path   <- linkPath(tool, symlink).left.map(ToolInstallError.StagingFailed(tool.name, _))
       target <- resolveSymlinkTarget(tool, symlink)
+      _      <- distinctEnds(tool, symlink, path, target)
       _      <- Try:
         Option(path.getParent).foreach(parent => Files.createDirectories(parent))
         val _ = Files.deleteIfExists(path)
@@ -62,21 +63,13 @@ private[core] object SymlinkInstaller:
   ): Either[ToolInstallError, Unit] = policy.allowSudoSymlinks match
     case PolicyOverride.Disabled => Left(ToolInstallError.SudoSymlinkNotAllowed(tool.name))
     case PolicyOverride.Enabled  =>
-      val path = Path.of(symlink.path)
-      // Privileged writes must name an absolute destination. Relative sudo paths would depend on
-      // process cwd and make plan output misleading.
-      if !path.isAbsolute then
-        Left(
-          ToolInstallError.SymlinkFailed(
-            tool.name,
-            symlink.path,
-            symlink.target,
-            "sudo symlink path must be absolute"
-          )
-        )
-      else
-        resolveSymlinkTarget(tool, symlink).flatMap: target =>
-          runSudoSymlink(tool, path, target, commandExecutor, sudoCredentials)
+      for
+        path <- linkPath(tool, symlink).left
+          .map(message => symlinkFailed(tool, symlink, s"sudo symlink path $message"))
+        target <- resolveSymlinkTarget(tool, symlink)
+        _      <- distinctEnds(tool, symlink, path, target)
+        _      <- runSudoSymlink(tool, path, target, commandExecutor, sudoCredentials)
+      yield ()
 
   private def runSudoSymlink(
       tool: ResolvedTool,
@@ -157,31 +150,28 @@ private[core] object SymlinkInstaller:
       CommandFailureDetails.render(error)
     )
 
+  private def linkPath(tool: ResolvedTool, symlink: ResolvedSymlink): Either[String, Path] =
+    SymlinkPaths.linkPath(Path.of(tool.installDir), symlink.path, symlink.privilege)
+
   private def resolveSymlinkTarget(
       tool: ResolvedTool,
       symlink: ResolvedSymlink
   ): Either[ToolInstallError, Path] =
-    val installDir = Path.of(tool.installDir).toAbsolutePath.normalize()
-    val rawTarget  = Path.of(symlink.target)
-    val target     =
-      if rawTarget.isAbsolute then rawTarget.toAbsolutePath.normalize()
-      else installDir.resolve(rawTarget).normalize()
-    // Symlink targets are confined to the installed tool tree so a manifest cannot expose arbitrary
-    // user files through local or sudo links.
-    if target.startsWith(installDir) then Right(target)
-    else
-      Left(
-        ToolInstallError.SymlinkFailed(
-          tool.name,
-          symlink.path,
-          symlink.target,
-          "symlink target must resolve inside installDir"
-        )
-      )
+    SymlinkPaths.target(Path.of(tool.installDir), symlink.target).left.map: message =>
+      symlinkFailed(tool, symlink, s"symlink target $message")
 
-  private def resolveInsideInstall(
+  // Plan rejects this already; a plan built another way must still not lose the executable.
+  private def distinctEnds(
       tool: ResolvedTool,
-      relative: String
-  ): Either[ToolInstallError, Path] =
-    SafePaths.resolveInside(Path.of(tool.installDir), relative).left.map: message =>
-      ToolInstallError.StagingFailed(tool.name, message)
+      symlink: ResolvedSymlink,
+      path: Path,
+      target: Path
+  ): Either[ToolInstallError, Unit] = SymlinkPaths.distinctEnds(path, target).left.map: message =>
+    symlinkFailed(tool, symlink, s"symlink path $message")
+
+  private def symlinkFailed(
+      tool: ResolvedTool,
+      symlink: ResolvedSymlink,
+      message: String
+  ): ToolInstallError =
+    ToolInstallError.SymlinkFailed(tool.name, symlink.path, symlink.target, message)

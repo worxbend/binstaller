@@ -65,6 +65,23 @@ object NetworkGuardTest extends TestSuite with CoreTestSupport:
       )
       assert(private_.left.exists(_.contains("private, local, link-local, or multicast")))
 
+    test("resolved-address guards block IPv4-mapped IPv6 answers"):
+      // A resolver returns an AAAA answer as an Inet6Address even when it embeds an IPv4 target,
+      // and the kernel then connects to that IPv4 address.
+      def mappedIpv6(ipv4: Int*): InetAddress =
+        val bytes = Array.fill[Byte](10)(0) ++ Array[Byte](-1, -1) ++ ipv4.map(_.toByte)
+        java.net.Inet6Address.getByAddress(null, bytes, 0)
+
+      Vector(mappedIpv6(127, 0, 0, 1), mappedIpv6(169, 254, 169, 254), mappedIpv6(10, 0, 0, 5))
+        .foreach: mapped =>
+          assert(NetworkTargetGuard.validateResolved("rebind.example", _ => Array(mapped)).isLeft)
+          val guarded = scala.util.Try(
+            GuardedInetAddressResolverProvider
+              .guard("rebind.example", java.util.stream.Stream.of(mapped))
+              .iterator().asScala.toVector
+          )
+          assert(guarded.failed.toOption.exists(_.isInstanceOf[java.net.UnknownHostException]))
+
     test("guarded resolver drops blocked addresses and fails closed when none remain"):
       val privateAddr = InetAddress.getByName("10.0.0.5")
       val publicAddr  = InetAddress.getByName("8.8.8.8")

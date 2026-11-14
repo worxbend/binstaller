@@ -26,11 +26,14 @@ private[core] object SafePaths:
   def deleteRecursively(path: Path): Vector[Path] =
     if !Files.exists(path) then Vector.empty
     else
-      Using.resource(Files.walk(path)): stream =>
-        stream.iterator().asScala.toVector.sortBy(_.getNameCount).reverse.flatMap: child =>
-          Try(Files.deleteIfExists(child)) match
-            case Failure(_) => Vector(child)
-            case Success(_) => Vector.empty
+      // The walk itself throws on a directory it may not list. That tree is residue, not a crash:
+      // callers run this after the new install is already live.
+      Try(Using.resource(Files.walk(path))(_.iterator().asScala.toVector)) match
+        case Failure(_)        => Vector(path)
+        case Success(children) => children.sortBy(_.getNameCount).reverse.flatMap: child =>
+            Try(Files.deleteIfExists(child)) match
+              case Failure(_) => Vector(child)
+              case Success(_) => Vector.empty
 
 private[core] object ShellRendering:
   def quote(value: String): String = s"'${value.replace("'", "'\"'\"'")}'"

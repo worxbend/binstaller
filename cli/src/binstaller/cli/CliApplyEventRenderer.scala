@@ -15,7 +15,7 @@ import java.net.URI
 
 private[cli] final class CliApplyEventRenderer(
     out: PrintWriter,
-    outputStyle: CliOutputStyle = CliOutputStyle.Ansi
+    outputStyle: CliOutputStyle
 ) extends InstallerEventObserver:
   private val width                                   = 30
   private val display                                 = ProgressBlockDisplay(out)
@@ -227,7 +227,7 @@ private[cli] final class ProgressBlockDisplay(out: PrintWriter):
     val lines = progressBlockTools.flatMap(renderRow)
     if progressBlockHeight > 0 then out.print(s"\u001b[${progressBlockHeight}A")
     lines.foreach: line =>
-      out.print(s"\r\u001b[2K${line.styled}\n")
+      printClipped(s"\r\u001b[2K${line.styled}\u001b[K\n")
     out.flush()
     progressBlockHeight = lines.size
 
@@ -239,12 +239,12 @@ private[cli] final class ProgressBlockDisplay(out: PrintWriter):
     activeLinePresent = false
 
   def renderInPlace(line: ProgressLine): Unit =
-    out.print(s"\r${line.styled}\u001b[K")
+    printClipped(s"\r${line.styled}\u001b[K")
     out.flush()
     activeLinePresent = true
 
   def renderCompleted(line: ProgressLine): Unit =
-    out.print(s"\r${line.styled}\u001b[K\n")
+    printClipped(s"\r${line.styled}\u001b[K\n")
     out.flush()
     activeLinePresent = false
 
@@ -252,6 +252,14 @@ private[cli] final class ProgressBlockDisplay(out: PrintWriter):
     out.print("\r\u001b[K")
     out.flush()
     activeLinePresent = false
+
+  // Terminal auto-wrap (DECAWM) is off only while one row is written, so a row wider than the
+  // terminal is clipped at the right edge. A wrapped row takes a second physical line that neither
+  // `\r` nor the cursor-up count in redraw accounts for, and every update would leave stale lines
+  // behind. The same write switches auto-wrap back on, so a run that fails or is interrupted
+  // between rows never leaves the terminal with wrapping off. Every row ends with an erase to the
+  // end of the line: with auto-wrap off, the overflow of a clipped row piles up in the last column.
+  private def printClipped(row: String): Unit = out.print(s"\u001b[?7l$row\u001b[?7h")
 
 private[cli] final case class DownloadRow(
     toolName: ToolName,
@@ -276,7 +284,7 @@ private[cli] object CliApplyOutput:
   def colorLines(
       lines: Vector[String],
       renderedTerminalLines: Vector[RenderedTerminalLine],
-      outputStyle: CliOutputStyle = CliOutputStyle.Ansi
+      outputStyle: CliOutputStyle
   ): Vector[String] =
     // Keyed by rendered text, so byte-identical lines collapse into one entry (the last wins).
     val statusByText = renderedTerminalLines.map(rendered => rendered.text -> rendered.status).toMap
@@ -288,7 +296,7 @@ private[cli] object CliApplyOutput:
 
   def summary(
       event: InstallerEvent.Summary,
-      outputStyle: CliOutputStyle = CliOutputStyle.Ansi
+      outputStyle: CliOutputStyle
   ): Vector[String] =
     val status =
       if event.status == InstallerRunStatus.Succeeded then

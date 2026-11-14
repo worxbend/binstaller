@@ -281,7 +281,7 @@ private[core] final class StaticHttpClient[T](response: HttpResponse[T]) extends
 
   override def connectTimeout(): Optional[Duration] = Optional.empty()
 
-  override def followRedirects(): HttpClient.Redirect = HttpClient.Redirect.NORMAL
+  override def followRedirects(): HttpClient.Redirect = HttpClient.Redirect.NEVER
 
   override def proxy(): Optional[ProxySelector] = Optional.empty()
 
@@ -328,7 +328,6 @@ private final case class FakeHttpResponse[T](
     responseUri: String,
     responseStatusCode: Int,
     responseBody: T,
-    previous: Option[HttpResponse[T]] = None,
     responseHeaders: Map[String, Vector[String]] = Map.empty
 ) extends HttpResponse[T]:
 
@@ -336,9 +335,8 @@ private final case class FakeHttpResponse[T](
 
   def request(): HttpRequest = HttpRequest.newBuilder(URI.create(responseUri)).build()
 
-  def previousResponse(): Optional[HttpResponse[T]] = previous match
-    case Some(response) => Optional.of(response)
-    case None           => Optional.empty()
+  // Production clients never let the JDK follow a redirect, so no response has a predecessor.
+  def previousResponse(): Optional[HttpResponse[T]] = Optional.empty()
 
   def headers(): HttpHeaders = HttpHeaders.of(
     responseHeaders.view.mapValues(_.asJava).toMap.asJava,
@@ -352,25 +350,6 @@ private final case class FakeHttpResponse[T](
   def uri(): URI = URI.create(responseUri)
 
   def version(): HttpClient.Version = HttpClient.Version.HTTP_1_1
-
-private[core] final class FakeArchiveCommandExecutor(path: String, content: String)
-    extends CommandExecutor:
-
-  private var recordedCommands: Vector[CommandSpec] = Vector.empty
-
-  def commands: Vector[CommandSpec] = recordedCommands
-
-  def run(spec: CommandSpec): Either[CommandExecutionError, Unit] =
-    recordedCommands = recordedCommands :+ spec
-    val directoryFlag = if spec.argv.contains("--directory") then "--directory" else "-C"
-    val extractDir    = spec.argv.dropWhile(_ != directoryFlag).drop(1).headOption.map(Path.of(_))
-    extractDir match
-      case Some(directory) =>
-        val target = directory.resolve(path)
-        Files.createDirectories(target.getParent)
-        Files.writeString(target, content)
-        Right(())
-      case None => Left(CommandExecutionError(spec, "missing -C extraction directory", None))
 
 private[core] final class RecordingCommandExecutor(result: Either[String, Unit] = Right(()))
     extends CommandExecutor:
