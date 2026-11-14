@@ -16,6 +16,13 @@ REPO="worxbend/binstaller"
 VERSION="${BINSTALLER_VERSION:-latest}"
 INSTALL_DIR="${BINSTALLER_INSTALL_DIR:-${HOME:?HOME is not set; set BINSTALLER_INSTALL_DIR explicitly}/.local/bin}"
 
+# The download is unpacked from a temporary working directory that is deleted on exit, so a
+# relative install directory has to be anchored to the caller's directory first.
+case "${INSTALL_DIR}" in
+  /*) ;;
+  *) INSTALL_DIR="$(pwd)/${INSTALL_DIR}" ;;
+esac
+
 info() {
   printf '%s\n' "$*"
 }
@@ -131,10 +138,12 @@ info "installed binstaller ${VERSION} to ${INSTALL_DIR}/binstaller"
 
 path_line="export PATH=\"${INSTALL_DIR}:\$PATH\""
 
-# add_to_rc adds the install directory to a shell startup file when it is not already present.
+# add_to_rc adds the install directory to an existing shell startup file when it is not already
+# present. A missing file is left alone: creating ~/.zshrc for a bash user changes their setup.
 add_to_rc() {
   rc_file="$1"
-  if [ -f "${rc_file}" ] && grep -qxF "${path_line}" "${rc_file}"; then
+  [ -f "${rc_file}" ] || return 0
+  if grep -qxF "${path_line}" "${rc_file}"; then
     return 0
   fi
   printf '\n# Added by the binstaller install script\n%s\n' "${path_line}" >> "${rc_file}"
