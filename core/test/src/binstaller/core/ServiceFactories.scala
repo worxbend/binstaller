@@ -3,8 +3,13 @@ package binstaller.core
 import binstaller.config.ConfigModule
 import binstaller.config.Sha256Digest
 
+import java.io.IOException
+import java.nio.file.FileVisitResult
 import java.nio.file.Files
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.attribute.BasicFileAttributes
 import scala.jdk.CollectionConverters.*
 import scala.util.Using
 import upickle.default.write
@@ -154,11 +159,25 @@ private[core] trait ServiceFactories extends CoreTestPrimitives:
       .asScala
       .exists(path => path.getFileName.toString.startsWith(s".$name.tmp-"))
 
-  protected def hasStagedInstall(
-      tempRoot: Path,
-      installName: String
-  ): Boolean = Using.resource(Files.walk(tempRoot)): stream =>
-    stream
-      .iterator()
-      .asScala
-      .exists(path => path.getFileName.toString.startsWith(s".$installName.stage-"))
+  protected def hasStagedInstall(tempRoot: Path, installName: String): Boolean =
+    val prefix = s".$installName.stage-"
+    var found  = false
+    // Callers poll while an install runs and deletes files under tempRoot, and Files.walk throws
+    // on an entry that disappears between listing and visiting it. Such an entry is skipped.
+    val _ = Files.walkFileTree(
+      tempRoot,
+      new SimpleFileVisitor[Path]:
+        override def preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult =
+          visit(dir)
+        override def visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult =
+          visit(file)
+        override def visitFileFailed(file: Path, error: IOException): FileVisitResult = error match
+          case _: NoSuchFileException => FileVisitResult.CONTINUE
+          case other                  => throw other
+        private def visit(path: Path): FileVisitResult =
+          if path.getFileName.toString.startsWith(prefix) then
+            found = true
+            FileVisitResult.TERMINATE
+          else FileVisitResult.CONTINUE
+    )
+    found
