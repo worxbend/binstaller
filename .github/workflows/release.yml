@@ -10,10 +10,6 @@ on:
         description: "Release version or tag, for example v0.1.0"
         required: true
         type: string
-      snap-retry-run-id:
-        description: "Retry only Snap packaging using native artifacts from this release workflow run ID"
-        required: false
-        type: string
 
 # Least privilege: each job below declares its own permissions.
 permissions: {}
@@ -47,7 +43,7 @@ jobs:
 
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    if: ${{ !inputs.snap-retry-run-id && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
 
     steps:
       - name: 📥 Checkout
@@ -394,132 +390,3 @@ jobs:
               --notes "${notes}"
           fi
           echo "🎉 Release ${version} is published"
-
-  snap:
-    name: 📦 Snap ${{ matrix.arch }}
-    if: ${{ always() && (needs.release.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.snap-retry-run-id != '' && github.ref == 'refs/heads/main')) }}
-    permissions:
-      contents: read
-      actions: read
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
-    environment: release
-    needs:
-      - release
-    env:
-      SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            target: linux-amd64
-            runner: ubuntu-26.04
-          - arch: arm64
-            target: linux-arm64
-            runner: ubuntu-26.04-arm
-
-    steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🏷️ Resolve release version
-        id: version
-        uses: ./.github/actions/resolve-version
-        with:
-          version: ${{ inputs.version }}
-          label: "🏷️ Building snap {version} for ${{ matrix.arch }}"
-
-      - name: 🔎 Verify retry artifact source
-        if: ${{ inputs.snap-retry-run-id != '' }}
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RETRY_RUN_ID: ${{ inputs.snap-retry-run-id }}
-          RELEASE_VERSION: ${{ steps.version.outputs.value }}
-        run: |
-          [[ "${RETRY_RUN_ID}" =~ ^[0-9]+$ ]] || { echo "Invalid retry run ID" >&2; exit 1; }
-          expected_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_VERSION}" --jq '.sha')"
-          source="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RETRY_RUN_ID}" --jq '[.path, .head_sha] | @tsv')"
-          IFS=$'\t' read -r workflow_path source_sha <<< "${source}"
-          if [[ "${workflow_path}" != ".github/workflows/release.yml" || "${source_sha}" != "${expected_sha}" ]]; then
-            echo "Retry artifacts must come from the release workflow at the tagged commit" >&2
-            exit 1
-          fi
-
-      - name: 📥 Download native CLI artifact
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: binstaller-${{ steps.version.outputs.value }}-${{ matrix.target }}
-          path: release-artifacts
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ inputs.snap-retry-run-id || github.run_id }}
-
-      - name: 📦 Stage snap payload
-        shell: bash
-        run: |
-          version="${{ steps.version.outputs.value }}"
-          target="${{ matrix.target }}"
-          archive="release-artifacts/binstaller-${version}-${target}.tar.gz"
-
-          echo "::group::📦 Extract ${archive}"
-          (cd release-artifacts && sha256sum --check "binstaller-${version}-${target}.tar.gz.sha256")
-          mkdir -p snap-stage
-          tar -xzf "${archive}" -C snap-stage --strip-components=1 "binstaller-${version}-${target}/binstaller"
-          chmod +x snap-stage/binstaller
-          echo "::endgroup::"
-
-      - name: 🏷️ Set snap version
-        shell: bash
-        env:
-          SNAP_VERSION: ${{ steps.version.outputs.number }}
-        run: |
-          sed -i "s/^version: .*/version: \"${SNAP_VERSION}\"/" snap/snapcraft.yaml
-
-      - name: 🛠️ Install snapcraft
-        shell: bash
-        run: |
-          sudo snap install snapcraft --classic --channel=9.x/stable
-          sudo snap install core26 --channel=latest/stable
-
-      - name: 🔥 Build classic snap
-        shell: bash
-        run: snapcraft pack --destructive-mode --verbosity=verbose
-
-      - name: 🔎 Locate built snap
-        id: snap-file
-        shell: bash
-        run: |
-          snap_file="$(find . -maxdepth 1 -name '*.snap' | head -n 1)"
-          if [[ -z "${snap_file}" ]]; then
-            echo "❌ No .snap file was produced" >&2
-            exit 1
-          fi
-          echo "✅ Built ${snap_file}"
-          echo "path=${snap_file}" >> "${GITHUB_OUTPUT}"
-
-      - name: 🧪 Smoke test built snap
-        shell: bash
-        run: |
-          sudo snap install --dangerous --classic "${{ steps.snap-file.outputs.path }}"
-          binstaller --help
-          sudo snap remove binstaller
-
-      - name: ⬆️ Upload snap artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: binstaller-${{ steps.version.outputs.value }}-snap-${{ matrix.arch }}
-          path: ${{ steps.snap-file.outputs.path }}
-          if-no-files-found: error
-
-      - name: 🚀 Publish to Snap Store (stable, classic)
-        if: ${{ env.SNAPCRAFT_STORE_CREDENTIALS != '' }}
-        shell: bash
-        run: snapcraft upload "${{ steps.snap-file.outputs.path }}" --release=stable
-
-      - name: ⏭️ Record Snap Store publish skip
-        if: ${{ env.SNAPCRAFT_STORE_CREDENTIALS == '' }}
-        shell: bash
-        run: |
-          echo "::notice::SNAPCRAFT_STORE_CREDENTIALS is not set; skipping Snap Store upload for ${{ steps.snap-file.outputs.path }}"
-          echo "📦 Snap Store publish skipped: \`SNAPCRAFT_STORE_CREDENTIALS\` is not set (${{ steps.snap-file.outputs.path }})." >> "${GITHUB_STEP_SUMMARY}"

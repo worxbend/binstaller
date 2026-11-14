@@ -51,7 +51,7 @@ happens.
 - `build/release`: `build.mill` defines modules and native-image settings;
   `.github/workflows/release.yml` builds, smokes, packages, checksums, signs,
   and publishes `linux-amd64`, `linux-arm64`, `macos-amd64`, and `macos-arm64`
-  artifacts, then builds the amd64 and arm64 snaps from the Linux tarballs.
+  artifacts.
 
 ## Data Flow
 

@@ -40,10 +40,10 @@ runs:
           exit 1
         fi
 
-        # Every release becomes the latest GitHub release and goes to the stable snap channel, so a
-        # prerelease would reach users who asked for a stable build.
+        # Every release becomes the latest GitHub release, so a prerelease would reach users who asked
+        # for a stable build.
         if [[ "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
-          echo "❌ Prerelease version ${version} is not supported: every release is published as latest and to the stable snap channel" >&2
+          echo "❌ Prerelease version ${version} is not supported: every release is published as the latest release" >&2
           exit 1
         fi
 
